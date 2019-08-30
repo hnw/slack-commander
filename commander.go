@@ -16,8 +16,11 @@ import (
 )
 
 type tomlConfig struct {
-	SlackToken string `toml:"slack_token"`
-	Commands   []*commandConfig
+	SlackToken          string `toml:"slack_token"`
+	AcceptReminder      bool   `toml:"accept_reminder"`
+	AcceptBotMessage    bool   `toml:"accept_bot_message"`
+	AcceptThreadMessage bool   `toml:"accept_thread_message"`
+	Commands            []*commandConfig
 }
 
 type commandConfig struct {
@@ -35,10 +38,20 @@ var (
 	mu       sync.Mutex
 	lastSent time.Time
 	matcher  cmdMatcher
+	config   tomlConfig
 )
 
 func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent) {
 	ret := ""
+	if ev.User == "USLACKBOT" && config.AcceptReminder == false {
+		return
+	}
+	if ev.SubType == "bot_message" && config.AcceptBotMessage == false {
+		return
+	}
+	if ev.ThreadTimestamp != "" && config.AcceptThreadMessage == false {
+		return
+	}
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text := strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
@@ -168,7 +181,6 @@ func sendMessage(rtm *slack.RTM, channel, text string) {
 }
 
 func main() {
-	var config tomlConfig
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		fmt.Println(err)
 		return
