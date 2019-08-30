@@ -20,6 +20,10 @@ type tomlConfig struct {
 	AcceptReminder      bool   `toml:"accept_reminder"`
 	AcceptBotMessage    bool   `toml:"accept_bot_message"`
 	AcceptThreadMessage bool   `toml:"accept_thread_message"`
+	Username            string `toml:"username"`
+	IconEmoji           string `toml:"icon_emoji"`
+	IconURL             string `toml:"icon_url"`
+	ThreadTimestamp     string `toml:"thread_ts"`
 	Commands            []*commandConfig
 }
 
@@ -93,7 +97,6 @@ func initMatcher(cmds []*commandConfig, m *cmdMatcher) error {
 }
 
 func (m *cmdMatcher) matchedCommand(msg string) (*commandConfig, string) {
-	fmt.Printf("m=%v", m)
 	for i, re := range m.Regexps {
 		matches := re.FindAllStringSubmatch(msg, 1)
 		if matches != nil {
@@ -175,8 +178,26 @@ func sendMessage(rtm *slack.RTM, channel, text string) {
 		return
 	}
 
-	msg := rtm.NewOutgoingMessage(text, channel)
-	rtm.SendMessage(msg)
+	params := slack.PostMessageParameters{
+		Username:        config.Username,
+		IconEmoji:       config.IconEmoji,
+		IconURL:         config.IconURL,
+		ThreadTimestamp: config.ThreadTimestamp,
+		//ThreadTimestamp: "1567168822.004600",
+		//ReplyBroadcast: false,
+		//ReplyBroadcast: true,
+	}
+	attachment := slack.Attachment{
+		Text:  text,
+		Color: "good",
+	}
+	msgOptParams := slack.MsgOptionPostMessageParameters(params)
+	msgOptAttachment := slack.MsgOptionAttachments(attachment)
+	if _, _, err := rtm.PostMessage(channel, msgOptParams, msgOptAttachment); err != nil {
+		fmt.Printf("%s\n", err)
+		return
+	}
+	//fmt.Printf("Message successfully sent to channel %s at %s\n", channelID, timestamp)
 	lastSent = now
 }
 
