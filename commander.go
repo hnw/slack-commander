@@ -39,7 +39,11 @@ var (
 
 func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent) {
 	ret := ""
-	if ev.Text != "" {
+	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
+		text := strings.TrimPrefix(ev.Text, "Reminder: ")
+		text = strings.TrimSuffix(text, ".")
+		ret = execCommand(text)
+	} else if ev.Text != "" {
 		ret = execCommand(ev.Text)
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
