@@ -1,0 +1,16 @@
+slack_token = 'xoxb-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+
+[[commands]]
+keyword = 'date'
+aliases = [ 'いま何時', '今何時' ]
+command = 'date'
+
+[[commands]]
+keyword = 'banner *'
+command = 'banner *'
+monospaced = true
+
+[[commands]]
+keyword = '*'
+command = 'bash -c "*"'
+monospaced = true
