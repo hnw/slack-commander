@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -15,38 +16,60 @@ import (
 	"github.com/nlopes/slack"
 )
 
-type tomlConfig struct {
+type commonConfig struct {
+	Username        string `toml:"username"`
+	IconEmoji       string `toml:"icon_emoji"`
+	IconURL         string `toml:"icon_url"`
+	PostAsReply     bool   `toml:"post_as_reply"`
+	AlwaysBroadcast bool   `toml:"always_broadcast"`
+	Monospaced      bool
+	Timeout         int
+}
+
+type topLevelConfig struct {
+	commonConfig
+	NumWorkers          int    `toml:"num_workers"`
 	SlackToken          string `toml:"slack_token"`
 	AcceptReminder      bool   `toml:"accept_reminder"`
 	AcceptBotMessage    bool   `toml:"accept_bot_message"`
 	AcceptThreadMessage bool   `toml:"accept_thread_message"`
-	Username            string `toml:"username"`
-	IconEmoji           string `toml:"icon_emoji"`
-	IconURL             string `toml:"icon_url"`
 	ThreadTimestamp     string `toml:"thread_ts"`
 	Commands            []*commandConfig
 }
 
 type commandConfig struct {
-	Keyword    string
-	Command    string
-	Aliases    []string
-	Monospaced bool
+	commonConfig
+	Keyword string
+	Command string
+	Aliases []string
 }
-type cmdMatcher struct {
+type commandMatcher struct {
 	Regexps  []*regexp.Regexp
 	Commands []*commandConfig
+}
+type commandInfo struct {
+	Message       *slack.MessageEvent // 起動メッセージ
+	MessageText   string              // 起動コマンド平文
+	Config        *commandConfig      // マッチしたコマンド設定
+	Output        string              // 出力（一部のこともある）
+	ErrorOccurred bool                // エラー発生したかどうか（この値に応じて色を変える）
 }
 
 var (
 	mu       sync.Mutex
 	lastSent time.Time
-	matcher  cmdMatcher
-	config   tomlConfig
+	matcher  commandMatcher
+	config   topLevelConfig
 )
 
-func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent) {
-	ret := ""
+func newCommandInfo(message *slack.MessageEvent, messageText string) *commandInfo {
+	info := commandInfo{}
+	info.Message = message
+	info.MessageText = messageText
+	return &info
+}
+
+func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *commandInfo) {
 	if ev.User == "USLACKBOT" && config.AcceptReminder == false {
 		return
 	}
@@ -59,22 +82,19 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent) {
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text := strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
-		ret = execCommand(text)
+		commandQueue <- newCommandInfo(ev, text)
 	} else if ev.Text != "" {
-		ret = execCommand(ev.Text)
+		commandQueue <- newCommandInfo(ev, ev.Text)
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
-			ret = execCommand(ev.Attachments[0].Pretext)
+			commandQueue <- newCommandInfo(ev, ev.Attachments[0].Pretext)
 		} else if ev.Attachments[0].Text != "" {
-			ret = execCommand(ev.Attachments[0].Text)
+			commandQueue <- newCommandInfo(ev, ev.Attachments[0].Text)
 		}
-	}
-	if ret != "" {
-		sendMessage(rtm, ev.Channel, ret)
 	}
 }
 
-func initMatcher(cmds []*commandConfig, m *cmdMatcher) error {
+func initMatcher(cmds []*commandConfig, m *commandMatcher) error {
 	regexps := make([]*regexp.Regexp, 0, len(cmds))
 	commands := make([]*commandConfig, 0, len(cmds))
 	reWildcard := regexp.MustCompile(`(^| )\\\*( |$)`)
@@ -96,7 +116,7 @@ func initMatcher(cmds []*commandConfig, m *cmdMatcher) error {
 	return nil
 }
 
-func (m *cmdMatcher) matchedCommand(msg string) (*commandConfig, string) {
+func (m *commandMatcher) matchedCommand(msg string) (*commandConfig, string) {
 	for i, re := range m.Regexps {
 		matches := re.FindAllStringSubmatch(msg, 1)
 		if matches != nil {
@@ -142,66 +162,147 @@ func (c *commandConfig) buildCommandParams(wildcard string) ([]string, error) {
 	return args, nil
 }
 
-func execCommand(msg string) string {
-	msg = strings.TrimSpace(msg)
-	cmdConfig, wildcard := matcher.matchedCommand(msg)
+func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
+	cmdText := strings.TrimSpace(info.MessageText)
+	cmdConfig, wildcard := matcher.matchedCommand(cmdText)
 	if cmdConfig == nil {
-		return ""
+		return
 	}
 	args, err := cmdConfig.buildCommandParams(wildcard)
 	if err != nil {
-		return fmt.Sprintf("%v\n", err)
+		fmt.Printf("%v\n", err)
+		return
 	}
-	out, err := exec.Command(args[0], args[1:]...).Output()
+
+	cmd := exec.Command(args[0], args[1:]...)
+
+	stdInfo := *info
+	stdInfo.Config = cmdConfig
+	stdoutWriter := stdInfo.getQueueWriter(writeQueue)
+	cmd.Stdout = stdoutWriter
+	defer stdoutWriter.Flash()
+
+	errInfo := *info
+	errInfo.Config = cmdConfig
+	errInfo.ErrorOccurred = true
+	stderrWriter := errInfo.getQueueWriter(writeQueue)
+	cmd.Stderr = stderrWriter
+	defer stderrWriter.Flash()
+
+	if err := cmd.Start(); err != nil {
+		errInfo.Output = fmt.Sprintf("%v", err)
+		writeQueue <- &errInfo
+		return
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(time.Duration(cmdConfig.Timeout)*time.Second, func() {
+		timer.Stop()
+		cmd.Process.Kill()
+	})
+	err = cmd.Wait()
+	timer.Stop()
 	if err != nil {
 		switch err.(type) {
 		case *exec.ExitError:
-			out = err.(*exec.ExitError).Stderr
+			if exitError, ok := err.(*exec.ExitError); ok {
+				if exitError.ExitCode() == -1 {
+					stderrWriter.Write([]byte("タイムアウトしました"))
+				}
+			}
 		default:
-			out = []byte(fmt.Sprintf("%v", err))
+			stderrWriter.Write([]byte(fmt.Sprintf("%v", err)))
 		}
 	}
-	if cmdConfig.Monospaced {
-		codeBlock := []byte("```")
-		out = append(codeBlock, out...)
-		out = append(out, codeBlock...)
-	}
-	return string(out)
+	return
 }
 
-func sendMessage(rtm *slack.RTM, channel, text string) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	now := time.Now()
-	if now.Before(lastSent.Add(time.Second)) {
-		return
+func (info *commandInfo) getText() string {
+	text := info.Output
+	if info.Config.Monospaced {
+		text = fmt.Sprintf("```%s```", text)
 	}
+	return text
+}
 
+func (info *commandInfo) getQueueWriter(writeQueue chan *commandInfo) *slackBuffer {
+	b := slackBuffer{}
+	b.queue = &writeQueue
+	b.info = info
+	return &b
+}
+
+func (info *commandInfo) getColor() string {
+	if info.ErrorOccurred {
+		return "danger"
+	}
+	return "good"
+}
+
+func (info *commandInfo) getThreadTimestamp() string {
+	if info.Config.PostAsReply {
+		return info.Message.Timestamp
+	}
+	return ""
+}
+
+func (info *commandInfo) getReplyBroadcast() bool {
+	if info.Config.PostAsReply == false {
+		return false
+	}
+	if info.Config.AlwaysBroadcast {
+		return true
+	}
+	if info.ErrorOccurred {
+		return true
+	}
+	return false
+}
+
+func (info *commandInfo) postMessage(rtm *slack.RTM) error {
 	params := slack.PostMessageParameters{
-		Username:        config.Username,
-		IconEmoji:       config.IconEmoji,
-		IconURL:         config.IconURL,
-		ThreadTimestamp: config.ThreadTimestamp,
-		//ThreadTimestamp: "1567168822.004600",
-		//ReplyBroadcast: false,
-		//ReplyBroadcast: true,
+		Username:        info.Config.Username,
+		IconEmoji:       info.Config.IconEmoji,
+		IconURL:         info.Config.IconURL,
+		ThreadTimestamp: info.getThreadTimestamp(),
+		ReplyBroadcast:  info.getReplyBroadcast(),
 	}
 	attachment := slack.Attachment{
-		Text:  text,
-		Color: "good",
+		Text:  info.getText(),
+		Color: info.getColor(),
 	}
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
-	if _, _, err := rtm.PostMessage(channel, msgOptParams, msgOptAttachment); err != nil {
+	if _, _, err := rtm.PostMessage(info.Message.Channel, msgOptParams, msgOptAttachment); err != nil {
 		fmt.Printf("%s\n", err)
-		return
+		return err
 	}
-	//fmt.Printf("Message successfully sent to channel %s at %s\n", channelID, timestamp)
-	lastSent = now
+	return nil
+}
+
+func slackWriter(rtm *slack.RTM, writeQueue chan *commandInfo) {
+	for {
+		info, ok := <-writeQueue // closeされると ok が false になる
+		if !ok {
+			return
+		}
+		if info.Output != "" {
+			info.postMessage(rtm)
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+func commandExecutor(commandQueue chan *commandInfo, writeQueue chan *commandInfo) {
+	for {
+		info, ok := <-commandQueue // closeされると ok が false になる
+		if !ok {
+			return
+		}
+		execCommand(info, writeQueue)
+	}
 }
 
 func main() {
+	config = topLevelConfig{NumWorkers: 1}
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		fmt.Println(err)
 		return
@@ -217,6 +318,12 @@ func main() {
 
 	rtm := api.NewRTM()
 	go rtm.ManageConnection()
+	commandQueue := make(chan *commandInfo, config.NumWorkers)
+	writeQueue := make(chan *commandInfo, config.NumWorkers)
+	for i := 0; i < config.NumWorkers; i++ {
+		go commandExecutor(commandQueue, writeQueue)
+	}
+	go slackWriter(rtm, writeQueue)
 
 	for msg := range rtm.IncomingEvents {
 		switch ev := msg.Data.(type) {
@@ -229,7 +336,7 @@ func main() {
 
 		case *slack.MessageEvent:
 			fmt.Printf("Message: %v, text=%s\n", ev, ev.Text)
-			onMessageEvent(rtm, ev)
+			onMessageEvent(rtm, ev, commandQueue)
 
 		case *slack.RTMError:
 			fmt.Printf("Error: %s\n", ev.Error())
@@ -243,4 +350,38 @@ func main() {
 			// fmt.Printf("Unexpected: %v\n", msg.Data)
 		}
 	}
+}
+
+type slackBuffer struct {
+	buffer bytes.Buffer
+	queue  *(chan *commandInfo)
+	info   *commandInfo
+}
+
+func (b *slackBuffer) Write(data []byte) (n int, err error) {
+	//fmt.Printf("len=%d\n", len(data))
+	l := b.buffer.Len() + len(data)
+	i := 0
+	for l > 2000 {
+		writeSize := 2000
+		//fmt.Printf("====================\n")
+		if b.buffer.Len() > 0 {
+			//fmt.Printf("%s", b.buffer.Bytes())
+			writeSize -= b.buffer.Len()
+			b.buffer.Truncate(0)
+		}
+		hunk := data[i : i+writeSize]
+		b.info.Output = fmt.Sprintf("%s%s", b.buffer.Bytes(), hunk)
+		tmp := *(b.info)
+		*(b.queue) <- &tmp
+		i += writeSize
+		l -= 2000
+	}
+	n, err = b.buffer.Write(data[i:])
+	n += i
+	return
+}
+func (b *slackBuffer) Flash() {
+	b.info.Output = fmt.Sprintf("%s", b.buffer.Bytes())
+	*(b.queue) <- b.info
 }
