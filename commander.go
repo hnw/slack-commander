@@ -43,10 +43,12 @@ type commandConfig struct {
 	Command string
 	Aliases []string
 }
+
 type commandMatcher struct {
 	Regexps  []*regexp.Regexp
 	Commands []*commandConfig
 }
+
 type commandInfo struct {
 	Message       *slack.MessageEvent // 起動メッセージ
 	MessageText   string              // 起動コマンド平文
@@ -190,8 +192,7 @@ func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
 	defer stderrWriter.Flash()
 
 	if err := cmd.Start(); err != nil {
-		errInfo.Output = fmt.Sprintf("%v", err)
-		writeQueue <- &errInfo
+		stderrWriter.Write([]byte(fmt.Sprintf("%v", err)))
 		return
 	}
 	var timer *time.Timer
@@ -210,7 +211,8 @@ func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
 		case *exec.ExitError:
 			if exitError, ok := err.(*exec.ExitError); ok {
 				if exitError.ExitCode() == -1 {
-					stderrWriter.Write([]byte("タイムアウトしました"))
+					errText := fmt.Sprintf("timeout %ds exceeded", cmdConfig.Timeout)
+					stderrWriter.Write([]byte(errText))
 				}
 			}
 		default:
@@ -360,10 +362,14 @@ type slackBuffer struct {
 	buffer bytes.Buffer
 	queue  *(chan *commandInfo)
 	info   *commandInfo
+	timer  *time.Timer
 }
 
 func (b *slackBuffer) Write(data []byte) (n int, err error) {
 	//fmt.Printf("len=%d\n", len(data))
+	if b.timer != nil {
+		b.timer.Stop()
+	}
 	l := b.buffer.Len() + len(data)
 	i := 0
 	for l > 2000 {
@@ -382,10 +388,18 @@ func (b *slackBuffer) Write(data []byte) (n int, err error) {
 		l -= 2000
 	}
 	n, err = b.buffer.Write(data[i:])
-	n += i
+	// 最後に出力されてから3秒間何も出力されなければflashする
+	b.timer = time.AfterFunc(3*time.Second, func() {
+		b.timer.Stop()
+		b.Flash()
+	})
+	n += i //今回のWriteで書き込まれた総バイト数
 	return
 }
+
 func (b *slackBuffer) Flash() {
 	b.info.Output = fmt.Sprintf("%s", b.buffer.Bytes())
-	*(b.queue) <- b.info
+	b.buffer.Truncate(0)
+	tmp := *(b.info)
+	*(b.queue) <- &tmp
 }
