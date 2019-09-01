@@ -195,12 +195,16 @@ func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
 		return
 	}
 	var timer *time.Timer
-	timer = time.AfterFunc(time.Duration(cmdConfig.Timeout)*time.Second, func() {
-		timer.Stop()
-		cmd.Process.Kill()
-	})
+	if cmdConfig.Timeout > 0 {
+		timer = time.AfterFunc(time.Duration(cmdConfig.Timeout)*time.Second, func() {
+			timer.Stop()
+			cmd.Process.Kill()
+		})
+	}
 	err = cmd.Wait()
-	timer.Stop()
+	if cmdConfig.Timeout > 0 {
+		timer.Stop()
+	}
 	if err != nil {
 		switch err.(type) {
 		case *exec.ExitError:

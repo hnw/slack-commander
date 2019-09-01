@@ -4,11 +4,14 @@ slack_token = 'xoxb-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 keyword = 'date'
 aliases = [ 'いま何時', '今何時' ]
 command = 'date'
+icon_emoji = ':alarm_clock:'
+username = 'Clock'
 
 [[commands]]
-keyword = 'banner *'
-command = 'banner *'
-monospaced = true
+keyword = 'uname'
+command = 'uname -mrs'
+username = 'OS info'
+icon_emoji = ':computer:'
 
 [[commands]]
 keyword = '*'
