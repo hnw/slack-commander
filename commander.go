@@ -33,7 +33,6 @@ type topLevelConfig struct {
 	AcceptReminder      bool   `toml:"accept_reminder"`
 	AcceptBotMessage    bool   `toml:"accept_bot_message"`
 	AcceptThreadMessage bool   `toml:"accept_thread_message"`
-	ThreadTimestamp     string `toml:"thread_ts"`
 	Commands            []*commandConfig
 }
 

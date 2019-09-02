@@ -1,6 +1,8 @@
 # slack-commander
 
-購読中Slackチャンネル中のキーワードに応じて外部コマンドを実行し、その結果をSlackにポストするSlack botです。
+Slackチャンネル内で発言されたキーワードに応じて外部コマンドを実行し、その結果をSlackにポストするSlack botです。
+
+設定はTOMLで記述します。
 
 コマンドラインツールなら何でもSlackから扱えるようになるので、好きなプログラミング言語でSlackの機能拡張を行うことができます。また、このbot1つで任意個のコマンドを起動できるので、Slackのbotユーザー数を消費せずに複数の機能を実現できます。
 
@@ -39,6 +41,18 @@ SlackのOAuthトークンを指定します。
 ### num_workers
 
 外部コマンドの最大並列数を指定します。
+
+### accept_reminder
+
+Reminderの発言もキーワードマッチの対象にする（`cron`や`at`の代用になります）
+
+### accept_bot_message
+
+Botの発言もキーワードマッチの対象にする
+
+### accept_thread_message
+
+返信（スレッド内）の発言もキーワードマッチの対象にする
 
 ### keyword
 
