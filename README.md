@@ -1,6 +1,6 @@
 # slack-commander
 
-Slackチャンネル内で発言されたキーワードに応じて外部コマンドを実行し、その結果をSlackにポストするSlack botです。
+Slackチャンネル内で発言されたキーワードに応じて外部コマンドを実行し、コマンドの出力をSlackにポストするSlack botです。
 
 設定はTOMLで記述します。
 
@@ -12,7 +12,8 @@ Slackチャンネル内で発言されたキーワードに応じて外部コマ
 
 ## 特徴
 
- * コマンドの終了を待たずにコマンドの出力をSlackにポストします
+ * Slackチャンネル内の発言中のキーワードに応じて外部コマンドを起動し、コマンドの出力をSlackにポストします
+ * 間欠的に出力するようなコマンドの場合、コマンドの終了を待たずにコマンドの出力をSlackにポストできます
  * 外部コマンドの最大並列数やタイムアウト時間を指定できます
  * リマインダーやbotの発言を元にコマンド起動させることができます
  * コマンドの実行結果をスレッド化してポストすることができます
@@ -24,11 +25,14 @@ Slackチャンネル内で発言されたキーワードに応じて外部コマ
 
 ```
 go get -u github.com/hnw/slack-commander
-cd $GOPATH/github.com/hnw/slack-commander
+cd $GOPATH/src/github.com/hnw/slack-commander
 cp config.toml.example config.toml
 vi config.toml
+go build
 ./slack-commander
 ```
+
+ビルドにはGo 1.12以降が必要です。
 
 ## 設定
 
