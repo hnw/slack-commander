@@ -138,29 +138,33 @@ func (c *commandConfig) buildCommandParams(wildcard string) ([]string, error) {
 		return []string{}, err
 	}
 	//　commandConfig.Command のワイルドカード部分をマッチした文字列に書き換え
+	var newArgs []string
 	if wildcard != "" {
 		for i, v := range args {
 			if v == "*" {
-				var newArgs []string
 				if strings.Index(c.Command, `'*'`) != -1 {
+					// '*' なら何もしない
+					newArgs = args
 					break
-				} else if strings.Index(c.Command, `"*"`) != -1 {
+				}
+				newArgs = append(newArgs, args[:i]...)
+				if strings.Index(c.Command, `"*"`) != -1 {
 					// "*" なら1引数として展開
-					newArgs = append(args[:i], wildcard)
+					newArgs = append(newArgs, wildcard)
 				} else {
 					// * なら複数引数として展開
 					wildcards, err := p.Parse(wildcard)
 					if err != nil {
 						return []string{}, err
 					}
-					newArgs = append(args[:i], wildcards...)
+					newArgs = append(newArgs, wildcards...)
 				}
-				args = append(newArgs, args[i+1:]...)
+				newArgs = append(newArgs, args[i+1:]...)
 				break
 			}
 		}
 	}
-	return args, nil
+	return newArgs, nil
 }
 
 func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
