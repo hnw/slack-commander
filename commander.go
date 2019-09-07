@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -135,7 +136,10 @@ func (c *commandConfig) buildCommandParams(wildcard string) ([]string, error) {
 	p := shellwords.NewParser()
 	args, err := p.Parse(c.Command)
 	if err != nil {
-		return []string{}, err
+		return nil, err
+	}
+	if len(args) == 0 {
+		return nil, errors.New("failed to parse `command`")
 	}
 	//　commandConfig.Command のワイルドカード部分をマッチした文字列に書き換え
 	var newArgs []string
@@ -163,6 +167,9 @@ func (c *commandConfig) buildCommandParams(wildcard string) ([]string, error) {
 				break
 			}
 		}
+	}
+	if len(newArgs) == 0 {
+		newArgs = args
 	}
 	return newArgs, nil
 }
