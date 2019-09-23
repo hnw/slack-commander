@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/hashicorp/logutils"
 	"github.com/mattn/go-shellwords"
 	"github.com/nlopes/slack"
 )
@@ -318,18 +320,35 @@ func commandExecutor(commandQueue chan *commandInfo, writeQueue chan *commandInf
 }
 
 func main() {
+	var (
+		verbose = flag.Bool("v", false, "Verbose mode")
+	)
+	flag.Parse()
+
+	logLevel := "INFO"
+	if *verbose {
+		logLevel = "DEBUG"
+	}
+
+	filter := &logutils.LevelFilter{
+		Levels:   []logutils.LogLevel{"DEBUG", "INFO", "ERROR"},
+		MinLevel: logutils.LogLevel(logLevel),
+		Writer:   os.Stderr,
+	}
+	logger := log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
+	logger.SetOutput(filter)
+
 	config = topLevelConfig{NumWorkers: 1}
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
-		fmt.Println(err)
+		logger.Println("[ERROR] ", err)
 		return
 	}
 	if err := initMatcher(config.Commands, &matcher); err != nil {
-		fmt.Println(err)
+		logger.Println("[ERROR] ", err)
 		return
 	}
-	logger := log.New(os.Stdout, "slack-bot: ", log.Lshortfile|log.LstdFlags)
 	optionLogger := slack.OptionLog(logger)
-	optionDebug := slack.OptionDebug(true)
+	optionDebug := slack.OptionDebug(*verbose)
 	api := slack.New(config.SlackToken, optionLogger, optionDebug)
 
 	rtm := api.NewRTM()
@@ -344,26 +363,26 @@ func main() {
 	for msg := range rtm.IncomingEvents {
 		switch ev := msg.Data.(type) {
 		case *slack.HelloEvent:
-			fmt.Println("Hello event")
+			logger.Println("[DEBUG] Hello event")
 
 		case *slack.ConnectedEvent:
-			fmt.Println("Infos:", ev.Info)
-			fmt.Println("Connection counter:", ev.ConnectionCount)
+			logger.Println("[DEBUG] Infos:", ev.Info)
+			logger.Println("[INFO] Connection counter:", ev.ConnectionCount)
 
 		case *slack.MessageEvent:
-			fmt.Printf("Message: %v, text=%s\n", ev, ev.Text)
+			logger.Printf("[DEBUG] Message: %v, text=%s\n", ev, ev.Text)
 			onMessageEvent(rtm, ev, commandQueue)
 
 		case *slack.RTMError:
-			fmt.Printf("Error: %s\n", ev.Error())
+			logger.Printf("[INFO] Error: %s\n", ev.Error())
 
 		case *slack.InvalidAuthEvent:
-			fmt.Printf("Invalid credentials")
+			logger.Println("[INFO] Invalid credentials")
 			return
 
 		default:
 			// Ignore other events..
-			// fmt.Printf("Unexpected: %v\n", msg.Data)
+			//fmt.Printf("[DEBUG] Unexpected: %v\n", msg.Data)
 		}
 	}
 }
