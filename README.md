@@ -2,11 +2,11 @@
 
 Slackチャンネル内で発言されたキーワードに応じて外部コマンドを実行し、コマンドの出力をSlackにポストするSlack botです。
 
-設定はTOMLで記述します。
+コマンドラインツールなら何でもSlackから扱えるようになるので、好きなプログラミング言語でSlackの機能拡張を行うことができます。
 
-コマンドラインツールなら何でもSlackから扱えるようになるので、好きなプログラミング言語でSlackの機能拡張を行うことができます。また、このbot1つで任意個のコマンドを起動できるので、Slackのbotユーザー数を消費せずに複数の機能を実現できます。
+また、このbot1つで任意個のコマンドを起動できるので、Slackのbotユーザー数を消費せずに複数の機能を実現できます。
 
-外部コマンドの標準出力は無害っぽい色で、標準エラー出力は危険っぽい色でSlack上に表示します。
+## 実行例
 
 ![色つきでポストされている様子](./colored-post.png)
 
@@ -19,24 +19,24 @@ Slackチャンネル内で発言されたキーワードに応じて外部コマ
  * コマンドの実行結果をスレッド化してポストすることができます
  * コマンドごとにアイコンやユーザー名を変えることができます
 
-![スレッドとタイムアウトの様子](./reply-and-timeout.png)
-
 ## インストール&実行
 
 ```
-go get -u github.com/hnw/slack-commander
-cd $GOPATH/src/github.com/hnw/slack-commander
-cp config.toml.example config.toml
-vi config.toml
-go build
-./slack-commander
+$ go get -u github.com/hnw/slack-commander
+$ cd $GOPATH/src/github.com/hnw/slack-commander
+$ cp config.toml.example config.toml
+$ vi config.toml
+$ go build
+$ ./slack-commander
 ```
 
 ビルドにはGo 1.12以降が必要です。
 
-## 設定
+## 設定例
 
-設定ファイルは同一ディレクトリの `config.toml` です。
+[config.toml.example](./config.toml.example)
+
+## 設定の詳細
 
 ### slack_token
 
@@ -97,3 +97,40 @@ botがSlackにポストする時のユーザー名を指定します。
 ### timeout
 
 外部コマンドのタイムアウト時間を秒で指定します。
+
+## 参考：systemdで管理する例
+
+botとして半永久的に動かしたい場合、デーモン管理ツールで管理するのがオススメです。
+
+ここではsystemdで管理する例を示します。まず、`/etc/systemd/system/slack-commander.service`を作成しましょう。
+
+``` ini
+[Unit]
+Description = slack-commander
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User = pi
+Group = pi
+WorkingDirectory = /opt/slack-commander/
+ExecStart = /opt/slack-commander/slack-commander
+ExecStop = /bin/kill ${MAINPID}
+Restart = always
+Type = simple
+
+[Install]
+WantedBy = multi-user.target
+```
+
+下記コマンドでbotとして動作しはじめます。
+
+``` 
+# systemctl start slack-commander.service
+```
+
+しばらく動かしてみて問題なさそうなら自動起動させるようにしましょう。
+
+``` 
+# systemctl enable slack-commander.service
+```
