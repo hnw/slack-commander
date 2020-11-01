@@ -91,7 +91,12 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 		commandQueue <- newCommandInfo(ev, ev.Text)
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
-			commandQueue <- newCommandInfo(ev, ev.Attachments[0].Pretext)
+			// attachmentのpretextとtextを文字列連結してtext扱いにする
+			text := ev.Attachments[0].Pretext
+			if ev.Attachments[0].Text != "" {
+				text = text + "\n" + ev.Attachments[0].Text
+			}
+			commandQueue <- newCommandInfo(ev, text)
 		} else if ev.Attachments[0].Text != "" {
 			commandQueue <- newCommandInfo(ev, ev.Attachments[0].Text)
 		}
@@ -177,7 +182,13 @@ func (c *commandConfig) buildCommandParams(wildcard string) ([]string, error) {
 }
 
 func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
-	cmdText := strings.TrimSpace(info.MessageText)
+	msgArr := strings.SplitN(info.MessageText, "\n", 2)
+	cmdText := msgArr[0]
+	inputText := ""
+	if len(msgArr) >= 2 {
+		// メッセージが複数行だった場合、1行目をコマンド、2行目以降を標準入力として扱う
+		inputText = msgArr[1]
+	}
 	cmdConfig, wildcard := matcher.matchedCommand(cmdText)
 	if cmdConfig == nil {
 		return
@@ -193,6 +204,7 @@ func execCommand(info *commandInfo, writeQueue chan *commandInfo) {
 	stdInfo := *info
 	stdInfo.Config = cmdConfig
 	stdoutWriter := stdInfo.getQueueWriter(writeQueue)
+	cmd.Stdin = strings.NewReader(inputText)
 	cmd.Stdout = stdoutWriter
 	defer stdoutWriter.Flash()
 
