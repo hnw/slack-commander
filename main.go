@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -39,32 +39,37 @@ type commandConfig struct {
 	Aliases []string
 }
 
-type commandMatcher struct {
-	Regexps  []*regexp.Regexp
-	Commands []*commandConfig
+type commandOption struct {
+	Args        []string
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Stderr      io.Writer
+	CleanupFunc func()
+	Timeout     int
 }
 
-type commandInfo struct {
-	Message       *slack.MessageEvent // 起動メッセージ
-	MessageText   string              // 起動コマンド平文
-	Config        *commandConfig      // マッチしたコマンド設定
-	Output        string              // 出力（一部のこともある）
-	ErrorOccurred bool                // エラー発生したかどうか（この値に応じて色を変える）
+type commandOutput struct {
+	commandConfig
+	origMessage *slack.MessageEvent
+	text        string
+	isError     bool
 }
 
-var (
-	matcher commandMatcher
-	config  topLevelConfig
-)
-
-func newCommandInfo(message *slack.MessageEvent, messageText string) *commandInfo {
-	info := commandInfo{}
-	info.Message = message
-	info.MessageText = messageText
-	return &info
+type slackInput struct {
+	Message     *slack.MessageEvent // 起動メッセージ
+	MessageText string              // 起動コマンド平文
 }
 
-func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *commandInfo) {
+var config topLevelConfig
+
+func newSlackInput(message *slack.MessageEvent, messageText string) *slackInput {
+	i := slackInput{}
+	i.Message = message
+	i.MessageText = messageText
+	return &i
+}
+
+func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *slackInput) {
 	if ev.User == "USLACKBOT" && config.AcceptReminder == false {
 		return
 	}
@@ -77,9 +82,9 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text := strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
-		commandQueue <- newCommandInfo(ev, text)
+		commandQueue <- newSlackInput(ev, text)
 	} else if ev.Text != "" {
-		commandQueue <- newCommandInfo(ev, ev.Text)
+		commandQueue <- newSlackInput(ev, ev.Text)
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
@@ -87,33 +92,11 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 			if ev.Attachments[0].Text != "" {
 				text = text + "\n" + ev.Attachments[0].Text
 			}
-			commandQueue <- newCommandInfo(ev, text)
+			commandQueue <- newSlackInput(ev, text)
 		} else if ev.Attachments[0].Text != "" {
-			commandQueue <- newCommandInfo(ev, ev.Attachments[0].Text)
+			commandQueue <- newSlackInput(ev, ev.Attachments[0].Text)
 		}
 	}
-}
-
-func initMatcher(cmds []*commandConfig, m *commandMatcher) error {
-	regexps := make([]*regexp.Regexp, 0, len(cmds))
-	commands := make([]*commandConfig, 0, len(cmds))
-	reWildcard := regexp.MustCompile(`(^| )\\\*( |$)`)
-
-	//　commandConfig.Keyword のワイルドカードを正規表現に書き換え
-	for _, cmd := range cmds {
-		if cmd.Keyword == "" || strings.Count(cmd.Keyword, "*") >= 2 {
-			continue
-		}
-		pattern := regexp.QuoteMeta(cmd.Keyword)
-		pattern = reWildcard.ReplaceAllString(pattern, "(?:^| )(.*)(?: |$)")
-		pattern = "^" + pattern + "$"
-		re := regexp.MustCompile(pattern)
-		regexps = append(regexps, re)
-		commands = append(commands, cmd)
-	}
-	m.Regexps = regexps
-	m.Commands = commands
-	return nil
 }
 
 func main() {
@@ -140,20 +123,16 @@ func main() {
 		logger.Println("[ERROR] ", err)
 		return
 	}
-	if err := initMatcher(config.Commands, &matcher); err != nil {
-		logger.Println("[ERROR] ", err)
-		return
-	}
 	optionLogger := slack.OptionLog(logger)
 	optionDebug := slack.OptionDebug(*verbose)
 	api := slack.New(config.SlackToken, optionLogger, optionDebug)
 
 	rtm := api.NewRTM()
 	go rtm.ManageConnection()
-	commandQueue := make(chan *commandInfo, config.NumWorkers)
-	writeQueue := make(chan *commandInfo, config.NumWorkers)
+	commandQueue := make(chan *slackInput, config.NumWorkers)
+	writeQueue := make(chan *commandOutput, config.NumWorkers)
 	for i := 0; i < config.NumWorkers; i++ {
-		go commandExecutor(commandQueue, writeQueue)
+		go commandExecutor(commandQueue, writeQueue, config.Commands)
 	}
 	go slackWriter(rtm, writeQueue)
 
