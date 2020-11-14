@@ -32,71 +32,9 @@ $ ./slack-commander
 
 ビルドにはGo 1.12以降が必要です。
 
-## 設定例
+## 設定について
 
-[config.toml.example](./config.toml.example)
-
-## 設定の詳細
-
-### slack_token
-
-SlackのOAuthトークンを指定します。
-
-### num_workers
-
-外部コマンドの最大並列数を指定します。
-
-### accept_reminder
-
-Reminderの発言もキーワードマッチの対象にする（`cron`や`at`の代用になります）
-
-### accept_bot_message
-
-Botの発言もキーワードマッチの対象にする
-
-### accept_thread_message
-
-返信（スレッド内）の発言もキーワードマッチの対象にする
-
-### keyword
-
-マッチするキーワードを指定します。キーワードにはワイルドカード `*` を含めることができます。
-
-指定したキーワードのうち2つ以上にマッチする場合、先に定義した方が採用されます。
-
-### command
-
-キーワードにマッチした場合に起動するコマンドを指定します。
-
-ワイルドカード `*` が指定された場合、キーワードの `*` にマッチした内容が展開されます。
-
-### icon_emoji
-
-botがSlackにポストする時のアイコンをSlack絵文字で指定します。
-
-### icon_url
-
-botがSlackにポストする時のアイコンをURLで指定します。
-
-### username
-
-botがSlackにポストする時のユーザー名を指定します。
-
-### monospaced
-
-コマンドの出力を等幅フォントで表示します。
-
-### post_as_reply
-
-コマンドの出力をスレッド形式でポストします。
-
-### always_broadcast
-
-コマンドの出力をスレッド形式にした場合に、チャンネルにもポストします。
-
-### timeout
-
-外部コマンドのタイムアウト時間を秒で指定します。
+[docs/config.md](./docs/config.md)
 
 ## 参考：systemdで管理する例
 

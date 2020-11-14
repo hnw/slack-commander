@@ -1,6 +1,6 @@
 # 内部実装について
 
-利用している goroutine と channel は下記の通りです。
+## goroutine と channel の関係図
 
 ![Diagram](./goroutine-diagram.svg)
 
