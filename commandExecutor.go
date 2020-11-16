@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/mattn/go-shellwords"
 	"github.com/slack-go/slack"
 )
 
@@ -30,6 +32,16 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 		if len(msgArr) >= 2 {
 			// メッセージが複数行だった場合、1行目をコマンド、2行目以降を標準入力として扱う
 			stdinText = msgArr[1]
+		}
+		err := checkSyntax(cmdMsg)
+		if err != nil {
+			cfg := &commandConfig{}
+			cfg.Username = "Slack commander"
+			cfg.IconEmoji = ":ghost:"
+			errWriter := getErrorQueueWriter(writeQueue, cfg, input.Message)
+			errWriter.Write([]byte(fmt.Sprintf("%v", err)))
+			errWriter.Flash()
+			continue
 		}
 		for _, matcher := range matchers {
 			if args, err := matcher.replace(cmdMsg); err == nil {
@@ -123,4 +135,49 @@ func execCommand(opt *commandOption) int {
 		}
 	}
 	return cmd.ProcessState.ExitCode()
+}
+
+func checkSyntax(line string) error {
+	parser := shellwords.NewParser()
+	prevSeparator := ""
+	for {
+		args, err := parser.Parse(line)
+		//fmt.Printf("args=%v\n", args)
+		if len(args) == 0 {
+			if prevSeparator != "" {
+				return errors.New("Parse error near `" + prevSeparator + "'")
+			}
+			end := 2
+			if len(line) < 2 {
+				end = len(line)
+			}
+			return errors.New("Parse error near `" + string([]rune(line)[0:end]) + "'")
+		}
+		if err != nil {
+			return err
+		}
+		if parser.Position < 0 {
+			return nil
+		}
+		i := parser.Position
+		//fmt.Printf("i=%v\n", i)
+		token := line[i:]
+		separators := []string{";", "&&", "||"}
+		prevSeparator = ""
+		for _, sep := range separators {
+			if strings.HasPrefix(token, sep) {
+				i += len(sep)
+				prevSeparator = sep
+				break
+			}
+		}
+		if prevSeparator == "" {
+			end := 2
+			if len(token) < 2 {
+				end = len(token)
+			}
+			return errors.New("Parse error near `" + string([]rune(token)[0:end]) + "'")
+		}
+		line = string(line[i:])
+	}
 }

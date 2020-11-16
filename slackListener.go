@@ -49,7 +49,7 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *s
 		text = strings.TrimSuffix(text, ".")
 		commandQueue <- newSlackInput(ev, text)
 	} else if ev.Text != "" {
-		commandQueue <- newSlackInput(ev, ev.Text)
+		commandQueue <- newSlackInput(ev, UnescapeMessage(ev.Text))
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
@@ -62,4 +62,10 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *s
 			commandQueue <- newSlackInput(ev, ev.Attachments[0].Text)
 		}
 	}
+}
+
+// UnescapeMessage text
+func UnescapeMessage(message string) string {
+	replacer := strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">")
+	return replacer.Replace(message)
 }
