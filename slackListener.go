@@ -6,6 +6,10 @@ import (
 	"github.com/slack-go/slack"
 )
 
+var (
+	botID string
+)
+
 func slackListener(rtm *slack.RTM, commandQueue chan *slackInput) {
 	for msg := range rtm.IncomingEvents {
 		switch ev := msg.Data.(type) {
@@ -15,6 +19,15 @@ func slackListener(rtm *slack.RTM, commandQueue chan *slackInput) {
 		case *slack.ConnectedEvent:
 			logger.Println("[DEBUG] Infos:", ev.Info)
 			logger.Println("[INFO] Connection counter:", ev.ConnectionCount)
+			if botID == "" {
+				// 自身のBotIDを取得するのにAPIアクセスが必要
+				botUser, err := rtm.Client.GetUserInfo(ev.Info.User.ID)
+				if err != nil {
+					logger.Println("[INFO] GetUserInfo() failed.")
+					return
+				}
+				botID = botUser.Profile.BotID
+			}
 
 		case *slack.MessageEvent:
 			logger.Printf("[DEBUG] Message: %v, text=%s\n", ev, ev.Text)
@@ -38,7 +51,11 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *s
 	if ev.User == "USLACKBOT" && config.AcceptReminder == false {
 		return
 	}
-	if ev.SubType == "bot_message" && config.AcceptBotMessage == false {
+	if ev.SubType == "bot_message" &&
+		(ev.BotID == botID || config.AcceptBotMessage == false) {
+		// 自身のコメントで無限ループするのを防ぐ。
+		// SubType == "bot_message" のときev.Userは空文字列になりUser IDでチェックできない
+		// そのためBot IDでチェックする必要がある
 		return
 	}
 	if ev.ThreadTimestamp != "" && config.AcceptThreadMessage == false {
