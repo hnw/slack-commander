@@ -33,8 +33,10 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			// メッセージが複数行だった場合、1行目をコマンド、2行目以降を標準入力として扱う
 			stdinText = msgArr[1]
 		}
-		err := checkSyntax(cmdMsg)
-		if err != nil {
+		cmds, err := parseLine(cmdMsg)
+		if err != nil && len(cmds) > 0 {
+			// parse結果が複数コマンドのときだけエラーを出す
+			// 文頭に「>」などのオペレータが来たときにエラーを出されると邪魔なので
 			cfg := &commandConfig{}
 			cfg.Username = "Slack commander"
 			cfg.IconEmoji = ":ghost:"
@@ -43,23 +45,39 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			errWriter.Flash()
 			continue
 		}
-		for _, matcher := range matchers {
-			if args, err := matcher.replace(cmdMsg); err == nil {
-				writer := getQueueWriter(writeQueue, &matcher.commandConfig, input.Message)
-				errWriter := getErrorQueueWriter(writeQueue, &matcher.commandConfig, input.Message)
-				opt := &commandOption{
-					Args:   args,
-					Stdin:  strings.NewReader(stdinText),
-					Stdout: writer,
-					Stderr: errWriter,
-					CleanupFunc: func() {
-						writer.Flash()
-						errWriter.Flash()
-					},
-					Timeout: matcher.commandConfig.Timeout,
+		ret := 0
+		for _, cmd := range cmds {
+			if (ret == 0 && cmd.skipIfSucceeded) || (ret != 0 && cmd.skipIfFailed) {
+				continue
+			}
+			ret = -1
+			for _, m := range matchers {
+				if args := m.build(cmd.args); len(args) > 0 {
+					writer := getQueueWriter(writeQueue, m.cfg, input.Message)
+					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.Message)
+					opt := &commandOption{
+						Args:   args,
+						Stdin:  strings.NewReader(stdinText),
+						Stdout: writer,
+						Stderr: errWriter,
+						CleanupFunc: func() {
+							writer.Flash()
+							errWriter.Flash()
+						},
+						Timeout: m.cfg.Timeout,
+					}
+					ret = execCommand(opt)
+					break
 				}
-				execCommand(opt)
-				break
+			}
+			if ret == -1 && len(cmds) > 1 {
+				// 複数コマンド実行時のみ、キーワードマッチ失敗エラーを出す
+				cfg := &commandConfig{}
+				cfg.Username = "Slack commander"
+				cfg.IconEmoji = ":ghost:"
+				errWriter := getErrorQueueWriter(writeQueue, cfg, input.Message)
+				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, ""))))
+				errWriter.Flash()
 			}
 		}
 	}
@@ -86,9 +104,13 @@ func getErrorQueueWriter(q chan *commandOutput, cfg *commandConfig, msg *slack.M
 	})
 }
 
+// 外部コマンドを実行する
+// コマンドを実行できた場合、そのexit codeを返す
+// コマンドを実行できかなった場合は127を返す
+// 参考：https://tldp.org/LDP/abs/html/exitcodes.html
 func execCommand(opt *commandOption) int {
 	if len(opt.Args) == 0 {
-		return -1
+		return 127
 	}
 	cmd := exec.Command(opt.Args[0], opt.Args[1:]...)
 	cmd.Stdin = opt.Stdin
@@ -102,7 +124,7 @@ func execCommand(opt *commandOption) int {
 		if opt.Stderr != nil {
 			opt.Stderr.Write([]byte(fmt.Sprintf("%v", err)))
 		}
-		return -1
+		return 127
 	}
 	var timer *time.Timer
 	if opt.Timeout > 0 {
@@ -137,47 +159,65 @@ func execCommand(opt *commandOption) int {
 	return cmd.ProcessState.ExitCode()
 }
 
-func checkSyntax(line string) error {
+type parsedCommand struct {
+	skipIfSucceeded bool
+	skipIfFailed    bool
+	args            []string
+}
+
+func newParsedCommand(op string, args []string) *parsedCommand {
+	skipIfSucceeded := false
+	skipIfFailed := false
+	if op == "&&" {
+		skipIfFailed = true
+	} else if op == "||" {
+		skipIfSucceeded = true
+	}
+	return &parsedCommand{
+		skipIfSucceeded: skipIfSucceeded,
+		skipIfFailed:    skipIfFailed,
+		args:            args,
+	}
+}
+
+func parseLine(line string) ([]*parsedCommand, error) {
 	parser := shellwords.NewParser()
-	prevSeparator := ""
+	prevOperator := "" // 「;」相当
+	cmds := make([]*parsedCommand, 0)
+
 	for {
 		args, err := parser.Parse(line)
-		//fmt.Printf("args=%v\n", args)
 		if len(args) == 0 {
-			if prevSeparator != "" {
-				return errors.New("Parse error near `" + prevSeparator + "'")
+			if prevOperator == "" {
+				end := 2
+				if len(line) < 2 {
+					end = len(line)
+				}
+				prevOperator = string([]rune(line)[0:end])
 			}
-			end := 2
-			if len(line) < 2 {
-				end = len(line)
-			}
-			return errors.New("Parse error near `" + string([]rune(line)[0:end]) + "'")
+			err = errors.New("Parse error near `" + prevOperator + "'")
 		}
 		if err != nil {
-			return err
+			return cmds, err
 		}
+		cmds = append(cmds, newParsedCommand(prevOperator, args))
 		if parser.Position < 0 {
-			return nil
+			// 文字列末尾までparseした
+			return cmds, nil
 		}
 		i := parser.Position
-		//fmt.Printf("i=%v\n", i)
 		token := line[i:]
-		separators := []string{";", "&&", "||"}
-		prevSeparator = ""
-		for _, sep := range separators {
-			if strings.HasPrefix(token, sep) {
-				i += len(sep)
-				prevSeparator = sep
+		operators := []string{";", "&&", "||"}
+		prevOperator = ""
+		for _, op := range operators {
+			if strings.HasPrefix(token, op) {
+				i += len(op)
+				prevOperator = op
 				break
 			}
 		}
-		if prevSeparator == "" {
-			end := 2
-			if len(token) < 2 {
-				end = len(token)
-			}
-			return errors.New("Parse error near `" + string([]rune(token)[0:end]) + "'")
-		}
+		// 次のイテレーションでオペレータの次の文字列からparse開始
+		// 未対応のオペレータだった場合は次のイテレーションでparse error
 		line = string(line[i:])
 	}
 }
