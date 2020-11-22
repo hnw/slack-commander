@@ -39,12 +39,12 @@ type commandConfig struct {
 }
 
 type commandOption struct {
-	Args        []string
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
-	CleanupFunc func()
-	Timeout     int
+	args        []string
+	stdin       io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	cleanupFunc func()
+	timeout     int
 }
 
 type commandOutput struct {
@@ -55,8 +55,8 @@ type commandOutput struct {
 }
 
 type slackInput struct {
-	Message     *slack.MessageEvent // 起動メッセージ
-	MessageText string              // 起動コマンド平文
+	message     *slack.MessageEvent // 起動メッセージ
+	messageText string              // 起動コマンド平文
 }
 
 var (
@@ -66,8 +66,8 @@ var (
 
 func newSlackInput(message *slack.MessageEvent, messageText string) *slackInput {
 	i := slackInput{}
-	i.Message = message
-	i.MessageText = messageText
+	i.message = message
+	i.messageText = messageText
 	return &i
 }
 

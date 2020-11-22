@@ -26,7 +26,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 		if !ok {
 			return
 		}
-		msgArr := strings.SplitN(input.MessageText, "\n", 2)
+		msgArr := strings.SplitN(input.messageText, "\n", 2)
 		cmdMsg := msgArr[0]
 		stdinText := ""
 		if len(msgArr) >= 2 {
@@ -40,7 +40,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			cfg := &commandConfig{}
 			cfg.Username = "Slack commander"
 			cfg.IconEmoji = ":ghost:"
-			errWriter := getErrorQueueWriter(writeQueue, cfg, input.Message)
+			errWriter := getErrorQueueWriter(writeQueue, cfg, input.message)
 			errWriter.Write([]byte(fmt.Sprintf("%v", err)))
 			errWriter.Flash()
 			continue
@@ -53,18 +53,18 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			ret = -1
 			for _, m := range matchers {
 				if args := m.build(cmd.args); len(args) > 0 {
-					writer := getQueueWriter(writeQueue, m.cfg, input.Message)
-					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.Message)
+					writer := getQueueWriter(writeQueue, m.cfg, input.message)
+					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.message)
 					opt := &commandOption{
-						Args:   args,
-						Stdin:  strings.NewReader(stdinText),
-						Stdout: writer,
-						Stderr: errWriter,
-						CleanupFunc: func() {
+						args:   args,
+						stdin:  strings.NewReader(stdinText),
+						stdout: writer,
+						stderr: errWriter,
+						cleanupFunc: func() {
 							writer.Flash()
 							errWriter.Flash()
 						},
-						Timeout: m.cfg.Timeout,
+						timeout: m.cfg.Timeout,
 					}
 					ret = execCommand(opt)
 					break
@@ -75,7 +75,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 				cfg := &commandConfig{}
 				cfg.Username = "Slack commander"
 				cfg.IconEmoji = ":ghost:"
-				errWriter := getErrorQueueWriter(writeQueue, cfg, input.Message)
+				errWriter := getErrorQueueWriter(writeQueue, cfg, input.message)
 				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))))
 				errWriter.Flash()
 			}
@@ -109,32 +109,32 @@ func getErrorQueueWriter(q chan *commandOutput, cfg *commandConfig, msg *slack.M
 // コマンドを実行できかなった場合は127を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
 func execCommand(opt *commandOption) int {
-	if len(opt.Args) == 0 {
+	if len(opt.args) == 0 {
 		return 127
 	}
-	cmd := exec.Command(opt.Args[0], opt.Args[1:]...)
-	cmd.Stdin = opt.Stdin
-	cmd.Stdout = opt.Stdout
-	cmd.Stderr = opt.Stderr
-	if opt.CleanupFunc != nil {
-		defer opt.CleanupFunc()
+	cmd := exec.Command(opt.args[0], opt.args[1:]...)
+	cmd.Stdin = opt.stdin
+	cmd.Stdout = opt.stdout
+	cmd.Stderr = opt.stderr
+	if opt.cleanupFunc != nil {
+		defer opt.cleanupFunc()
 	}
 
 	if err := cmd.Start(); err != nil {
-		if opt.Stderr != nil {
-			opt.Stderr.Write([]byte(fmt.Sprintf("%v", err)))
+		if opt.stderr != nil {
+			opt.stderr.Write([]byte(fmt.Sprintf("%v", err)))
 		}
 		return 127
 	}
 	var timer *time.Timer
-	if opt.Timeout > 0 {
-		timer = time.AfterFunc(time.Duration(opt.Timeout)*time.Second, func() {
+	if opt.timeout > 0 {
+		timer = time.AfterFunc(time.Duration(opt.timeout)*time.Second, func() {
 			timer.Stop()
 			cmd.Process.Kill()
 		})
 	}
 	err := cmd.Wait()
-	if opt.Timeout > 0 {
+	if opt.timeout > 0 {
 		timer.Stop()
 	}
 	if err != nil {
@@ -143,16 +143,16 @@ func execCommand(opt *commandOption) int {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				if exitError.ExitCode() == -1 {
 					// terminated by a signal
-					if opt.Stderr != nil {
-						errText := fmt.Sprintf("timeout %ds exceeded", opt.Timeout)
-						opt.Stderr.Write([]byte(errText))
+					if opt.stderr != nil {
+						errText := fmt.Sprintf("timeout %ds exceeded", opt.timeout)
+						opt.stderr.Write([]byte(errText))
 					}
 
 				}
 			}
 		default:
-			if opt.Stderr != nil {
-				opt.Stderr.Write([]byte(fmt.Sprintf("%v", err)))
+			if opt.stderr != nil {
+				opt.stderr.Write([]byte(fmt.Sprintf("%v", err)))
 			}
 		}
 	}
