@@ -8,33 +8,47 @@ Slackチャンネル内で発言されたキーワードに応じて外部コマ
 
 ## 実行例
 
-![色つきでポストされている様子](./docs/colored-post.png)
+![実行例](./docs/colored-post.png)
 
 ## 特徴
 
  * Slackチャンネル内の発言中のキーワードに応じて外部コマンドを起動し、コマンドの出力をSlackにポストします
+ * 実行するコマンドごとに日本語のわかりやすいキーワードを定義できます
  * 間欠的に出力するようなコマンドの場合、コマンドの終了を待たずにコマンドの出力をSlackにポストできます
  * 外部コマンドの最大並列数やタイムアウト時間を指定できます
- * リマインダーやbotの発言を元にコマンド起動させることができます
+ * Slackのリマインダーからコマンドを起動できます（cronの代わりになります）
  * コマンドの実行結果をスレッド化してポストすることができます
  * コマンドごとにアイコンやユーザー名を変えることができます
+ * Unixシェルライクな`&&`, `||`, `;`を実装しており、1行で複数コマンドの指定ができます
 
 ## インストール&実行
 
 ```
-$ go get -u github.com/hnw/slack-commander
-$ cd $GOPATH/src/github.com/hnw/slack-commander
+$ git clone https://github.com/hnw/slack-commander
+$ cd slack-commander
 $ cp config.toml.example config.toml
 $ vi config.toml
 $ go build
 $ ./slack-commander
 ```
 
-ビルドにはGo 1.12以降が必要です。
+ビルドにはGo 1.13以降が必要です（Go Modulesを利用しているため）
 
-## 設定について
+## 設定例
 
-[docs/config.md](./docs/config.md)
+``` ini
+slack_token = 'xoxb-********'
+
+[[commands]]
+keyword = '残高照会 *'
+command = 'node /opt/money-transfer-cli/bin/cli.js 残高照会 * -v'
+
+[[commands]]
+keyword = '振込 *'
+command = 'node /opt/money-transfer-cli/bin/cli.js 振込 * -v'
+```
+
+設定項目の詳細は [docs/config.md](./docs/config.md) を参照してください。
 
 ## 参考：systemdで管理する例
 
