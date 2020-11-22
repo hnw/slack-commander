@@ -45,8 +45,8 @@ func (m *commandMatcher) build(keywords []string) []string {
 	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
 	line := m.cfg.Command
 	if len(wildcard) > 0 {
-		replacer := strings.NewReplacer(`\`, `\\`, ` `, `\ `, `'`, `\'`, `"`, `\"`, `&`, `\&`, `|`, `\|`, `;`, `\;`, `<`, `\<`, `>`, `\>`, `(`, `\(`, `)`, `\)`)
-
+		replacer := strings.NewReplacer(`\`, `\\`, ` `, `\ `, "\t", "\\\t", "`", "\\`", `(`, `\(`, `)`, `\)`,
+			`"`, `\"`, `'`, `\'`, `;`, `\;`, `&`, `\&`, `|`, `\|`, `<`, `\<`, `>`, `\>`)
 		replaced := make([]string, len(wildcard))
 		for i, v := range wildcard {
 			replaced[i] = replacer.Replace(v)
