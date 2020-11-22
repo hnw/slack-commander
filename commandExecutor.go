@@ -76,7 +76,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 				cfg.Username = "Slack commander"
 				cfg.IconEmoji = ":ghost:"
 				errWriter := getErrorQueueWriter(writeQueue, cfg, input.Message)
-				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, ""))))
+				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))))
 				errWriter.Flash()
 			}
 		}

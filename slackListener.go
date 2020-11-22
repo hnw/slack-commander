@@ -64,9 +64,9 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *s
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text := strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
-		commandQueue <- newSlackInput(ev, text)
+		commandQueue <- newSlackInput(ev, NormalizeQuotes(UnescapeMessage(text)))
 	} else if ev.Text != "" {
-		commandQueue <- newSlackInput(ev, UnescapeMessage(ev.Text))
+		commandQueue <- newSlackInput(ev, NormalizeQuotes(UnescapeMessage(ev.Text)))
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
@@ -84,5 +84,16 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *s
 // UnescapeMessage text
 func UnescapeMessage(message string) string {
 	replacer := strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">")
+	return replacer.Replace(message)
+}
+
+// NormalizeQuotes
+// Replace all quotes in message with standard ascii quotes
+func NormalizeQuotes(message string) string {
+	// U+2018 LEFT SINGLE QUOTATION MARK
+	// U+2019 RIGHT SINGLE QUOTATION MARK
+	// U+201C LEFT DOUBLE QUOTATION MARK
+	// U+201D RIGHT DOUBLE QUOTATION MARK
+	replacer := strings.NewReplacer(`‘`, `'`, `’`, `'`, `“`, `"`, `”`, `"`)
 	return replacer.Replace(message)
 }
