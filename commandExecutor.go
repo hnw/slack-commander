@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/mattn/go-shellwords"
-	"github.com/slack-go/slack"
+
+	"github.com/hnw/slack-commander/pubsub"
 )
 
-func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutput, cfgs []*commandConfig) {
+func commandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.CommandOutput, cfgs []*commandConfig) {
 	// config から matcher を生成
 	matchers := make([]*commandMatcher, 0)
 	for _, cfg := range cfgs {
@@ -26,7 +27,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 		if !ok {
 			return
 		}
-		msgArr := strings.SplitN(input.messageText, "\n", 2)
+		msgArr := strings.SplitN(input.Text, "\n", 2)
 		cmdMsg := msgArr[0]
 		stdinText := ""
 		if len(msgArr) >= 2 {
@@ -40,7 +41,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			cfg := &commandConfig{}
 			cfg.Username = "Slack commander"
 			cfg.IconEmoji = ":ghost:"
-			errWriter := getErrorQueueWriter(writeQueue, cfg, input.message)
+			errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
 			errWriter.Write([]byte(fmt.Sprintf("%v", err)))
 			errWriter.Flash()
 			continue
@@ -53,8 +54,8 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 			ret = -1
 			for _, m := range matchers {
 				if args := m.build(cmd.args); len(args) > 0 {
-					writer := getQueueWriter(writeQueue, m.cfg, input.message)
-					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.message)
+					writer := getQueueWriter(writeQueue, m.cfg, input.ReplyInfo)
+					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.ReplyInfo)
 					opt := &commandOption{
 						args:   args,
 						stdin:  strings.NewReader(stdinText),
@@ -75,7 +76,7 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 				cfg := &commandConfig{}
 				cfg.Username = "Slack commander"
 				cfg.IconEmoji = ":ghost:"
-				errWriter := getErrorQueueWriter(writeQueue, cfg, input.message)
+				errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
 				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))))
 				errWriter.Flash()
 			}
@@ -83,23 +84,23 @@ func commandExecutor(commandQueue chan *slackInput, writeQueue chan *commandOutp
 	}
 }
 
-func getQueueWriter(q chan *commandOutput, cfg *commandConfig, msg *slack.MessageEvent) *bufferedWriter {
+func getQueueWriter(q chan *pubsub.CommandOutput, cfg *commandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
-		q <- &commandOutput{
-			commandConfig: *cfg,
-			origMessage:   msg,
-			text:          text,
+		q <- &pubsub.CommandOutput{
+			Config:    cfg.Config,
+			ReplyInfo: replyInfo,
+			Text:      text,
 		}
 	})
 }
 
-func getErrorQueueWriter(q chan *commandOutput, cfg *commandConfig, msg *slack.MessageEvent) *bufferedWriter {
+func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *commandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
-		q <- &commandOutput{
-			commandConfig: *cfg,
-			origMessage:   msg,
-			text:          text,
-			isError:       true,
+		q <- &pubsub.CommandOutput{
+			Config:    cfg.Config,
+			ReplyInfo: replyInfo,
+			Text:      text,
+			IsError:   true,
 		}
 	})
 }

@@ -1,4 +1,4 @@
-package main
+package pubsub
 
 import (
 	"fmt"
@@ -7,7 +7,8 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func slackWriter(rtm *slack.RTM, writeQueue chan *commandOutput) {
+// SlackWriter はwriteQueueから来たコマンド実行結果をSlackに書き込みます
+func SlackWriter(rtm *slack.RTM, writeQueue chan *CommandOutput) {
 	for {
 		output, ok := <-writeQueue // closeされると ok が false になる
 		if !ok {
@@ -18,7 +19,7 @@ func slackWriter(rtm *slack.RTM, writeQueue chan *commandOutput) {
 	}
 }
 
-func postMessage(rtm *slack.RTM, output *commandOutput) error {
+func postMessage(rtm *slack.RTM, output *CommandOutput) error {
 	params := slack.PostMessageParameters{
 		Username:        output.Username,
 		IconEmoji:       output.IconEmoji,
@@ -32,43 +33,45 @@ func postMessage(rtm *slack.RTM, output *commandOutput) error {
 	}
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
-	if _, _, err := rtm.PostMessage(output.origMessage.Channel, msgOptParams, msgOptAttachment); err != nil {
+	origMsg := output.ReplyInfo.(*slack.MessageEvent)
+	if _, _, err := rtm.PostMessage(origMsg.Channel, msgOptParams, msgOptAttachment); err != nil {
 		fmt.Printf("%s\n", err)
 		return err
 	}
 	return nil
 }
 
-func (output *commandOutput) getThreadTimestamp() string {
+func (output *CommandOutput) getThreadTimestamp() string {
 	if output.PostAsReply {
-		return output.origMessage.Timestamp
+		origMsg := output.ReplyInfo.(*slack.MessageEvent)
+		return origMsg.Timestamp
 	}
 	return ""
 }
 
-func (output *commandOutput) getReplyBroadcast() bool {
+func (output *CommandOutput) getReplyBroadcast() bool {
 	if output.PostAsReply == false {
 		return false
 	}
 	if output.AlwaysBroadcast {
 		return true
 	}
-	if output.isError {
+	if output.IsError {
 		return true
 	}
 	return false
 }
 
-func (output *commandOutput) getText() string {
-	text := output.text
+func (output *CommandOutput) getText() string {
+	text := output.Text
 	if output.Monospaced {
 		text = fmt.Sprintf("```%s```", text)
 	}
 	return text
 }
 
-func (output *commandOutput) getColor() string {
-	if output.isError {
+func (output *CommandOutput) getColor() string {
+	if output.IsError {
 		return "danger"
 	}
 	return "good"

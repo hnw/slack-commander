@@ -9,30 +9,18 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/hashicorp/logutils"
 	"github.com/slack-go/slack"
+
+	"github.com/hnw/slack-commander/pubsub"
 )
 
-type commonConfig struct {
-	Username        string `toml:"username"`
-	IconEmoji       string `toml:"icon_emoji"`
-	IconURL         string `toml:"icon_url"`
-	PostAsReply     bool   `toml:"post_as_reply"`
-	AlwaysBroadcast bool   `toml:"always_broadcast"`
-	Monospaced      bool
-	Timeout         int
-}
-
 type topLevelConfig struct {
-	commonConfig
-	NumWorkers          int    `toml:"num_workers"`
-	SlackToken          string `toml:"slack_token"`
-	AcceptReminder      bool   `toml:"accept_reminder"`
-	AcceptBotMessage    bool   `toml:"accept_bot_message"`
-	AcceptThreadMessage bool   `toml:"accept_thread_message"`
-	Commands            []*commandConfig
+	pubsub.TopLevelConfig
+	NumWorkers int `toml:"num_workers"`
+	Commands   []*commandConfig
 }
 
 type commandConfig struct {
-	commonConfig
+	pubsub.Config
 	Keyword string
 	Command string
 	Aliases []string
@@ -64,13 +52,6 @@ var (
 	logger *log.Logger
 )
 
-func newSlackInput(message *slack.MessageEvent, messageText string) *slackInput {
-	i := slackInput{}
-	i.message = message
-	i.messageText = messageText
-	return &i
-}
-
 func main() {
 	var (
 		verbose = flag.Bool("v", false, "Verbose mode")
@@ -101,11 +82,11 @@ func main() {
 
 	rtm := api.NewRTM()
 	go rtm.ManageConnection()
-	commandQueue := make(chan *slackInput, config.NumWorkers)
-	writeQueue := make(chan *commandOutput, config.NumWorkers)
+	commandQueue := make(chan *pubsub.Input, config.NumWorkers)
+	outputQueue := make(chan *pubsub.CommandOutput, config.NumWorkers)
 	for i := 0; i < config.NumWorkers; i++ {
-		go commandExecutor(commandQueue, writeQueue, config.Commands)
+		go commandExecutor(commandQueue, outputQueue, config.Commands)
 	}
-	go slackWriter(rtm, writeQueue)
-	slackListener(rtm, commandQueue)
+	go pubsub.SlackWriter(rtm, outputQueue)
+	pubsub.SlackListener(rtm, commandQueue, config.TopLevelConfig)
 }
