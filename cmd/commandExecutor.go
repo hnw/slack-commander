@@ -1,8 +1,9 @@
-package main
+package cmd
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,7 +13,23 @@ import (
 	"github.com/hnw/slack-commander/pubsub"
 )
 
-func commandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.CommandOutput, cfgs []*commandConfig) {
+type CommandConfig struct {
+	pubsub.Config
+	Keyword string
+	Command string
+	Aliases []string
+}
+
+type commandOption struct {
+	args        []string
+	stdin       io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	cleanupFunc func()
+	timeout     int
+}
+
+func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.CommandOutput, cfgs []*CommandConfig) {
 	// config から matcher を生成
 	matchers := make([]*commandMatcher, 0)
 	for _, cfg := range cfgs {
@@ -38,7 +55,7 @@ func commandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 		if err != nil && len(cmds) > 0 {
 			// parse結果が複数コマンドのときだけエラーを出す
 			// 文頭に「>」などのオペレータが来たときにエラーを出されると邪魔なので
-			cfg := &commandConfig{}
+			cfg := &CommandConfig{}
 			cfg.Username = "Slack commander"
 			cfg.IconEmoji = ":ghost:"
 			errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
@@ -73,7 +90,7 @@ func commandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 			}
 			if ret == -1 && len(cmds) > 1 {
 				// 複数コマンド実行時のみ、キーワードマッチ失敗エラーを出す
-				cfg := &commandConfig{}
+				cfg := &CommandConfig{}
 				cfg.Username = "Slack commander"
 				cfg.IconEmoji = ":ghost:"
 				errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
@@ -84,7 +101,7 @@ func commandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 	}
 }
 
-func getQueueWriter(q chan *pubsub.CommandOutput, cfg *commandConfig, replyInfo interface{}) *bufferedWriter {
+func getQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
 		q <- &pubsub.CommandOutput{
 			Config:    cfg.Config,
@@ -94,7 +111,7 @@ func getQueueWriter(q chan *pubsub.CommandOutput, cfg *commandConfig, replyInfo 
 	})
 }
 
-func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *commandConfig, replyInfo interface{}) *bufferedWriter {
+func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
 		q <- &pubsub.CommandOutput{
 			Config:    cfg.Config,

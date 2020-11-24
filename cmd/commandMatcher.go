@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"strings"
@@ -7,12 +7,12 @@ import (
 )
 
 type commandMatcher struct {
-	cfg      *commandConfig
+	cfg      *CommandConfig
 	keywords []string
 }
 
-//　commandConfig.Keyword のワイルドカードを正規表現に書き換えてcommandMatcherを返す
-func newMatcher(cfg *commandConfig) *commandMatcher {
+//　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてcommandMatcherを返す
+func newMatcher(cfg *CommandConfig) *commandMatcher {
 	parser := shellwords.NewParser()
 	keywords, err := parser.Parse(cfg.Keyword)
 	if err != nil || parser.Position >= 0 {

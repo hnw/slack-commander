@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"reflect"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestCommandMatcher(t *testing.T) {
-	cfgs := []*commandConfig{
+	cfgs := []*CommandConfig{
 		{
 			Keyword: `ping 8.8.8.8`,
 			Command: `ping -c4 8.8.8.8`,

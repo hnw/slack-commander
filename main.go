@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"io"
 	"log"
 	"os"
 
@@ -10,41 +9,14 @@ import (
 	"github.com/hashicorp/logutils"
 	"github.com/slack-go/slack"
 
+	"github.com/hnw/slack-commander/cmd"
 	"github.com/hnw/slack-commander/pubsub"
 )
 
 type topLevelConfig struct {
 	pubsub.TopLevelConfig
 	NumWorkers int `toml:"num_workers"`
-	Commands   []*commandConfig
-}
-
-type commandConfig struct {
-	pubsub.Config
-	Keyword string
-	Command string
-	Aliases []string
-}
-
-type commandOption struct {
-	args        []string
-	stdin       io.Reader
-	stdout      io.Writer
-	stderr      io.Writer
-	cleanupFunc func()
-	timeout     int
-}
-
-type commandOutput struct {
-	commandConfig
-	origMessage *slack.MessageEvent
-	text        string
-	isError     bool
-}
-
-type slackInput struct {
-	message     *slack.MessageEvent // 起動メッセージ
-	messageText string              // 起動コマンド平文
+	Commands   []*cmd.CommandConfig
 }
 
 var (
@@ -85,7 +57,7 @@ func main() {
 	commandQueue := make(chan *pubsub.Input, config.NumWorkers)
 	outputQueue := make(chan *pubsub.CommandOutput, config.NumWorkers)
 	for i := 0; i < config.NumWorkers; i++ {
-		go commandExecutor(commandQueue, outputQueue, config.Commands)
+		go cmd.CommandExecutor(commandQueue, outputQueue, config.Commands)
 	}
 	go pubsub.SlackWriter(rtm, outputQueue)
 	pubsub.SlackListener(rtm, commandQueue, config.TopLevelConfig)
