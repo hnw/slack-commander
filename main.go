@@ -13,14 +13,16 @@ import (
 	"github.com/hnw/slack-commander/pubsub"
 )
 
-type topLevelConfig struct {
-	pubsub.TopLevelConfig
+type pubSub = pubsub.Config
+
+type Config struct {
+	pubSub
 	NumWorkers int `toml:"num_workers"`
 	Commands   []*cmd.CommandConfig
 }
 
 var (
-	config topLevelConfig
+	cfg    Config
 	logger *log.Logger
 )
 
@@ -43,22 +45,22 @@ func main() {
 	logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
 	logger.SetOutput(filter)
 
-	config = topLevelConfig{NumWorkers: 1}
-	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+	cfg = Config{NumWorkers: 1}
+	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
 		logger.Println("[ERROR] ", err)
 		return
 	}
 	optionLogger := slack.OptionLog(logger)
 	optionDebug := slack.OptionDebug(*verbose)
-	api := slack.New(config.SlackToken, optionLogger, optionDebug)
+	api := slack.New(cfg.SlackToken, optionLogger, optionDebug)
 
 	rtm := api.NewRTM()
 	go rtm.ManageConnection()
-	commandQueue := make(chan *pubsub.Input, config.NumWorkers)
-	outputQueue := make(chan *pubsub.CommandOutput, config.NumWorkers)
-	for i := 0; i < config.NumWorkers; i++ {
-		go cmd.CommandExecutor(commandQueue, outputQueue, config.Commands)
+	commandQueue := make(chan *pubsub.Input, cfg.NumWorkers)
+	outputQueue := make(chan *pubsub.CommandOutput, cfg.NumWorkers)
+	for i := 0; i < cfg.NumWorkers; i++ {
+		go cmd.Executor(commandQueue, outputQueue, cfg.Commands)
 	}
 	go pubsub.SlackWriter(rtm, outputQueue)
-	pubsub.SlackListener(rtm, commandQueue, config.TopLevelConfig)
+	pubsub.SlackListener(rtm, commandQueue, cfg.pubSub)
 }

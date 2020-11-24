@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestParseLine(t *testing.T) {
+func TestParse(t *testing.T) {
 	failurePatterns := []string{
 		"",
 		">",
@@ -26,7 +26,7 @@ func TestParseLine(t *testing.T) {
 		"あい&うえお",
 	}
 	for _, s := range failurePatterns {
-		_, err := parseLine(s)
+		_, err := parse(s)
 		if err == nil {
 			t.Errorf(`Unexpected success for checkSyntax("%v")`, s)
 		} else {

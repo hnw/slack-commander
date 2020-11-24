@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestCommandMatcher(t *testing.T) {
+func TestMatcher(t *testing.T) {
 	cfgs := []*CommandConfig{
 		{
 			Keyword: `ping 8.8.8.8`,

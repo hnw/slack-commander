@@ -19,7 +19,7 @@ func NewSlackInput(msg *slack.MessageEvent, text string) *Input {
 }
 
 // SlackListener はSlack RTMでメッセージ監視し、コマンドをcommandQueueに投げます。
-func SlackListener(rtm *slack.RTM, commandQueue chan *Input, cfg TopLevelConfig) {
+func SlackListener(rtm *slack.RTM, commandQueue chan *Input, cfg Config) {
 	for msg := range rtm.IncomingEvents {
 		switch ev := msg.Data.(type) {
 		case *slack.HelloEvent:
@@ -56,7 +56,7 @@ func SlackListener(rtm *slack.RTM, commandQueue chan *Input, cfg TopLevelConfig)
 	}
 }
 
-func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *Input, cfg TopLevelConfig) {
+func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *Input, cfg Config) {
 	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
 		return
 	}

@@ -14,7 +14,7 @@ import (
 )
 
 type CommandConfig struct {
-	pubsub.Config
+	pubsub.ReplyConfig
 	Keyword string
 	Command string
 	Aliases []string
@@ -29,9 +29,9 @@ type commandOption struct {
 	timeout     int
 }
 
-func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.CommandOutput, cfgs []*CommandConfig) {
+func Executor(commandQueue chan *pubsub.Input, outputQueue chan *pubsub.CommandOutput, cfgs []*CommandConfig) {
 	// config から matcher を生成
-	matchers := make([]*commandMatcher, 0)
+	matchers := make([]*Matcher, 0)
 	for _, cfg := range cfgs {
 		matcher := newMatcher(cfg)
 		if matcher != nil {
@@ -51,14 +51,14 @@ func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 			// メッセージが複数行だった場合、1行目をコマンド、2行目以降を標準入力として扱う
 			stdinText = msgArr[1]
 		}
-		cmds, err := parseLine(cmdMsg)
+		cmds, err := parse(cmdMsg)
 		if err != nil && len(cmds) > 0 {
 			// parse結果が複数コマンドのときだけエラーを出す
 			// 文頭に「>」などのオペレータが来たときにエラーを出されると邪魔なので
 			cfg := &CommandConfig{}
 			cfg.Username = "Slack commander"
 			cfg.IconEmoji = ":ghost:"
-			errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
+			errWriter := getErrorQueueWriter(outputQueue, cfg, input.ReplyInfo)
 			errWriter.Write([]byte(fmt.Sprintf("%v", err)))
 			errWriter.Flash()
 			continue
@@ -71,8 +71,8 @@ func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 			ret = -1
 			for _, m := range matchers {
 				if args := m.build(cmd.args); len(args) > 0 {
-					writer := getQueueWriter(writeQueue, m.cfg, input.ReplyInfo)
-					errWriter := getErrorQueueWriter(writeQueue, m.cfg, input.ReplyInfo)
+					writer := getQueueWriter(outputQueue, m.cfg, input.ReplyInfo)
+					errWriter := getErrorQueueWriter(outputQueue, m.cfg, input.ReplyInfo)
 					opt := &commandOption{
 						args:   args,
 						stdin:  strings.NewReader(stdinText),
@@ -84,7 +84,7 @@ func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 						},
 						timeout: m.cfg.Timeout,
 					}
-					ret = execCommand(opt)
+					ret = execute(opt)
 					break
 				}
 			}
@@ -93,7 +93,7 @@ func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 				cfg := &CommandConfig{}
 				cfg.Username = "Slack commander"
 				cfg.IconEmoji = ":ghost:"
-				errWriter := getErrorQueueWriter(writeQueue, cfg, input.ReplyInfo)
+				errWriter := getErrorQueueWriter(outputQueue, cfg, input.ReplyInfo)
 				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))))
 				errWriter.Flash()
 			}
@@ -104,9 +104,9 @@ func CommandExecutor(commandQueue chan *pubsub.Input, writeQueue chan *pubsub.Co
 func getQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
 		q <- &pubsub.CommandOutput{
-			Config:    cfg.Config,
-			ReplyInfo: replyInfo,
-			Text:      text,
+			ReplyConfig: cfg.ReplyConfig,
+			ReplyInfo:   replyInfo,
+			Text:        text,
 		}
 	})
 }
@@ -114,10 +114,10 @@ func getQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo 
 func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
 	return newBufferedWriter(func(text string) {
 		q <- &pubsub.CommandOutput{
-			Config:    cfg.Config,
-			ReplyInfo: replyInfo,
-			Text:      text,
-			IsError:   true,
+			ReplyConfig: cfg.ReplyConfig,
+			ReplyInfo:   replyInfo,
+			Text:        text,
+			IsError:     true,
 		}
 	})
 }
@@ -126,7 +126,7 @@ func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, reply
 // コマンドを実行できた場合、そのexit codeを返す
 // コマンドを実行できかなった場合は127を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
-func execCommand(opt *commandOption) int {
+func execute(opt *commandOption) int {
 	if len(opt.args) == 0 {
 		return 127
 	}
@@ -198,7 +198,7 @@ func newParsedCommand(op string, args []string) *parsedCommand {
 	}
 }
 
-func parseLine(line string) ([]*parsedCommand, error) {
+func parse(line string) ([]*parsedCommand, error) {
 	parser := shellwords.NewParser()
 	prevOperator := "" // 「;」相当
 	cmds := make([]*parsedCommand, 0)

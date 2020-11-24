@@ -6,27 +6,27 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
-type commandMatcher struct {
+type Matcher struct {
 	cfg      *CommandConfig
 	keywords []string
 }
 
-//　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてcommandMatcherを返す
-func newMatcher(cfg *CommandConfig) *commandMatcher {
+//　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す
+func newMatcher(cfg *CommandConfig) *Matcher {
 	parser := shellwords.NewParser()
 	keywords, err := parser.Parse(cfg.Keyword)
 	if err != nil || parser.Position >= 0 {
 		return nil
 	}
-	return &commandMatcher{
+	return &Matcher{
 		cfg:      cfg,
 		keywords: keywords,
 	}
 }
 
-// commandMatcherの定義に従い、キーワード配列をコマンド配列に変換して返す
+// Matcherの定義に従い、キーワード配列をコマンド配列に変換して返す
 // キーワード配列がマッチしなかった場合はnilを返す
-func (m *commandMatcher) build(keywords []string) []string {
+func (m *Matcher) build(keywords []string) []string {
 	if len(keywords) < len(m.keywords) {
 		return nil
 	}

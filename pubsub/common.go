@@ -1,14 +1,14 @@
 package pubsub
 
-type TopLevelConfig struct {
-	Config
+type Config struct {
+	ReplyConfig
 	SlackToken          string `toml:"slack_token"`
 	AcceptReminder      bool   `toml:"accept_reminder"`
 	AcceptBotMessage    bool   `toml:"accept_bot_message"`
 	AcceptThreadMessage bool   `toml:"accept_thread_message"`
 }
 
-type Config struct {
+type ReplyConfig struct {
 	Username        string `toml:"username"`
 	IconEmoji       string `toml:"icon_emoji"`
 	IconURL         string `toml:"icon_url"`
@@ -27,7 +27,7 @@ type Input struct {
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
 // cmdパッケージを作成したらそっちに移動させた方がよさそう
 type CommandOutput struct {
-	Config
+	ReplyConfig
 	ReplyInfo interface{}
 	Text      string
 	IsError   bool

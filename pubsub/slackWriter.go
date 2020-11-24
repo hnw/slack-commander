@@ -7,10 +7,10 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// SlackWriter はwriteQueueから来たコマンド実行結果をSlackに書き込みます
-func SlackWriter(rtm *slack.RTM, writeQueue chan *CommandOutput) {
+// SlackWriter はoutputQueueから来たコマンド実行結果をSlackに書き込みます
+func SlackWriter(rtm *slack.RTM, outputQueue chan *CommandOutput) {
 	for {
-		output, ok := <-writeQueue // closeされると ok が false になる
+		output, ok := <-outputQueue // closeされると ok が false になる
 		if !ok {
 			return
 		}
