@@ -17,12 +17,11 @@ type CommandInput struct {
 }
 
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
-// cmdパッケージを作成したらそっちに移動させた方がよさそう
 type CommandOutput struct {
-	ReplyInfo interface{}
-	Config    interface{}
-	Text      string // コマンドからの出力
-	IsError   bool
+	ReplyInfo   interface{}
+	ReplyConfig interface{}
+	Text        string // コマンドからの出力
+	IsError     bool
 }
 
 type Definition struct {

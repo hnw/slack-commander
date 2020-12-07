@@ -41,26 +41,26 @@ func (w *OutputWriter) Flush() error {
 }
 
 type rawWriter struct {
-	Ch        chan *CommandOutput
-	ReplyInfo interface{}
-	Config    interface{}
-	IsError   bool
+	Ch          chan *CommandOutput
+	ReplyInfo   interface{}
+	ReplyConfig interface{}
+	IsError     bool
 }
 
 func newRawWriter(ch chan *CommandOutput, replyInfo interface{}, cfg interface{}, isError bool) *rawWriter {
 	return &rawWriter{
-		Ch:        ch,
-		ReplyInfo: replyInfo,
-		Config:    cfg,
-		IsError:   isError,
+		Ch:          ch,
+		ReplyInfo:   replyInfo,
+		ReplyConfig: cfg,
+		IsError:     isError,
 	}
 }
 
 func (w *rawWriter) Write(data []byte) (n int, err error) {
 	w.Ch <- &CommandOutput{
-		ReplyInfo: w.ReplyInfo,
-		Config:    w.Config,
-		Text:      string(data),
+		ReplyInfo:   w.ReplyInfo,
+		ReplyConfig: w.ReplyConfig,
+		Text:        string(data),
 	}
 	return len(data), nil
 }

@@ -8,32 +8,46 @@ import (
 func TestMatcher(t *testing.T) {
 	cfgs := []*CommandConfig{
 		{
-			Keyword: `ping 8.8.8.8`,
-			Command: `ping -c4 8.8.8.8`,
+			Definition: &Definition{
+				Keyword: `ping 8.8.8.8`,
+				Command: `ping -c4 8.8.8.8`,
+			},
 		},
 		{
-			Keyword: `ping *`,
-			Command: `ping * -c4`,
+			Definition: &Definition{
+				Keyword: `ping *`,
+				Command: `ping * -c4`,
+			},
 		},
 		{
-			Keyword: `ping *`,
-			Command: `/bin/sh -c "ping *"`,
+			Definition: &Definition{
+				Keyword: `ping *`,
+				Command: `/bin/sh -c "ping *"`,
+			},
 		},
 		{
-			Keyword: `echo *`,
-			Command: `/bin/echo *`,
+			Definition: &Definition{
+				Keyword: `echo *`,
+				Command: `/bin/echo *`,
+			},
 		},
 		{
-			Keyword: `echo *`,
-			Command: `/bin/echo "*"`,
+			Definition: &Definition{
+				Keyword: `echo *`,
+				Command: `/bin/echo "*"`,
+			},
 		},
 		{
-			Keyword: `echo *`,
-			Command: `/bin/echo '*'`,
+			Definition: &Definition{
+				Keyword: `echo *`,
+				Command: `/bin/echo '*'`,
+			},
 		},
 		{
-			Keyword: `foo * bar`,
-			Command: `*`,
+			Definition: &Definition{
+				Keyword: `foo * bar`,
+				Command: `*`,
+			},
 		},
 	}
 	args := [][]string{
