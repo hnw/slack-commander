@@ -5,10 +5,12 @@ import (
 	"time"
 
 	"github.com/slack-go/slack"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 // SlackWriter はoutputQueueから来たコマンド実行結果をSlackに書き込みます
-func SlackWriter(rtm *slack.RTM, outputQueue chan *CommandOutput) {
+func SlackWriter(rtm *slack.RTM, outputQueue chan *cmd.CommandOutput) {
 	for {
 		output, ok := <-outputQueue // closeされると ok が false になる
 		if !ok {
@@ -19,17 +21,18 @@ func SlackWriter(rtm *slack.RTM, outputQueue chan *CommandOutput) {
 	}
 }
 
-func postMessage(rtm *slack.RTM, output *CommandOutput) error {
+func postMessage(rtm *slack.RTM, output *cmd.CommandOutput) error {
+	cfg := getConfig(output)
 	params := slack.PostMessageParameters{
-		Username:        output.Username,
-		IconEmoji:       output.IconEmoji,
-		IconURL:         output.IconURL,
-		ThreadTimestamp: output.getThreadTimestamp(),
-		ReplyBroadcast:  output.getReplyBroadcast(),
+		Username:        cfg.Username,
+		IconEmoji:       cfg.IconEmoji,
+		IconURL:         cfg.IconURL,
+		ThreadTimestamp: getThreadTimestamp(output),
+		ReplyBroadcast:  getReplyBroadcast(output),
 	}
 	attachment := slack.Attachment{
-		Text:  output.getText(),
-		Color: output.getColor(),
+		Text:  getText(output),
+		Color: getColor(output),
 	}
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
@@ -41,19 +44,41 @@ func postMessage(rtm *slack.RTM, output *CommandOutput) error {
 	return nil
 }
 
-func (output *CommandOutput) getThreadTimestamp() string {
-	if output.PostAsReply {
+func getConfig(output *cmd.CommandOutput) *ReplyConfig {
+	if output.Config == nil {
+		// TODO: 設定できるようにする
+		return &ReplyConfig{
+			Username:  "Slack commander",
+			IconEmoji: ":ghost:",
+		}
+	}
+	return output.Config.(*ReplyConfig)
+}
+
+func getThreadTimestamp(output *cmd.CommandOutput) string {
+	cfg := getConfig(output)
+	if cfg.PostAsReply {
 		origMsg := output.ReplyInfo.(*slack.MessageEvent)
 		return origMsg.Timestamp
 	}
 	return ""
 }
 
-func (output *CommandOutput) getReplyBroadcast() bool {
-	if output.PostAsReply == false {
+func getText(output *cmd.CommandOutput) string {
+	cfg := getConfig(output)
+	text := output.Text
+	if cfg.Monospaced {
+		text = fmt.Sprintf("```%s```", text)
+	}
+	return text
+}
+
+func getReplyBroadcast(output *cmd.CommandOutput) bool {
+	cfg := getConfig(output)
+	if cfg.PostAsReply == false {
 		return false
 	}
-	if output.AlwaysBroadcast {
+	if cfg.AlwaysBroadcast {
 		return true
 	}
 	if output.IsError {
@@ -62,15 +87,7 @@ func (output *CommandOutput) getReplyBroadcast() bool {
 	return false
 }
 
-func (output *CommandOutput) getText() string {
-	text := output.Text
-	if output.Monospaced {
-		text = fmt.Sprintf("```%s```", text)
-	}
-	return text
-}
-
-func (output *CommandOutput) getColor() string {
+func getColor(output *cmd.CommandOutput) string {
 	if output.IsError {
 		return "danger"
 	}

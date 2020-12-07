@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/slack-go/slack"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 var (
@@ -11,15 +13,15 @@ var (
 )
 
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
-func NewSlackInput(msg *slack.MessageEvent, text string) *Input {
-	i := Input{}
-	i.ReplyInfo = msg
-	i.Text = text
-	return &i
+func NewSlackInput(msg *slack.MessageEvent, text string) *cmd.CommandInput {
+	return &cmd.CommandInput{
+		ReplyInfo: msg,
+		Text:      text,
+	}
 }
 
 // SlackListener はSlack RTMでメッセージ監視し、コマンドをcommandQueueに投げます。
-func SlackListener(rtm *slack.RTM, commandQueue chan *Input, cfg Config) {
+func SlackListener(rtm *slack.RTM, commandQueue chan *cmd.CommandInput, cfg Config) {
 	for msg := range rtm.IncomingEvents {
 		switch ev := msg.Data.(type) {
 		case *slack.HelloEvent:
@@ -56,7 +58,7 @@ func SlackListener(rtm *slack.RTM, commandQueue chan *Input, cfg Config) {
 	}
 }
 
-func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *Input, cfg Config) {
+func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
 	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
 		return
 	}

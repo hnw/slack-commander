@@ -3,33 +3,48 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-shellwords"
-
-	"github.com/hnw/slack-commander/pubsub"
 )
 
-type CommandConfig struct {
-	pubsub.ReplyConfig
+// CommandInput はPubSubからの情報をExecutorに引き渡す構造体
+type CommandInput struct {
+	ReplyInfo interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
+	Text      string      // 起動コマンド平文
+}
+
+// CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
+// cmdパッケージを作成したらそっちに移動させた方がよさそう
+type CommandOutput struct {
+	ReplyInfo interface{}
+	Config    interface{}
+	Text      string // コマンドからの出力
+	IsError   bool
+}
+
+type Definition struct {
+	Timeout int
 	Keyword string
 	Command string
 	Aliases []string
 }
 
-type commandOption struct {
-	args        []string
-	stdin       io.Reader
-	stdout      io.Writer
-	stderr      io.Writer
-	cleanupFunc func()
-	timeout     int
+type CommandConfig struct {
+	*Definition
+	ReplyConfig interface{} //*pubsub.ReplyConfig
 }
 
-func Executor(commandQueue chan *pubsub.Input, outputQueue chan *pubsub.CommandOutput, cfgs []*CommandConfig) {
+func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
+	return &CommandConfig{
+		Definition:  def,
+		ReplyConfig: replyConfig,
+	}
+}
+
+func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig) {
 	// config から matcher を生成
 	matchers := make([]*Matcher, 0)
 	for _, cfg := range cfgs {
@@ -40,7 +55,7 @@ func Executor(commandQueue chan *pubsub.Input, outputQueue chan *pubsub.CommandO
 	}
 	// メインループ
 	for {
-		input, ok := <-commandQueue // closeされると ok が false になる
+		input, ok := <-rq // closeされると ok が false になる
 		if !ok {
 			return
 		}
@@ -55,12 +70,9 @@ func Executor(commandQueue chan *pubsub.Input, outputQueue chan *pubsub.CommandO
 		if err != nil && len(cmds) > 0 {
 			// parse結果が複数コマンドのときだけエラーを出す
 			// 文頭に「>」などのオペレータが来たときにエラーを出されると邪魔なので
-			cfg := &CommandConfig{}
-			cfg.Username = "Slack commander"
-			cfg.IconEmoji = ":ghost:"
-			errWriter := getErrorQueueWriter(outputQueue, cfg, input.ReplyInfo)
-			errWriter.Write([]byte(fmt.Sprintf("%v", err)))
-			errWriter.Flash()
+			syserr := newErrWriter(wq, input.ReplyInfo, nil)
+			fmt.Fprintf(syserr, "%v", err)
+			syserr.Flush()
 			continue
 		}
 		ret := 0
@@ -71,88 +83,56 @@ func Executor(commandQueue chan *pubsub.Input, outputQueue chan *pubsub.CommandO
 			ret = -1
 			for _, m := range matchers {
 				if args := m.build(cmd.args); len(args) > 0 {
-					writer := getQueueWriter(outputQueue, m.cfg, input.ReplyInfo)
-					errWriter := getErrorQueueWriter(outputQueue, m.cfg, input.ReplyInfo)
-					opt := &commandOption{
-						args:   args,
-						stdin:  strings.NewReader(stdinText),
-						stdout: writer,
-						stderr: errWriter,
-						cleanupFunc: func() {
-							writer.Flash()
-							errWriter.Flash()
-						},
-						timeout: m.cfg.Timeout,
-					}
-					ret = execute(opt)
+					cmd := command(args[0], args[1:]...)
+					cmd.Stdin = strings.NewReader(stdinText)
+					stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
+					stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
+					cmd.Stdout = stdout
+					cmd.Stderr = stderr
+					ret = cmd.executeWithTimeout(m.cfg.Timeout)
+					stdout.Flush()
+					stderr.Flush()
 					break
 				}
 			}
 			if ret == -1 && len(cmds) > 1 {
 				// 複数コマンド実行時のみ、キーワードマッチ失敗エラーを出す
-				cfg := &CommandConfig{}
-				cfg.Username = "Slack commander"
-				cfg.IconEmoji = ":ghost:"
-				errWriter := getErrorQueueWriter(outputQueue, cfg, input.ReplyInfo)
-				errWriter.Write([]byte(fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))))
-				errWriter.Flash()
+				syserr := newErrWriter(wq, input.ReplyInfo, nil)
+				fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
+				syserr.Flush()
 			}
 		}
 	}
 }
 
-func getQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
-	return newBufferedWriter(func(text string) {
-		q <- &pubsub.CommandOutput{
-			ReplyConfig: cfg.ReplyConfig,
-			ReplyInfo:   replyInfo,
-			Text:        text,
-		}
-	})
+type mycmd struct {
+	*exec.Cmd
 }
 
-func getErrorQueueWriter(q chan *pubsub.CommandOutput, cfg *CommandConfig, replyInfo interface{}) *bufferedWriter {
-	return newBufferedWriter(func(text string) {
-		q <- &pubsub.CommandOutput{
-			ReplyConfig: cfg.ReplyConfig,
-			ReplyInfo:   replyInfo,
-			Text:        text,
-			IsError:     true,
-		}
-	})
+func command(name string, arg ...string) *mycmd {
+	return &mycmd{Cmd: exec.Command(name, arg...)}
 }
 
 // 外部コマンドを実行する
 // コマンドを実行できた場合、そのexit codeを返す
 // コマンドを実行できかなった場合は127を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
-func execute(opt *commandOption) int {
-	if len(opt.args) == 0 {
-		return 127
-	}
-	cmd := exec.Command(opt.args[0], opt.args[1:]...)
-	cmd.Stdin = opt.stdin
-	cmd.Stdout = opt.stdout
-	cmd.Stderr = opt.stderr
-	if opt.cleanupFunc != nil {
-		defer opt.cleanupFunc()
-	}
-
+func (cmd *mycmd) executeWithTimeout(timeout int) int {
 	if err := cmd.Start(); err != nil {
-		if opt.stderr != nil {
-			opt.stderr.Write([]byte(fmt.Sprintf("%v", err)))
+		if cmd.Stderr != nil {
+			fmt.Fprintf(cmd.Stderr, "%v", err)
 		}
 		return 127
 	}
 	var timer *time.Timer
-	if opt.timeout > 0 {
-		timer = time.AfterFunc(time.Duration(opt.timeout)*time.Second, func() {
+	if timeout > 0 {
+		timer = time.AfterFunc(time.Duration(timeout)*time.Second, func() {
 			timer.Stop()
 			cmd.Process.Kill()
 		})
 	}
 	err := cmd.Wait()
-	if opt.timeout > 0 {
+	if timeout > 0 {
 		timer.Stop()
 	}
 	if err != nil {
@@ -161,16 +141,14 @@ func execute(opt *commandOption) int {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				if exitError.ExitCode() == -1 {
 					// terminated by a signal
-					if opt.stderr != nil {
-						errText := fmt.Sprintf("timeout %ds exceeded", opt.timeout)
-						opt.stderr.Write([]byte(errText))
+					if cmd.Stderr != nil {
+						fmt.Fprintf(cmd.Stderr, "Timeout exceeded (%ds)", timeout)
 					}
-
 				}
 			}
 		default:
-			if opt.stderr != nil {
-				opt.stderr.Write([]byte(fmt.Sprintf("%v", err)))
+			if cmd.Stderr != nil {
+				fmt.Fprintf(cmd.Stderr, "%v", err)
 			}
 		}
 	}

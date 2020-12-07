@@ -13,12 +13,17 @@ import (
 	"github.com/hnw/slack-commander/pubsub"
 )
 
-type pubSub = pubsub.Config
+type pubSubConfig = pubsub.Config // 名前が重複しているためaliasにして埋め込み
 
 type Config struct {
-	pubSub
+	pubSubConfig
 	NumWorkers int `toml:"num_workers"`
-	Commands   []*cmd.CommandConfig
+	Commands   []*CommandConfig
+}
+
+type CommandConfig struct {
+	cmd.Definition
+	pubsub.ReplyConfig
 }
 
 var (
@@ -50,17 +55,23 @@ func main() {
 		logger.Println("[ERROR] ", err)
 		return
 	}
+	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
+	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
+	for i, c := range cfg.Commands {
+		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
+	}
+
 	optionLogger := slack.OptionLog(logger)
 	optionDebug := slack.OptionDebug(*verbose)
 	api := slack.New(cfg.SlackToken, optionLogger, optionDebug)
 
 	rtm := api.NewRTM()
 	go rtm.ManageConnection()
-	commandQueue := make(chan *pubsub.Input, cfg.NumWorkers)
-	outputQueue := make(chan *pubsub.CommandOutput, cfg.NumWorkers)
+	commandQueue := make(chan *cmd.CommandInput, cfg.NumWorkers)
+	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	for i := 0; i < cfg.NumWorkers; i++ {
-		go cmd.Executor(commandQueue, outputQueue, cfg.Commands)
+		go cmd.Executor(commandQueue, outputQueue, cmdConfig)
 	}
 	go pubsub.SlackWriter(rtm, outputQueue)
-	pubsub.SlackListener(rtm, commandQueue, cfg.pubSub)
+	pubsub.SlackListener(rtm, commandQueue, cfg.pubSubConfig)
 }
