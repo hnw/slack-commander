@@ -82,7 +82,7 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 	} else if ev.Attachments != nil {
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
-			text := ev.Attachments[0].Pretext
+			text := normalizeQuotes(unescapeMessage(ev.Attachments[0].Pretext))
 			if ev.Attachments[0].Text != "" {
 				text = text + "\n" + ev.Attachments[0].Text
 			}
