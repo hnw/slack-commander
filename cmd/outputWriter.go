@@ -6,7 +6,7 @@ import (
 )
 
 type OutputWriter struct {
-	bufw  *bufio.Writer
+	bufw  *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
 	timer *time.Timer
 }
 

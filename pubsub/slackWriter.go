@@ -45,14 +45,14 @@ func postMessage(rtm *slack.RTM, output *cmd.CommandOutput) error {
 }
 
 func getConfig(output *cmd.CommandOutput) *ReplyConfig {
-	if output.Config == nil {
+	if output.ReplyConfig == nil {
 		// TODO: 設定できるようにする
 		return &ReplyConfig{
 			Username:  "Slack commander",
 			IconEmoji: ":ghost:",
 		}
 	}
-	return output.Config.(*ReplyConfig)
+	return output.ReplyConfig.(*ReplyConfig)
 }
 
 func getThreadTimestamp(output *cmd.CommandOutput) string {
