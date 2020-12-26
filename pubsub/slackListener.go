@@ -1,6 +1,8 @@
 package pubsub
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -9,7 +11,8 @@ import (
 )
 
 var (
-	botID string
+	botID     string // 自身のBotID
+	myChannel string // 自身から自身へのDMチャンネル
 )
 
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
@@ -31,13 +34,21 @@ func SlackListener(rtm *slack.RTM, commandQueue chan *cmd.CommandInput, cfg Conf
 			//logger.Println("[DEBUG] Infos:", ev.Info)
 			//logger.Println("[INFO] Connection counter:", ev.ConnectionCount)
 			if botID == "" {
-				// 自身のBotIDを取得するのにAPIアクセスが必要
+				// 自身のBotIDを取得する
 				botUser, err := rtm.Client.GetUserInfo(ev.Info.User.ID)
 				if err != nil {
-					//logger.Println("[INFO] GetUserInfo() failed.")
+					fmt.Fprintln(os.Stderr, "[INFO] GetUserInfo() failed.")
 					return
 				}
 				botID = botUser.Profile.BotID
+			}
+			if myChannel == "" {
+				// 自身あてのDMのチャンネルIDを取得する
+				_, _, ch, err := rtm.OpenIMChannel("USLACKBOT")
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "[INFO] OpenIMChannel() failed.")
+				}
+				myChannel = ch
 			}
 
 		case *slack.MessageEvent:
@@ -64,8 +75,7 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 	}
 	if ev.SubType == "bot_message" &&
 		(ev.BotID == botID || cfg.AcceptBotMessage == false) {
-
-		// 自身のコメントで無限ループするのを防ぐ。
+		// AcceptBotMessageがtrueでも自身からのメッセージは無視する（直前のブロックを除く）。
 		// SubType == "bot_message" のときev.Userは空文字列になりUser IDでチェックできない
 		// そのためBot IDでチェックする必要がある
 		return
