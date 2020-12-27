@@ -11,14 +11,54 @@ import (
 
 // SlackWriter はoutputQueueから来たコマンド実行結果をSlackに書き込みます
 func SlackWriter(rtm *slack.RTM, outputQueue chan *cmd.CommandOutput) {
+	runningProcess := 0
+	if err := rtm.SetUserPresence("away"); err != nil {
+		fmt.Printf("err = %v\n", err)
+	}
 	for {
 		output, ok := <-outputQueue // closeされると ok が false になる
 		if !ok {
 			return
 		}
-		postMessage(rtm, output)
+		if output.Spawned {
+			runningProcess++
+			if runningProcess == 1 {
+				if err := rtm.SetUserPresence("auto"); err != nil {
+					fmt.Printf("err = %v\n", err)
+				}
+			}
+			addReaction(rtm, output, "eyes")
+		} else if output.Finished {
+			runningProcess--
+			if runningProcess == 0 {
+				if err := rtm.SetUserPresence("away"); err != nil {
+					fmt.Printf("err = %v\n", err)
+				}
+			}
+			if output.ExitCode == 0 {
+				addReaction(rtm, output, "white_check_mark")
+			} else {
+				addReaction(rtm, output, "x")
+			}
+			removeReaction(rtm, output, "eyes")
+		}
+		if output.Text != "" {
+			postMessage(rtm, output)
+		}
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func addReaction(rtm *slack.RTM, output *cmd.CommandOutput, name string) error {
+	origMsg := output.ReplyInfo.(*slack.MessageEvent)
+	item := slack.NewRefToMessage(origMsg.Channel, origMsg.Timestamp)
+	return rtm.AddReaction(name, item)
+}
+
+func removeReaction(rtm *slack.RTM, output *cmd.CommandOutput, name string) error {
+	origMsg := output.ReplyInfo.(*slack.MessageEvent)
+	item := slack.NewRefToMessage(origMsg.Channel, origMsg.Timestamp)
+	return rtm.RemoveReaction(name, item)
 }
 
 func postMessage(rtm *slack.RTM, output *cmd.CommandOutput) error {
@@ -81,14 +121,14 @@ func getReplyBroadcast(output *cmd.CommandOutput) bool {
 	if cfg.AlwaysBroadcast {
 		return true
 	}
-	if output.IsError {
+	if output.IsErrOut {
 		return true
 	}
 	return false
 }
 
 func getColor(output *cmd.CommandOutput) string {
-	if output.IsError {
+	if output.IsErrOut {
 		return "danger"
 	}
 	return "good"

@@ -21,7 +21,10 @@ type CommandOutput struct {
 	ReplyInfo   interface{}
 	ReplyConfig interface{}
 	Text        string // コマンドからの出力
-	IsError     bool
+	IsErrOut    bool
+	Spawned     bool
+	Finished    bool
+	ExitCode    int
 }
 
 type Definition struct {
@@ -74,6 +77,12 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 			syserr.Flush()
 			continue
 		}
+		// コマンド実行開始を通知
+		wq <- &CommandOutput{
+			ReplyInfo: input.ReplyInfo,
+			Spawned:   true,
+		}
+		// コマンド実行
 		ret := 0
 		for _, cmd := range cmds {
 			if (ret == 0 && cmd.skipIfSucceeded) || (ret != 0 && cmd.skipIfFailed) {
@@ -94,12 +103,22 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 					break
 				}
 			}
-			if ret == -1 && len(cmds) > 1 {
-				// 複数コマンド実行時のみ、キーワードマッチ失敗エラーを出す
-				syserr := newErrWriter(wq, input.ReplyInfo, nil)
-				fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
-				syserr.Flush()
+			if ret == -1 {
+				// キーワードマッチ失敗
+				ret = 128 // command not found
+				if len(cmds) > 1 {
+					// 複数コマンド実行時のみエラー出力
+					syserr := newErrWriter(wq, input.ReplyInfo, nil)
+					fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
+					syserr.Flush()
+				}
 			}
+		}
+		// コマンド実行終了を通知
+		wq <- &CommandOutput{
+			ReplyInfo: input.ReplyInfo,
+			Finished:  true,
+			ExitCode:  ret,
 		}
 	}
 }
