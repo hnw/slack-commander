@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-shellwords"
@@ -136,6 +137,7 @@ func command(name string, arg ...string) *mycmd {
 // コマンドを実行できかなった場合は127を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
 func (cmd *mycmd) executeWithTimeout(timeout int) int {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		if cmd.Stderr != nil {
 			fmt.Fprintf(cmd.Stderr, "%v", err)
@@ -146,7 +148,10 @@ func (cmd *mycmd) executeWithTimeout(timeout int) int {
 	if timeout > 0 {
 		timer = time.AfterFunc(time.Duration(timeout)*time.Second, func() {
 			timer.Stop()
-			cmd.Process.Kill()
+			// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) // setpgidしたPGIDはPIDと等しい
+			time.Sleep(2 * time.Second)
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		})
 	}
 	err := cmd.Wait()
