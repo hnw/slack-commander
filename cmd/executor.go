@@ -78,13 +78,9 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 			syserr.Flush()
 			continue
 		}
-		// コマンド実行開始を通知
-		wq <- &CommandOutput{
-			ReplyInfo: input.ReplyInfo,
-			Spawned:   true,
-		}
 		// コマンド実行
 		ret := 0
+		notifiedCommandStart := false
 		for _, cmd := range cmds {
 			if (ret == 0 && cmd.skipIfSucceeded) || (ret != 0 && cmd.skipIfFailed) {
 				continue
@@ -92,6 +88,14 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 			ret = -1
 			for _, m := range matchers {
 				if args := m.build(cmd.args); len(args) > 0 {
+					if !notifiedCommandStart {
+						// コマンド実行開始を通知
+						wq <- &CommandOutput{
+							ReplyInfo: input.ReplyInfo,
+							Spawned:   true,
+						}
+						notifiedCommandStart = true
+					}
 					cmd := command(args[0], args[1:]...)
 					cmd.Stdin = strings.NewReader(stdinText)
 					stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
@@ -115,11 +119,13 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 				}
 			}
 		}
-		// コマンド実行終了を通知
-		wq <- &CommandOutput{
-			ReplyInfo: input.ReplyInfo,
-			Finished:  true,
-			ExitCode:  ret,
+		if notifiedCommandStart {
+			// コマンド実行終了を通知
+			wq <- &CommandOutput{
+				ReplyInfo: input.ReplyInfo,
+				Finished:  true,
+				ExitCode:  ret,
+			}
 		}
 	}
 }
