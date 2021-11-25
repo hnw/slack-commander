@@ -2,7 +2,8 @@ package pubsub
 
 type Config struct {
 	ReplyConfig
-	SlackToken          string `toml:"slack_token"`
+	SlackBotToken       string `toml:"slack_bot_token"`
+	SlackAppToken       string `toml:"slack_app_token"`
 	AcceptReminder      bool   `toml:"accept_reminder"`
 	AcceptBotMessage    bool   `toml:"accept_bot_message"`
 	AcceptThreadMessage bool   `toml:"accept_thread_message"`

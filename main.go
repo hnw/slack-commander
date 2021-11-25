@@ -8,6 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/hashicorp/logutils"
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/socketmode"
 
 	"github.com/hnw/slack-commander/cmd"
 	"github.com/hnw/slack-commander/pubsub"
@@ -33,18 +34,30 @@ var (
 
 func main() {
 	var (
+		quiet   = flag.Bool("q", false, "Quiet mode")
 		verbose = flag.Bool("v", false, "Verbose mode")
+		debug   = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
 	)
 	flag.Parse()
 
-	logLevel := "INFO"
+	// ログレベル""はライブラリ自体のデバッグログ
+	// systemdのログに残るのがイヤなので、デフォルトでは表示優先度最低にする
+	logLevels := []logutils.LogLevel{"", "DEBUG", "INFO", "WARN", "ERROR"}
+	logMinLevel := "WARN"
 	if *verbose {
-		logLevel = "DEBUG"
+		logMinLevel = "INFO"
+	}
+	if *debug {
+		// debugモードのときは全ログを出す
+		logMinLevel = ""
+	}
+	if *quiet {
+		logMinLevel = "ERROR"
 	}
 
 	filter := &logutils.LevelFilter{
-		Levels:   []logutils.LogLevel{"DEBUG", "INFO", "ERROR"},
-		MinLevel: logutils.LogLevel(logLevel),
+		Levels:   logLevels,
+		MinLevel: logutils.LogLevel(logMinLevel),
 		Writer:   os.Stderr,
 	}
 	logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
@@ -61,17 +74,26 @@ func main() {
 		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
 	}
 
-	optionLogger := slack.OptionLog(logger)
-	optionDebug := slack.OptionDebug(*verbose)
-	api := slack.New(cfg.SlackToken, optionLogger, optionDebug)
+	api := slack.New(
+		cfg.SlackBotToken,
+		slack.OptionDebug(*debug),
+		slack.OptionLog(logger),
+		slack.OptionAppLevelToken(cfg.SlackAppToken),
+	)
 
-	rtm := api.NewRTM()
-	go rtm.ManageConnection()
-	commandQueue := make(chan *cmd.CommandInput, cfg.NumWorkers)
+	smc := socketmode.New(
+		api,
+		socketmode.OptionDebug(true), // ロギングにsmc.Debugf()を使いたいので常時true
+		socketmode.OptionLog(logger),
+	)
+
+	commandQueue := make(chan *cmd.CommandInput, 50) // チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、ack返せない問題への暫定対処
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	for i := 0; i < cfg.NumWorkers; i++ {
 		go cmd.Executor(commandQueue, outputQueue, cmdConfig)
 	}
-	go pubsub.SlackWriter(rtm, outputQueue)
-	pubsub.SlackListener(rtm, commandQueue, cfg.pubSubConfig)
+	go pubsub.SlackWriter(smc, outputQueue)
+	go pubsub.SlackListener(smc, commandQueue, cfg.pubSubConfig)
+
+	smc.Run()
 }

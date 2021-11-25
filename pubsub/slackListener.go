@@ -2,94 +2,94 @@ package pubsub
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 
 	"github.com/hnw/slack-commander/cmd"
 )
 
 var (
-	botID     string // 自身のBotID
-	myChannel string // 自身から自身へのDMチャンネル
+	userID string // bot自身のuser ID（注：bot IDではない）
 )
 
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
-func NewSlackInput(msg *slack.MessageEvent, text string) *cmd.CommandInput {
+func NewSlackInput(msg *slackevents.MessageEvent, text string) *cmd.CommandInput {
 	return &cmd.CommandInput{
 		ReplyInfo: msg,
 		Text:      text,
 	}
 }
 
-// SlackListener はSlack RTMでメッセージ監視し、コマンドをcommandQueueに投げます。
-func SlackListener(rtm *slack.RTM, commandQueue chan *cmd.CommandInput, cfg Config) {
-	for msg := range rtm.IncomingEvents {
-		switch ev := msg.Data.(type) {
-		case *slack.HelloEvent:
-			//logger.Println("[DEBUG] Hello event")
+// SlackListener はSocket Modeでメッセージ監視し、コマンドをcommandQueueに投げます。
+func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, cfg Config) {
+	for evt := range smc.Events {
+		switch evt.Type {
+		case socketmode.EventTypeConnecting:
+			smc.Debugf("[INFO] Connecting to Slack with Socket Mode...")
+		case socketmode.EventTypeConnectionError:
+			smc.Debugf("[INFO] Connection failed. Retrying later...")
+		case socketmode.EventTypeConnected:
+			smc.Debugf("[INFO] Connected to Slack with Socket Mode.")
 
-		case *slack.ConnectedEvent:
-			//logger.Println("[DEBUG] Infos:", ev.Info)
-			//logger.Println("[INFO] Connection counter:", ev.ConnectionCount)
-			if botID == "" {
-				// 自身のBotIDを取得する
-				botUser, err := rtm.Client.GetUserInfo(ev.Info.User.ID)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "[INFO] GetUserInfo() failed.")
-					return
-				}
-				botID = botUser.Profile.BotID
+			authTest, authTestErr := smc.AuthTest()
+			if authTestErr != nil {
+				smc.Debugf("[ERROR] AuthTest() failed. : %v", authTestErr)
+				panic(fmt.Sprintf("AuthTest() failed. : %v", authTestErr))
 			}
-			if myChannel == "" {
-				// 自身あてのDMのチャンネルIDを取得する
-				_, _, ch, err := rtm.OpenIMChannel("USLACKBOT")
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "[INFO] OpenIMChannel() failed.")
-				}
-				myChannel = ch
+			userID = authTest.UserID
+		case socketmode.EventTypeEventsAPI:
+			eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+			if !ok {
+				smc.Debugf("[INFO] Ignored %+v\n", evt)
+				continue
 			}
+			smc.Ack(*evt.Request)
 
-		case *slack.MessageEvent:
-			//logger.Printf("[DEBUG] Message: %v, text=%s\n", ev, ev.Text)
-			onMessageEvent(rtm, ev, commandQueue, cfg)
-
-		case *slack.RTMError:
-			//logger.Printf("[INFO] Error: %s\n", ev.Error())
-
-		case *slack.InvalidAuthEvent:
-			//logger.Println("[INFO] Invalid credentials")
-			return
+			switch eventsAPIEvent.Type {
+			case slackevents.CallbackEvent:
+				innerEvent := eventsAPIEvent.InnerEvent
+				switch ev := innerEvent.Data.(type) {
+				case *slackevents.MessageEvent:
+					onMessageEvent(smc, ev, commandQueue, cfg)
+				default:
+					smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
+				}
+			default:
+				smc.Debugf("[INFO] Unsupported Events API event received")
+			}
 
 		default:
-			// Ignore other events..
-			//fmt.Printf("[DEBUG] Unexpected: %v\n", msg.Data)
+			smc.Debugf("[INFO] Unexpected event type received: %s\n", evt.Type)
 		}
 	}
 }
 
-func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
+func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
 	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
 		return
 	}
 	if ev.SubType == "bot_message" &&
-		(ev.BotID == botID || cfg.AcceptBotMessage == false) {
+		(ev.User == userID || cfg.AcceptBotMessage == false) {
 		// AcceptBotMessageがtrueでも自身からのメッセージは無視する（直前のブロックを除く）。
 		// SubType == "bot_message" のときev.Userは空文字列になりUser IDでチェックできない
 		// そのためBot IDでチェックする必要がある
 		return
 	}
-	if ev.ThreadTimestamp != "" && cfg.AcceptThreadMessage == false {
+	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
 		return
 	}
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text := strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
 		commandQueue <- NewSlackInput(ev, normalizeQuotes(unescapeMessage(text)))
+		smc.Debugf("[DEBUG]: command = '%s'", normalizeQuotes(unescapeMessage(text)))
 	} else if ev.Text != "" {
 		commandQueue <- NewSlackInput(ev, normalizeQuotes(unescapeMessage(ev.Text)))
+		smc.Debugf("[DEBUG]: command = '%s'", normalizeQuotes(unescapeMessage(ev.Text)))
 	} else if ev.Attachments != nil {
+		// おそらくsocket modeではこの分岐に入らない、確認してあとで消す
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
 			text := normalizeQuotes(unescapeMessage(ev.Attachments[0].Pretext))
@@ -97,8 +97,10 @@ func onMessageEvent(rtm *slack.RTM, ev *slack.MessageEvent, commandQueue chan *c
 				text = text + "\n" + ev.Attachments[0].Text
 			}
 			commandQueue <- NewSlackInput(ev, text)
+			smc.Debugf("[DEBUG]: command = '%s'", text)
 		} else if ev.Attachments[0].Text != "" {
 			commandQueue <- NewSlackInput(ev, ev.Attachments[0].Text)
+			smc.Debugf("[DEBUG]: command = '%s'", ev.Attachments[0].Text)
 		}
 	}
 }

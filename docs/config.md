@@ -2,9 +2,13 @@
 
 ## トップレベル設定項目
 
-### slack_token `string`
+### slack_bot_token `string`
 
-SlackのOAuthトークンを指定します。
+Slackのボットトークンを指定します。`xoxb-`から始まります。
+
+### slack_app_token `string`
+
+Slackのアプリレベルトークンを指定します。`xapp-`から始まります。
 
 ### num_workers `int`
 
