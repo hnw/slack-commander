@@ -58,8 +58,9 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 	}
 	// メインループ
 	for {
-		input, ok := <-rq // closeされると ok が false になる
+		input, ok := <-rq
 		if !ok {
+			// The channel has been closed
 			return
 		}
 		msgArr := strings.SplitN(input.Text, "\n", 2)
@@ -139,8 +140,9 @@ func command(name string, arg ...string) *mycmd {
 }
 
 // 外部コマンドを実行する
-// コマンドを実行できた場合、そのexit codeを返す
+// コマンドを実行できた場合、そのexit code(0-255)を返す
 // コマンドを実行できかなった場合は127を返す
+// 実行したコマンドがシグナルで殺された場合は143を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
 func (cmd *mycmd) executeWithTimeout(timeout int) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -169,16 +171,20 @@ func (cmd *mycmd) executeWithTimeout(timeout int) int {
 		case *exec.ExitError:
 			if exitError, ok := err.(*exec.ExitError); ok {
 				if exitError.ExitCode() == -1 {
-					// terminated by a signal
+					// https://pkg.go.dev/os#ProcessState.ExitCode
+					// -1 if the process hasn't exited or was terminated by a signal.
 					if cmd.Stderr != nil {
 						fmt.Fprintf(cmd.Stderr, "Timeout exceeded (%ds)", timeout)
 					}
+					return 143 // 128+15(SIGTERM)
 				}
 			}
 		default:
 			if cmd.Stderr != nil {
-				fmt.Fprintf(cmd.Stderr, "%v", err)
+				fmt.Fprintf(cmd.Stderr, "I/O problem?: %v", err)
 			}
+			fmt.Fprintf(cmd.Stderr, "exit code: %v", cmd.ProcessState.ExitCode())
+			// このブロックいつ通るか、exit codeが-1にならないか要確認
 		}
 	}
 	return cmd.ProcessState.ExitCode()
