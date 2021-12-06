@@ -5,10 +5,12 @@
 ### slack_bot_token `string`
 
 Slackのボットトークンを指定します。`xoxb-`から始まります。
+Slack管理画面「Settings」「OAuth & Permissions」「OAuth Tokens for Your Workspace」からコピーします。
 
 ### slack_app_token `string`
 
 Slackのアプリレベルトークンを指定します。`xapp-`から始まります。
+Slack管理画面「General」「Basic Information」「App-Level Tokens」で生成します。
 
 ### num_workers `int`
 
