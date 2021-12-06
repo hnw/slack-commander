@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/slack-go/slack/slackevents"
@@ -11,11 +12,20 @@ import (
 )
 
 var (
-	userID string // bot自身のuser ID（注：bot IDではない）
+	userID          string // bot自身のuser ID（注：bot IDではない）
+	reMentionTarget = regexp.MustCompile(`<@[^>]+>`)
 )
 
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
 func NewSlackInput(msg *slackevents.MessageEvent, text string) *cmd.CommandInput {
+	return &cmd.CommandInput{
+		ReplyInfo: msg,
+		Text:      text,
+	}
+}
+
+// NewSlackInputFromAppMention はAppMentionEventを元にpubsub.Inputを返す
+func NewSlackInputFromAppMention(msg *slackevents.AppMentionEvent, text string) *cmd.CommandInput {
 	return &cmd.CommandInput{
 		ReplyInfo: msg,
 		Text:      text,
@@ -53,6 +63,8 @@ func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, 
 				switch ev := innerEvent.Data.(type) {
 				case *slackevents.MessageEvent:
 					onMessageEvent(smc, ev, commandQueue, cfg)
+				case *slackevents.AppMentionEvent:
+					onAppMentionEvent(smc, ev, commandQueue, cfg)
 				default:
 					smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 				}
@@ -72,37 +84,69 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 	}
 	if ev.SubType == "bot_message" &&
 		(ev.User == userID || cfg.AcceptBotMessage == false) {
-		// AcceptBotMessageがtrueでも自身からのメッセージは無視する（直前のブロックを除く）。
-		// SubType == "bot_message" のときev.Userは空文字列になりUser IDでチェックできない
-		// そのためBot IDでチェックする必要がある
+		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
 		return
 	}
 	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
 		return
 	}
+	text := ""
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
-		text := strings.TrimPrefix(ev.Text, "Reminder: ")
+		text = strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
-		commandQueue <- NewSlackInput(ev, normalizeQuotes(unescapeMessage(text)))
-		smc.Debugf("[DEBUG]: command = '%s'", normalizeQuotes(unescapeMessage(text)))
 	} else if ev.Text != "" {
-		commandQueue <- NewSlackInput(ev, normalizeQuotes(unescapeMessage(ev.Text)))
-		smc.Debugf("[DEBUG]: command = '%s'", normalizeQuotes(unescapeMessage(ev.Text)))
+		text = ev.Text
 	} else if ev.Attachments != nil {
-		// おそらくsocket modeではこの分岐に入らない、確認してあとで消す
 		if ev.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
-			text := normalizeQuotes(unescapeMessage(ev.Attachments[0].Pretext))
+			text = ev.Attachments[0].Pretext
 			if ev.Attachments[0].Text != "" {
 				text = text + "\n" + ev.Attachments[0].Text
 			}
-			commandQueue <- NewSlackInput(ev, text)
-			smc.Debugf("[DEBUG]: command = '%s'", text)
 		} else if ev.Attachments[0].Text != "" {
-			commandQueue <- NewSlackInput(ev, ev.Attachments[0].Text)
-			smc.Debugf("[DEBUG]: command = '%s'", ev.Attachments[0].Text)
+			text = ev.Attachments[0].Text
+		} else {
+			smc.Debugf("[DEBUG]: text(4) = ''")
 		}
 	}
+	text = removeMentionTarget(text)
+	text = normalizeQuotes(unescapeMessage(text))
+	if text != "" {
+		commandQueue <- NewSlackInput(ev, text)
+		smc.Debugf("[DEBUG]: command = '%s'", text)
+	}
+}
+
+func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
+	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
+		return
+	}
+	if ev.BotID != "" &&
+		(ev.User == userID || cfg.AcceptBotMessage == false) {
+		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
+		return
+	}
+	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
+		return
+	}
+	text := ""
+	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
+		text = strings.TrimPrefix(ev.Text, "Reminder: ")
+		text = strings.TrimSuffix(text, ".")
+	} else if ev.Text != "" {
+		text = ev.Text
+	}
+	text = removeMentionTarget(text)
+	text = normalizeQuotes(unescapeMessage(text))
+	if text != "" {
+		commandQueue <- NewSlackInputFromAppMention(ev, text)
+		smc.Debugf("[DEBUG]: command = '%s'", text)
+	}
+}
+
+// remove mention target from message text (like <@USLACKBOT>)
+func removeMentionTarget(message string) string {
+	return reMentionTarget.ReplaceAllString(message, "")
 }
 
 // unescapeMessage
