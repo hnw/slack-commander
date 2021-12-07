@@ -28,15 +28,15 @@ type CommandConfig struct {
 }
 
 var (
-	cfg    Config
 	logger *log.Logger
 )
 
 func main() {
 	var (
-		quiet   = flag.Bool("q", false, "Quiet mode")
-		verbose = flag.Bool("v", false, "Verbose mode")
-		debug   = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
+		quiet      = flag.Bool("q", false, "Quiet mode")
+		configFile = flag.String("config-file", "config.toml", "Specify configuration file")
+		verbose    = flag.Bool("v", false, "Verbose mode")
+		debug      = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
 	)
 	flag.Parse()
 
@@ -63,8 +63,8 @@ func main() {
 	logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
 	logger.SetOutput(filter)
 
-	cfg = Config{NumWorkers: 1}
-	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
+	cfg := Config{NumWorkers: 1}
+	if _, err := toml.DecodeFile(*configFile, &cfg); err != nil {
 		logger.Println("[ERROR] ", err)
 		return
 	}
