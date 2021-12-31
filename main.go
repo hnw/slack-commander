@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
-	"log"
+	"fmt"
 	"os"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/BurntSushi/toml"
-	"github.com/hashicorp/logutils"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
@@ -28,8 +30,7 @@ type CommandConfig struct {
 }
 
 var (
-	cfg    Config
-	logger *log.Logger
+	cfg Config
 )
 
 func main() {
@@ -40,32 +41,36 @@ func main() {
 	)
 	flag.Parse()
 
-	// ログレベル""はライブラリ自体のデバッグログ
-	// systemdのログに残るのがイヤなので、デフォルトでは表示優先度最低にする
-	logLevels := []logutils.LogLevel{"", "DEBUG", "INFO", "WARN", "ERROR"}
-	logMinLevel := "WARN"
+	zapCfg := zap.NewDevelopmentConfig()
+	zapCfg.DisableStacktrace = true
+	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	zapCfg.EncoderConfig.EncodeDuration = zapcore.SecondsDurationEncoder
+	zapCfg.Level.SetLevel(zapcore.WarnLevel)
 	if *verbose {
-		logMinLevel = "INFO"
+		zapCfg.Level.SetLevel(zapcore.InfoLevel)
 	}
 	if *debug {
-		// debugモードのときは全ログを出す
-		logMinLevel = ""
+		zapCfg.Level.SetLevel(zapcore.DebugLevel)
 	}
 	if *quiet {
-		logMinLevel = "ERROR"
+		zapCfg.Level.SetLevel(zapcore.ErrorLevel)
 	}
 
-	filter := &logutils.LevelFilter{
-		Levels:   logLevels,
-		MinLevel: logutils.LogLevel(logMinLevel),
-		Writer:   os.Stderr,
+	logger, err := zapCfg.Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return
 	}
-	logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
-	logger.SetOutput(filter)
-
+	defer logger.Sync()
+	sugar := logger.Sugar()
+	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
+	if err != nil {
+		sugar.Errorf("%v", err)
+		return
+	}
 	cfg = Config{NumWorkers: 1}
 	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
-		logger.Println("[ERROR] ", err)
+		sugar.Errorf("%v", err)
 		return
 	}
 	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
@@ -77,14 +82,13 @@ func main() {
 	api := slack.New(
 		cfg.SlackBotToken,
 		slack.OptionDebug(*debug),
-		slack.OptionLog(logger),
+		slack.OptionLog(stdLogger),
 		slack.OptionAppLevelToken(cfg.SlackAppToken),
 	)
-
 	smc := socketmode.New(
 		api,
-		socketmode.OptionDebug(true), // ロギングにsmc.Debugf()を使いたいので常時true
-		socketmode.OptionLog(logger),
+		socketmode.OptionDebug(*debug),
+		socketmode.OptionLog(stdLogger),
 	)
 
 	commandQueue := make(chan *cmd.CommandInput, 50) // チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、ack返せない問題への暫定対処
