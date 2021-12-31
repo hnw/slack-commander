@@ -35,9 +35,10 @@ var (
 
 func main() {
 	var (
-		quiet   = flag.Bool("q", false, "Quiet mode")
-		verbose = flag.Bool("v", false, "Verbose mode")
-		debug   = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
+		quiet      = flag.Bool("q", false, "Quiet mode")
+		configFile = flag.String("config-file", "config.toml", "Specify configuration file")
+		verbose    = flag.Bool("v", false, "Verbose mode")
+		debug      = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
 	)
 	flag.Parse()
 
@@ -68,8 +69,8 @@ func main() {
 		sugar.Errorf("%v", err)
 		return
 	}
-	cfg = Config{NumWorkers: 1}
-	if _, err := toml.DecodeFile("config.toml", &cfg); err != nil {
+	cfg := Config{NumWorkers: 1}
+	if _, err := toml.DecodeFile(*configFile, &cfg); err != nil {
 		sugar.Errorf("%v", err)
 		return
 	}

@@ -39,14 +39,16 @@ func SlackWriter(smc *socketmode.Client, outputQueue chan *cmd.CommandOutput) {
 }
 
 func addReaction(smc *socketmode.Client, output *cmd.CommandOutput, name string) error {
-	origMsg := output.ReplyInfo.(*slackevents.MessageEvent)
-	item := slack.NewRefToMessage(origMsg.Channel, origMsg.TimeStamp)
+	ch := getChannel(output)
+	ts := getTimeStamp(output)
+	item := slack.NewRefToMessage(ch, ts)
 	return smc.AddReaction(name, item)
 }
 
 func removeReaction(smc *socketmode.Client, output *cmd.CommandOutput, name string) error {
-	origMsg := output.ReplyInfo.(*slackevents.MessageEvent)
-	item := slack.NewRefToMessage(origMsg.Channel, origMsg.TimeStamp)
+	ch := getChannel(output)
+	ts := getTimeStamp(output)
+	item := slack.NewRefToMessage(ch, ts)
 	return smc.RemoveReaction(name, item)
 }
 
@@ -65,8 +67,8 @@ func postMessage(smc *socketmode.Client, output *cmd.CommandOutput) error {
 	}
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
-	origMsg := output.ReplyInfo.(*slackevents.MessageEvent)
-	if _, _, err := smc.PostMessage(origMsg.Channel, msgOptParams, msgOptAttachment); err != nil {
+	ch := getChannel(output)
+	if _, _, err := smc.PostMessage(ch, msgOptParams, msgOptAttachment); err != nil {
 		smc.Debugf("[ERROR] %s\n", err)
 		return err
 	}
@@ -87,8 +89,7 @@ func getConfig(output *cmd.CommandOutput) *ReplyConfig {
 func getThreadTimestamp(output *cmd.CommandOutput) string {
 	cfg := getConfig(output)
 	if cfg.PostAsReply {
-		origMsg := output.ReplyInfo.(*slackevents.MessageEvent)
-		return origMsg.TimeStamp
+		return getTimeStamp(output)
 	}
 	return ""
 }
@@ -121,4 +122,26 @@ func getColor(output *cmd.CommandOutput) string {
 		return "danger"
 	}
 	return "good"
+}
+
+func getChannel(output *cmd.CommandOutput) string {
+	switch origMsg := output.ReplyInfo.(type) {
+	case *slackevents.MessageEvent:
+		return origMsg.Channel
+	case *slackevents.AppMentionEvent:
+		return origMsg.Channel
+	default:
+		panic("cast failed")
+	}
+}
+
+func getTimeStamp(output *cmd.CommandOutput) string {
+	switch origMsg := output.ReplyInfo.(type) {
+	case *slackevents.MessageEvent:
+		return origMsg.TimeStamp
+	case *slackevents.AppMentionEvent:
+		return origMsg.TimeStamp
+	default:
+		panic("cast failed")
+	}
 }
