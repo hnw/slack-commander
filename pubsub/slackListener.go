@@ -96,18 +96,20 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 		text = strings.TrimSuffix(text, ".")
 	} else if ev.Text != "" {
 		text = ev.Text
-	} else if ev.Attachments != nil {
-		if ev.Attachments[0].Pretext != "" {
+	} else if ev.Message != nil && ev.Message.Attachments != nil {
+		if ev.Message.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
-			text = ev.Attachments[0].Pretext
-			if ev.Attachments[0].Text != "" {
-				text = text + "\n" + ev.Attachments[0].Text
+			text = ev.Message.Attachments[0].Pretext
+			if ev.Message.Attachments[0].Text != "" {
+				text = text + "\n" + ev.Message.Attachments[0].Text
 			}
-		} else if ev.Attachments[0].Text != "" {
-			text = ev.Attachments[0].Text
+		} else if ev.Message.Attachments[0].Text != "" {
+			text = ev.Message.Attachments[0].Text
 		} else {
 			smc.Debugf("[DEBUG]: text(4) = ''")
 		}
+	} else if ev.Message != nil && ev.Message.Text != "" {
+		text = ev.Message.Text
 	}
 	text = removeMentionTarget(text)
 	text = normalizeQuotes(unescapeMessage(text))

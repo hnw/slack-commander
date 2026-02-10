@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -29,10 +30,10 @@ type CommandOutput struct {
 }
 
 type Definition struct {
-	Timeout int
-	Keyword string
-	Command string
-	Aliases []string
+	Timeout        int
+	Keyword        string
+	Command        string
+	Aliases        []string
 }
 
 type CommandConfig struct {
@@ -97,15 +98,23 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 						}
 						notifiedCommandStart = true
 					}
-					cmd := command(args[0], args[1:]...)
-					cmd.Stdin = strings.NewReader(stdinText)
+					var ctx context.Context
+					var cancel context.CancelFunc
+					if m.cfg.Timeout > 0 {
+						ctx, cancel = context.WithTimeout(context.Background(), time.Duration(m.cfg.Timeout)*time.Second)
+					} else {
+						ctx, cancel = context.WithCancel(context.Background())
+					}
+					execCmd := command(ctx, args[0], args[1:]...)
+					execCmd.Stdin = strings.NewReader(stdinText)
 					stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
 					stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
-					cmd.Stdout = stdout
-					cmd.Stderr = stderr
-					ret = cmd.executeWithTimeout(m.cfg.Timeout)
+					execCmd.Stdout = stdout
+					execCmd.Stderr = stderr
+					ret = execCmd.execute(m.cfg.Timeout)
 					stdout.Flush()
 					stderr.Flush()
+					cancel()
 					break
 				}
 			}
@@ -135,8 +144,8 @@ type mycmd struct {
 	*exec.Cmd
 }
 
-func command(name string, arg ...string) *mycmd {
-	return &mycmd{Cmd: exec.Command(name, arg...)}
+func command(ctx context.Context, name string, arg ...string) *mycmd {
+	return &mycmd{Cmd: exec.CommandContext(ctx, name, arg...)}
 }
 
 // 外部コマンドを実行する
@@ -144,48 +153,39 @@ func command(name string, arg ...string) *mycmd {
 // コマンドを実行できかなった場合は127を返す
 // 実行したコマンドがシグナルで殺された場合は143を返す
 // 参考：https://tldp.org/LDP/abs/html/exitcodes.html
-func (cmd *mycmd) executeWithTimeout(timeout int) int {
+func (cmd *mycmd) execute(timeout int) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) // setpgidしたPGIDはPIDと等しい
+		time.Sleep(2 * time.Second)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+
 	if err := cmd.Start(); err != nil {
 		if cmd.Stderr != nil {
-			fmt.Fprintf(cmd.Stderr, "%v", err)
+			_, _ = fmt.Fprintf(cmd.Stderr, "%v", err)
 		}
 		return 127
 	}
-	var timer *time.Timer
-	if timeout > 0 {
-		timer = time.AfterFunc(time.Duration(timeout)*time.Second, func() {
-			timer.Stop()
-			// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) // setpgidしたPGIDはPIDと等しい
-			time.Sleep(2 * time.Second)
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		})
-	}
+
 	err := cmd.Wait()
-	if timeout > 0 {
-		timer.Stop()
-	}
 	if err != nil {
-		switch err.(type) {
-		case *exec.ExitError:
-			if exitError, ok := err.(*exec.ExitError); ok {
-				if exitError.ExitCode() == -1 {
-					// https://pkg.go.dev/os#ProcessState.ExitCode
-					// -1 if the process hasn't exited or was terminated by a signal.
-					if cmd.Stderr != nil {
-						fmt.Fprintf(cmd.Stderr, "Timeout exceeded (%ds)", timeout)
-					}
-					return 143 // 128+15(SIGTERM)
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == -1 {
+				// https://pkg.go.dev/os#ProcessState.ExitCode
+				// -1 if the process hasn't exited or was terminated by a signal.
+				if cmd.Stderr != nil && timeout > 0 {
+					_, _ = fmt.Fprintf(cmd.Stderr, "Timeout exceeded (%ds)", timeout)
 				}
+				return 143 // 128+15(SIGTERM)
 			}
-		default:
-			if cmd.Stderr != nil {
-				fmt.Fprintf(cmd.Stderr, "I/O problem?: %v", err)
-			}
-			fmt.Fprintf(cmd.Stderr, "exit code: %v", cmd.ProcessState.ExitCode())
-			// このブロックいつ通るか、exit codeが-1にならないか要確認
+			return exitError.ExitCode()
 		}
+		if cmd.Stderr != nil {
+			_, _ = fmt.Fprintf(cmd.Stderr, "Error: %v", err)
+		}
+		return 127
 	}
 	return cmd.ProcessState.ExitCode()
 }

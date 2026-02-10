@@ -30,7 +30,7 @@ $ go build
 $ ./slack-commander
 ```
 
-ビルドにはGo 1.13以降が必要です（Go Modulesを利用しているため）
+ビルドにはGo 1.22以降が必要です。
 
 ## 設定例
 
@@ -78,12 +78,12 @@ WantedBy = multi-user.target
 
 下記コマンドでbotとして動作しはじめます。
 
-``` 
+```
 # systemctl start slack-commander.service
 ```
 
 しばらく動かしてみて問題なさそうなら自動起動させるようにしましょう。
 
-``` 
+```
 # systemctl enable slack-commander.service
 ```

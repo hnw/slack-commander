@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -74,6 +75,14 @@ func main() {
 		sugar.Errorf("%v", err)
 		return
 	}
+
+	// Validate configuration
+	for _, c := range cfg.Commands {
+		if strings.HasPrefix(c.Command, "*") {
+			sugar.Fatalf("Fatal: Command field must not start with '*': %s", c.Command)
+		}
+	}
+
 	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
 	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
 	for i, c := range cfg.Commands {
