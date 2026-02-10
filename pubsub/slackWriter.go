@@ -2,7 +2,6 @@ package pubsub
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -34,7 +33,6 @@ func SlackWriter(smc *socketmode.Client, outputQueue chan *cmd.CommandOutput) {
 		if output.Text != "" {
 			postMessage(smc, output)
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 

@@ -33,7 +33,6 @@ type Definition struct {
 	Timeout        int
 	Keyword        string
 	Command        string
-	Aliases        []string
 }
 
 type CommandConfig struct {

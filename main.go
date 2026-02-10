@@ -17,10 +17,10 @@ import (
 	"github.com/hnw/slack-commander/pubsub"
 )
 
-type pubSubConfig = pubsub.Config // 名前が重複しているためaliasにして埋め込み
+type PubSubConfig = pubsub.Config // TOMLデコード対象のためexportedにする
 
 type Config struct {
-	pubSubConfig
+	PubSubConfig
 	NumWorkers int `toml:"num_workers"`
 	Commands   []*CommandConfig
 }
@@ -75,6 +75,9 @@ func main() {
 		sugar.Errorf("%v", err)
 		return
 	}
+	if cfg.NumWorkers < 1 {
+		sugar.Fatalf("Fatal: num_workers must be >= 1 (got %d)", cfg.NumWorkers)
+	}
 
 	// Validate configuration
 	for _, c := range cfg.Commands {
@@ -107,7 +110,7 @@ func main() {
 		go cmd.Executor(commandQueue, outputQueue, cmdConfig)
 	}
 	go pubsub.SlackWriter(smc, outputQueue)
-	go pubsub.SlackListener(smc, commandQueue, cfg.pubSubConfig)
+	go pubsub.SlackListener(smc, commandQueue, cfg.PubSubConfig)
 
 	smc.Run()
 }

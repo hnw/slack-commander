@@ -90,13 +90,16 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
 		return
 	}
+	if !isAllowedUser(cfg, ev.User) || !isAllowedChannel(cfg, ev.Channel) {
+		return
+	}
 	text := ""
 	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
 		text = strings.TrimPrefix(ev.Text, "Reminder: ")
 		text = strings.TrimSuffix(text, ".")
 	} else if ev.Text != "" {
 		text = ev.Text
-	} else if ev.Message != nil && ev.Message.Attachments != nil {
+	} else if ev.Message != nil && len(ev.Message.Attachments) > 0 {
 		if ev.Message.Attachments[0].Pretext != "" {
 			// attachmentのpretextとtextを文字列連結してtext扱いにする
 			text = ev.Message.Attachments[0].Pretext
@@ -129,6 +132,9 @@ func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, 
 		return
 	}
 	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
+		return
+	}
+	if !isAllowedUser(cfg, ev.User) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
 	text := ""
@@ -167,4 +173,28 @@ func normalizeQuotes(message string) string {
 	// U+201D RIGHT DOUBLE QUOTATION MARK
 	replacer := strings.NewReplacer(`‘`, `'`, `’`, `'`, `“`, `"`, `”`, `"`)
 	return replacer.Replace(message)
+}
+
+func isAllowedUser(cfg Config, userID string) bool {
+	if len(cfg.AllowedUserIDs) == 0 {
+		return true
+	}
+	for _, allowed := range cfg.AllowedUserIDs {
+		if userID == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedChannel(cfg Config, channelID string) bool {
+	if len(cfg.AllowedChannelIDs) == 0 {
+		return true
+	}
+	for _, allowed := range cfg.AllowedChannelIDs {
+		if channelID == allowed {
+			return true
+		}
+	}
+	return false
 }

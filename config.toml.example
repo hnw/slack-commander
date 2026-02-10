@@ -3,7 +3,6 @@ slack_app_token = 'xapp-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 
 [[commands]]
 keyword = 'date'
-aliases = [ 'いま何時', '今何時' ]
 command = 'date'
 icon_emoji = ':alarm_clock:'
 username = 'Clock'

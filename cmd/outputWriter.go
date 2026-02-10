@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bufio"
+	"sync"
 	"time"
 )
 
 type OutputWriter struct {
 	bufw  *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
 	timer *time.Timer
+	mu    sync.Mutex
 }
 
 func newStdWriter(ch chan *CommandOutput, replyInfo interface{}, cfg interface{}) *OutputWriter {
@@ -25,19 +27,33 @@ func newOutputWriter(ch chan *CommandOutput, replyInfo interface{}, cfg interfac
 }
 
 func (w *OutputWriter) Write(data []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.timer != nil {
 		w.timer.Stop()
 	}
 	n, err = w.bufw.Write(data)
-	w.timer = time.AfterFunc(3*time.Second, func() {
-		w.timer.Stop()
-		w.bufw.Flush()
-	})
+	if w.timer == nil {
+		w.timer = time.AfterFunc(3*time.Second, w.flushLocked)
+	} else {
+		w.timer.Reset(3 * time.Second)
+	}
 	return
 }
 
 func (w *OutputWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.timer != nil {
+		w.timer.Stop()
+	}
 	return w.bufw.Flush()
+}
+
+func (w *OutputWriter) flushLocked() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = w.bufw.Flush()
 }
 
 type rawWriter struct {
