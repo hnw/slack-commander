@@ -9,6 +9,7 @@ import (
 type Matcher struct {
 	cfg      *CommandConfig
 	keywords []string
+	runner   CommandRunner
 }
 
 //　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す

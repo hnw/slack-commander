@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-shellwords"
@@ -48,11 +46,29 @@ func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
 }
 
 func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig) {
+	ExecutorWithRunner(rq, wq, cfgs, nil)
+}
+
+// RunnerFactory returns a runner for the given command config.
+type RunnerFactory func(cfg *CommandConfig) CommandRunner
+
+// ExecutorWithRunner runs commands using runners provided by runnerFactory.
+func ExecutorWithRunner(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory) {
+	if runnerFactory == nil {
+		runnerFactory = func(*CommandConfig) CommandRunner {
+			return NewExecRunner()
+		}
+	}
 	// config から matcher を生成
 	matchers := make([]*Matcher, 0)
 	for _, cfg := range cfgs {
 		matcher := newMatcher(cfg)
 		if matcher != nil {
+			runner := runnerFactory(cfg)
+			if runner == nil {
+				runner = NewExecRunner()
+			}
+			matcher.runner = runner
 			matchers = append(matchers, matcher)
 		}
 	}
@@ -104,13 +120,13 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 					} else {
 						ctx, cancel = context.WithCancel(context.Background())
 					}
-					execCmd := command(ctx, args[0], args[1:]...)
-					execCmd.Stdin = strings.NewReader(stdinText)
+					execCmd := m.runner.CommandContext(ctx, args[0], args[1:]...)
+					execCmd.SetStdin(strings.NewReader(stdinText))
 					stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
 					stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
-					execCmd.Stdout = stdout
-					execCmd.Stderr = stderr
-					ret = execCmd.execute(m.cfg.Timeout)
+					execCmd.SetStdout(stdout)
+					execCmd.SetStderr(stderr)
+					ret = execCmd.Run(m.cfg.Timeout)
 					stdout.Flush()
 					stderr.Flush()
 					cancel()
@@ -137,56 +153,6 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 			}
 		}
 	}
-}
-
-type mycmd struct {
-	*exec.Cmd
-}
-
-func command(ctx context.Context, name string, arg ...string) *mycmd {
-	return &mycmd{Cmd: exec.CommandContext(ctx, name, arg...)}
-}
-
-// 外部コマンドを実行する
-// コマンドを実行できた場合、そのexit code(0-255)を返す
-// コマンドを実行できかなった場合は127を返す
-// 実行したコマンドがシグナルで殺された場合は143を返す
-// 参考：https://tldp.org/LDP/abs/html/exitcodes.html
-func (cmd *mycmd) execute(timeout int) int {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) // setpgidしたPGIDはPIDと等しい
-		time.Sleep(2 * time.Second)
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-
-	if err := cmd.Start(); err != nil {
-		if cmd.Stderr != nil {
-			_, _ = fmt.Fprintf(cmd.Stderr, "%v", err)
-		}
-		return 127
-	}
-
-	err := cmd.Wait()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			if exitError.ExitCode() == -1 {
-				// https://pkg.go.dev/os#ProcessState.ExitCode
-				// -1 if the process hasn't exited or was terminated by a signal.
-				if cmd.Stderr != nil && timeout > 0 {
-					_, _ = fmt.Fprintf(cmd.Stderr, "Timeout exceeded (%ds)", timeout)
-				}
-				return 143 // 128+15(SIGTERM)
-			}
-			return exitError.ExitCode()
-		}
-		if cmd.Stderr != nil {
-			_, _ = fmt.Fprintf(cmd.Stderr, "Error: %v", err)
-		}
-		return 127
-	}
-	return cmd.ProcessState.ExitCode()
 }
 
 type parsedCommand struct {
