@@ -31,6 +31,7 @@ type Definition struct {
 	Timeout        int
 	Keyword        string
 	Command        string
+	Runner         string
 }
 
 type CommandConfig struct {

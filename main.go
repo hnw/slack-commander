@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -84,6 +85,16 @@ func main() {
 		if strings.HasPrefix(c.Command, "*") {
 			sugar.Fatalf("Fatal: Command field must not start with '*': %s", c.Command)
 		}
+		runner := strings.ToLower(strings.TrimSpace(c.Runner))
+		if runner == "" {
+			runner = "exec"
+		}
+		switch runner {
+		case "exec", "compose":
+			c.Runner = runner
+		default:
+			sugar.Fatalf("Fatal: Unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+		}
 	}
 
 	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
@@ -106,8 +117,19 @@ func main() {
 
 	commandQueue := make(chan *cmd.CommandInput, 50) // チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、ack返せない問題への暫定対処
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
+	var composeRunnerOnce sync.Once
+	var composeRunner cmd.CommandRunner
+	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
+		if cfg.Runner == "compose" {
+			composeRunnerOnce.Do(func() {
+				composeRunner = cmd.NewComposeRunner("")
+			})
+			return composeRunner
+		}
+		return cmd.NewExecRunner()
+	}
 	for i := 0; i < cfg.NumWorkers; i++ {
-		go cmd.Executor(commandQueue, outputQueue, cmdConfig)
+		go cmd.ExecutorWithRunner(commandQueue, outputQueue, cmdConfig, runnerFactory)
 	}
 	go pubsub.SlackWriter(smc, outputQueue)
 	go pubsub.SlackListener(smc, commandQueue, cfg.PubSubConfig)
