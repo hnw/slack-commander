@@ -1,5 +1,8 @@
 slack_bot_token = 'xoxb-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 slack_app_token = 'xapp-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+allowed_user_ids = ['U0123456789']
+allowed_channel_ids = ['C0123456789']
+# allow_unsafe_open_access = true # 非推奨: 全ユーザー・全チャンネルからの実行を許可
 
 [[commands]]
 keyword = 'date'
@@ -14,6 +17,6 @@ username = 'OS info'
 icon_emoji = ':computer:'
 
 [[commands]]
-keyword = '*'
-command = 'bash -c "*"'
+keyword = 'echo *'
+command = '/bin/echo *'
 monospaced = true

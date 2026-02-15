@@ -39,6 +39,8 @@ $ ./slack-commander
 ``` ini
 slack_bot_token = 'xoxb-********'
 slack_app_token = 'xapp-********'
+allowed_user_ids = ['U12345678']
+allowed_channel_ids = ['C12345678']
 
 [[commands]]
 keyword = '月末？'
@@ -48,6 +50,8 @@ command = '/bin/sh -c "test $( date -d tomorrow +%d ) -eq 1"' # GNU dateの前�
 keyword = '振込 *'
 command = 'node /opt/money-transfer-cli/bin/cli.js 振込 * -v'
 ```
+
+`allowed_user_ids` と `allowed_channel_ids` を両方空にした構成はデフォルトで無効です。後方互換が必要な場合のみ `allow_unsafe_open_access = true` を設定してください。
 
 設定項目の詳細は [docs/config.md](./docs/config.md) を参照してください。
 

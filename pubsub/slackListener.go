@@ -1,7 +1,6 @@
 package pubsub
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -45,8 +44,8 @@ func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, 
 
 			authTest, authTestErr := smc.AuthTest()
 			if authTestErr != nil {
-				smc.Debugf("[ERROR] AuthTest() failed. : %v", authTestErr)
-				panic(fmt.Sprintf("AuthTest() failed. : %v", authTestErr))
+				smc.Debugf("[WARN] AuthTest() failed. Continue without bot user ID: %v", authTestErr)
+				continue
 			}
 			userID = authTest.UserID
 		case socketmode.EventTypeEventsAPI:
@@ -117,7 +116,10 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 	text = removeMentionTarget(text)
 	text = normalizeQuotes(unescapeMessage(text))
 	if text != "" {
-		commandQueue <- NewSlackInput(ev, text)
+		if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
+			smc.Debugf("[WARN] command queue is full; dropping message event command")
+			return
+		}
 		smc.Debugf("[DEBUG]: command = '%s'", text)
 	}
 }
@@ -147,8 +149,20 @@ func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, 
 	text = removeMentionTarget(text)
 	text = normalizeQuotes(unescapeMessage(text))
 	if text != "" {
-		commandQueue <- NewSlackInputFromAppMention(ev, text)
+		if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
+			smc.Debugf("[WARN] command queue is full; dropping app_mention command")
+			return
+		}
 		smc.Debugf("[DEBUG]: command = '%s'", text)
+	}
+}
+
+func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput) bool {
+	select {
+	case commandQueue <- input:
+		return true
+	default:
+		return false
 	}
 }
 

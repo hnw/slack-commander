@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -30,10 +31,6 @@ type CommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
 }
-
-var (
-	cfg Config
-)
 
 func main() {
 	var (
@@ -76,25 +73,8 @@ func main() {
 		sugar.Errorf("%v", err)
 		return
 	}
-	if cfg.NumWorkers < 1 {
-		sugar.Fatalf("Fatal: num_workers must be >= 1 (got %d)", cfg.NumWorkers)
-	}
-
-	// Validate configuration
-	for _, c := range cfg.Commands {
-		if strings.HasPrefix(c.Command, "*") {
-			sugar.Fatalf("Fatal: Command field must not start with '*': %s", c.Command)
-		}
-		runner := strings.ToLower(strings.TrimSpace(c.Runner))
-		if runner == "" {
-			runner = "exec"
-		}
-		switch runner {
-		case "exec", "compose":
-			c.Runner = runner
-		default:
-			sugar.Fatalf("Fatal: Unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
-		}
+	if err := validateConfig(&cfg); err != nil {
+		sugar.Fatalf("Fatal: %v", err)
 	}
 
 	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
@@ -135,4 +115,30 @@ func main() {
 	go pubsub.SlackListener(smc, commandQueue, cfg.PubSubConfig)
 
 	smc.Run()
+}
+
+func validateConfig(cfg *Config) error {
+	if cfg.NumWorkers < 1 {
+		return fmt.Errorf("num_workers must be >= 1 (got %d)", cfg.NumWorkers)
+	}
+	if len(cfg.AllowedUserIDs) == 0 && len(cfg.AllowedChannelIDs) == 0 && !cfg.AllowUnsafeOpenAccess {
+		return errors.New("open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, or set allow_unsafe_open_access=true to keep old behavior")
+	}
+
+	for _, c := range cfg.Commands {
+		if strings.HasPrefix(c.Command, "*") {
+			return fmt.Errorf("command field must not start with '*': %s", c.Command)
+		}
+		runner := strings.ToLower(strings.TrimSpace(c.Runner))
+		if runner == "" {
+			runner = "exec"
+		}
+		switch runner {
+		case "exec", "compose":
+			c.Runner = runner
+		default:
+			return fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+		}
+	}
+	return nil
 }
