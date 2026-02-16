@@ -1,0 +1,4 @@
+defaultBaseImage: gcr.io/distroless/static:latest
+defaultLdflags:
+  - -s
+  - -w
