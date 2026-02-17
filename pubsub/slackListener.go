@@ -89,7 +89,11 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
 		return
 	}
-	if !isAllowedUser(cfg, ev.User) || !isAllowedChannel(cfg, ev.Channel) {
+	senderID := ev.User
+	if ev.BotID != "" {
+		senderID = ev.BotID
+	}
+	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
 	text := ""
@@ -136,7 +140,11 @@ func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, 
 	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
 		return
 	}
-	if !isAllowedUser(cfg, ev.User) || !isAllowedChannel(cfg, ev.Channel) {
+	senderID := ev.User
+	if ev.BotID != "" {
+		senderID = ev.BotID
+	}
+	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
 	text := ""
