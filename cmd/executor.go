@@ -32,6 +32,10 @@ type Definition struct {
 	Keyword string
 	Command string
 	Runner  string
+	Method  string
+	URL     string
+	Headers map[string]string
+	Body    string
 }
 
 type CommandConfig struct {

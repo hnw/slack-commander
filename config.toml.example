@@ -20,3 +20,11 @@ icon_emoji = ':computer:'
 keyword = 'echo *'
 command = '/bin/echo *'
 monospaced = true
+
+[[commands]]
+keyword = 'notify *'
+runner = 'http'
+method = 'POST'
+url = 'https://example.com/hooks/notify'
+headers = { 'Content-Type' = 'application/json' }
+body = '{"text":"*"}'

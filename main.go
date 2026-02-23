@@ -106,6 +106,9 @@ func main() {
 			})
 			return composeRunner
 		}
+		if cfg.Runner == "http" {
+			return cmd.NewHTTPRunner(cfg)
+		}
 		return cmd.NewExecRunner()
 	}
 	for i := 0; i < cfg.NumWorkers; i++ {
@@ -126,18 +129,28 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
-		if strings.HasPrefix(c.Command, "*") {
-			return fmt.Errorf("command field must not start with '*': %s", c.Command)
-		}
 		runner := strings.ToLower(strings.TrimSpace(c.Runner))
 		if runner == "" {
 			runner = "exec"
 		}
 		switch runner {
-		case "exec", "compose":
+		case "exec", "compose", "http":
 			c.Runner = runner
 		default:
 			return fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+		}
+		if runner != "http" {
+			if strings.HasPrefix(c.Command, "*") {
+				return fmt.Errorf("command field must not start with '*': %s", c.Command)
+			}
+		} else {
+			c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
+			if c.Method == "" {
+				c.Method = "POST"
+			}
+			if strings.TrimSpace(c.URL) == "" {
+				return fmt.Errorf("url is required for http runner (keyword '%s')", c.Keyword)
+			}
 		}
 	}
 	return nil

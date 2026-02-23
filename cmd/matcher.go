@@ -12,7 +12,7 @@ type Matcher struct {
 	runner   CommandRunner
 }
 
-//　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す
+// 　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す
 func newMatcher(cfg *CommandConfig) *Matcher {
 	parser := shellwords.NewParser()
 	keywords, err := parser.Parse(cfg.Keyword)
@@ -56,6 +56,13 @@ func (m *Matcher) build(keywords []string) []string {
 		} else if i+j < 0 || i+j >= len(keywords) || v != keywords[i+j] {
 			return nil
 		}
+	}
+	runner := strings.ToLower(strings.TrimSpace(m.cfg.Runner))
+	if runner == "http" {
+		if hasWildcard {
+			return []string{"http", strings.Join(wildcard, " ")}
+		}
+		return []string{"http"}
 	}
 	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
 	line := m.cfg.Command

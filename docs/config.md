@@ -60,12 +60,34 @@ Botの発言もキーワードマッチの対象にする
 
 * `exec`: ホスト上で外部コマンドを実行します（従来通り）。
 * `compose`: `docker-compose.yml` のサービスを実行します。`command` には `<service> <args>` を指定してください。
+* `http`: HTTPリクエストを送信します。`method` と `url` を指定してください。
 
 ### command `string`
 
 キーワードにマッチした場合に起動するコマンドを指定します。
 
 ワイルドカード `*` が指定された場合、キーワードの `*` にマッチした内容が展開されます。
+
+`runner = "http"` の場合、この項目は使用されません。
+
+### method `string`
+
+`runner = "http"` の場合に使用するHTTPメソッドを指定します。省略時は `POST` です。
+
+### url `string`
+
+`runner = "http"` の場合に送信先URLを指定します。必須です。
+
+### headers `map[string]string`
+
+`runner = "http"` の場合に付与するHTTPヘッダーを指定します。
+TOMLのインラインテーブル形式で指定してください（例: `headers = { "Content-Type" = "application/json" }`）。
+
+### body `string`
+
+`runner = "http"` の場合に送信するリクエストボディを指定します。
+キーワードの `*` にマッチした文字列があれば、`body` 内の `*` がその文字列で置換されます。
+同様に `url` や `headers` の値に `*` が含まれている場合も置換されます。
 
 ### icon_emoji `string`
 
