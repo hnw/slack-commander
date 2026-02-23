@@ -49,6 +49,30 @@ func TestMatcher(t *testing.T) {
 				Command: `*`,
 			},
 		},
+		{
+			Definition: &Definition{
+				Keyword: `openurl *`,
+				Command: `pwopen --no-sandbox *`,
+			},
+		},
+		{
+			Definition: &Definition{
+				Keyword: `openurl *`,
+				Command: `pwopen --no-sandbox *`,
+			},
+		},
+		{
+			Definition: &Definition{
+				Keyword: `openurl`,
+				Command: `pwopen --no-sandbox`,
+			},
+		},
+		{
+			Definition: &Definition{
+				Keyword: `deploy * bar`,
+				Command: `deploy * bar`,
+			},
+		},
 	}
 	args := [][]string{
 		{`ping`, `8.8.8.8`},
@@ -58,6 +82,10 @@ func TestMatcher(t *testing.T) {
 		{`echo`, `foo bar`, `baz`},
 		{`echo`, `foo bar`, `baz`},
 		{`foo`, `baz`, `qux`, `quux`, `bar`},
+		{`openurl`},
+		{`openurl`, `http://example.com`},
+		{`openurl`, `http://example.com`},
+		{`deploy`},
 	}
 	expects := [][]string{
 		{`ping`, `-c4`, `8.8.8.8`},
@@ -67,6 +95,10 @@ func TestMatcher(t *testing.T) {
 		{`/bin/echo`, `foo bar baz`},
 		{`/bin/echo`, `foo\ bar baz`},
 		{`baz`, `qux`, `quux`},
+		{`pwopen`, `--no-sandbox`},
+		{`pwopen`, `--no-sandbox`, `http://example.com`},
+		nil,
+		nil,
 	}
 
 	for i, cfg := range cfgs {

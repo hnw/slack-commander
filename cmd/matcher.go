@@ -28,8 +28,22 @@ func newMatcher(cfg *CommandConfig) *Matcher {
 // Matcherの定義に従い、キーワード配列をコマンド配列に変換して返す
 // キーワード配列がマッチしなかった場合はnilを返す
 func (m *Matcher) build(keywords []string) []string {
-	if len(keywords) < len(m.keywords) {
-		return nil
+	hasWildcard := false
+	for _, v := range m.keywords {
+		if v == "*" {
+			hasWildcard = true
+			break
+		}
+	}
+
+	if hasWildcard {
+		if len(keywords) < len(m.keywords)-1 {
+			return nil
+		}
+	} else {
+		if len(keywords) != len(m.keywords) {
+			return nil
+		}
 	}
 	j := 0
 	wildcard := []string{}
@@ -39,13 +53,13 @@ func (m *Matcher) build(keywords []string) []string {
 			delta := len(keywords) - len(m.keywords)
 			wildcard = keywords[i : i+delta+1]
 			j = delta
-		} else if v != keywords[i+j] {
+		} else if i+j < 0 || i+j >= len(keywords) || v != keywords[i+j] {
 			return nil
 		}
 	}
 	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
 	line := m.cfg.Command
-	if len(wildcard) > 0 {
+	if hasWildcard {
 		replacer := strings.NewReplacer(`\`, `\\`, ` `, `\ `, "\t", "\\\t", "`", "\\`", `(`, `\(`, `)`, `\)`,
 			`"`, `\"`, `'`, `\'`, `;`, `\;`, `&`, `\&`, `|`, `\|`, `<`, `\<`, `>`, `\>`)
 		replaced := make([]string, len(wildcard))
