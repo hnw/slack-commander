@@ -13,6 +13,7 @@ import (
 var (
 	userID          string // bot自身のuser ID（注：bot IDではない）
 	reMentionTarget = regexp.MustCompile(`<@[^>]+>`)
+	reSlackURL      = regexp.MustCompile(`<([^@!|>\s][^|>]*)(?:\|([^>]*))?>`)
 )
 
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
@@ -118,6 +119,7 @@ func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, comman
 		text = ev.Message.Text
 	}
 	text = removeMentionTarget(text)
+	text = normalizeSlackURLs(text)
 	text = normalizeQuotes(unescapeMessage(text))
 	if text != "" {
 		if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
@@ -155,6 +157,7 @@ func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, 
 		text = ev.Text
 	}
 	text = removeMentionTarget(text)
+	text = normalizeSlackURLs(text)
 	text = normalizeQuotes(unescapeMessage(text))
 	if text != "" {
 		if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
@@ -177,6 +180,22 @@ func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput
 // remove mention target from message text (like <@USLACKBOT>)
 func removeMentionTarget(message string) string {
 	return reMentionTarget.ReplaceAllString(message, "")
+}
+
+// normalizeSlackURLs replaces Slack URL markup with plain text.
+// <url> becomes url, and <url|text> becomes text (or url if text is empty).
+func normalizeSlackURLs(message string) string {
+	return reSlackURL.ReplaceAllStringFunc(message, func(match string) string {
+		submatches := reSlackURL.FindStringSubmatch(match)
+		if len(submatches) < 3 {
+			return match
+		}
+		url, displayText := submatches[1], submatches[2]
+		if displayText != "" {
+			return displayText
+		}
+		return url
+	})
 }
 
 // unescapeMessage
