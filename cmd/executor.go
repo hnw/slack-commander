@@ -20,7 +20,8 @@ type CommandInput struct {
 type CommandOutput struct {
 	ReplyInfo   interface{}
 	ReplyConfig interface{}
-	Text        string // コマンドからの出力
+	Text        string // コマンドからのテキスト出力（ImageData と排他）
+	ImageData   []byte // sixel を変換した PNG バイト列（Text と排他）
 	IsErrOut    bool
 	Spawned     bool
 	Finished    bool

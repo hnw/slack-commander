@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/slack-go/slack"
@@ -32,6 +33,11 @@ func SlackWriter(smc *socketmode.Client, outputQueue chan *cmd.CommandOutput) {
 		}
 		if output.Text != "" {
 			postMessage(smc, output)
+		}
+		if output.ImageData != nil {
+			if err := uploadImage(smc, output); err != nil {
+				smc.Debugf("[ERROR] uploadImage: %s\n", err)
+			}
 		}
 	}
 }
@@ -68,6 +74,23 @@ func postMessage(smc *socketmode.Client, output *cmd.CommandOutput) error {
 	ch := getChannel(output)
 	if _, _, err := smc.PostMessage(ch, msgOptParams, msgOptAttachment); err != nil {
 		smc.Debugf("[ERROR] %s\n", err)
+		return err
+	}
+	return nil
+}
+
+func uploadImage(smc *socketmode.Client, output *cmd.CommandOutput) error {
+	ch := getChannel(output)
+	cfg := getConfig(output)
+	params := slack.UploadFileV2Parameters{
+		Reader:          bytes.NewReader(output.ImageData),
+		FileSize:        len(output.ImageData),
+		Filename:        "output.png",
+		Title:           cfg.Username + " output",
+		Channel:         ch,
+		ThreadTimestamp: getThreadTimestamp(output),
+	}
+	if _, err := smc.UploadFileV2(params); err != nil {
 		return err
 	}
 	return nil
