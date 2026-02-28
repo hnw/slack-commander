@@ -124,13 +124,13 @@ func postMessageWithImageBlock(
 
 func uploadImage(smc *socketmode.Client, output *cmd.CommandOutput) error {
 	cfg := getConfig(output)
-	params := slack.UploadFileV2Parameters{
+	params := slack.UploadFileParameters{
 		Reader:   bytes.NewReader(output.ImageData),
 		FileSize: len(output.ImageData),
 		Filename: "output.png",
 		Title:    cfg.Username + " output",
 	}
-	fileSummary, err := smc.UploadFileV2(params)
+	fileSummary, err := smc.UploadFile(params)
 	if err != nil {
 		return err
 	}
