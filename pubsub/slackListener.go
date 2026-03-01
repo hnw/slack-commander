@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 
@@ -35,6 +36,8 @@ func NewSlackInputFromAppMention(msg *slackevents.AppMentionEvent, text string) 
 // SlackListener はSocket Modeでメッセージ監視し、コマンドをcommandQueueに投げます。
 func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, cfg Config) {
 	for evt := range smc.Events {
+		ackSocketModeEvent(smc, evt)
+
 		switch evt.Type {
 		case socketmode.EventTypeConnecting:
 			smc.Debugf("[INFO] Connecting to Slack with Socket Mode...")
@@ -55,8 +58,6 @@ func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, 
 				smc.Debugf("[INFO] Ignored %+v\n", evt)
 				continue
 			}
-			smc.Ack(*evt.Request)
-
 			switch eventsAPIEvent.Type {
 			case slackevents.CallbackEvent:
 				innerEvent := eventsAPIEvent.InnerEvent
@@ -76,6 +77,41 @@ func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, 
 			smc.Debugf("[INFO] Unexpected event type received: %s\n", evt.Type)
 		}
 	}
+}
+
+func ackSocketModeEvent(smc *socketmode.Client, evt socketmode.Event) {
+	if evt.Request != nil && evt.Request.EnvelopeID != "" {
+		smc.Ack(*evt.Request)
+		return
+	}
+	if evt.Type != socketmode.EventTypeErrorBadMessage {
+		return
+	}
+	errEvt, ok := evt.Data.(*socketmode.ErrorBadMessage)
+	if !ok || errEvt == nil {
+		return
+	}
+	envelopeID, ok := extractEnvelopeID(errEvt.Message)
+	if !ok {
+		smc.Debugf("[WARN] error_bad_message without envelope_id; cannot ack")
+		return
+	}
+	smc.Ack(socketmode.Request{EnvelopeID: envelopeID})
+	smc.Debugf("[WARN] acked error_bad_message envelope_id=%s", envelopeID)
+}
+
+func extractEnvelopeID(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var req socketmode.Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return "", false
+	}
+	if req.EnvelopeID == "" {
+		return "", false
+	}
+	return req.EnvelopeID, true
 }
 
 func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, commandQueue chan *cmd.CommandInput, cfg Config) {

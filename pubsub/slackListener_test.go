@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -97,6 +98,51 @@ func TestNormalizeSlackURLs(t *testing.T) {
 			got := normalizeSlackURLs(tc.input)
 			if got != tc.want {
 				t.Errorf("normalizeSlackURLs(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractEnvelopeID(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    json.RawMessage
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "valid envelope id",
+			raw:    json.RawMessage(`{"envelope_id":"abc-123","type":"events_api","payload":{}}`),
+			want:   "abc-123",
+			wantOK: true,
+		},
+		{
+			name:   "missing envelope id",
+			raw:    json.RawMessage(`{"type":"events_api","payload":{}}`),
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "invalid json",
+			raw:    json.RawMessage(`{"envelope_id":`),
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "empty raw message",
+			raw:    json.RawMessage(``),
+			want:   "",
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := extractEnvelopeID(tc.raw)
+			if ok != tc.wantOK {
+				t.Fatalf("extractEnvelopeID ok = %v, want %v", ok, tc.wantOK)
+			}
+			if got != tc.want {
+				t.Fatalf("extractEnvelopeID = %q, want %q", got, tc.want)
 			}
 		})
 	}
