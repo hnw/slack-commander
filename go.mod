@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/hnw/compose-exec v0.3.6
+	github.com/hnw/compose-exec v0.3.7
 	github.com/mattn/go-shellwords v1.0.12
 	github.com/mattn/go-sixel v0.0.8
 	github.com/slack-go/slack v0.18.0
