@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// OutputWriter buffers command output and emits it to the output channel.
 type OutputWriter struct {
 	bufw  *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
 	raw   *rawWriter
@@ -52,6 +53,7 @@ func (w *OutputWriter) Write(data []byte) (n int, err error) {
 	return
 }
 
+// Flush sends buffered output to the channel.
 func (w *OutputWriter) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

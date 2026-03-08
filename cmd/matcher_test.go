@@ -106,7 +106,12 @@ func TestMatcher(t *testing.T) {
 		result := m.build(args[i])
 
 		if !reflect.DeepEqual(result, expects[i]) {
-			t.Errorf(`Unexpected result for test#%v: expected=%v, actual=%v`, i+1, expects[i], result)
+			t.Errorf(
+				"Unexpected result for test#%v: expected=%v, actual=%v",
+				i+1,
+				expects[i],
+				result,
+			)
 		}
 	}
 }

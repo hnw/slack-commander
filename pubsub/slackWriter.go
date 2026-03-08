@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -14,34 +15,56 @@ import (
 )
 
 // SlackWriter はoutputQueueから来たコマンド実行結果をSlackに書き込みます
-func SlackWriter(smc *socketmode.Client, outputQueue chan *cmd.CommandOutput) {
+func SlackWriter(ctx context.Context, smc *socketmode.Client, outputQueue chan *cmd.CommandOutput) {
 	runningProcess := 0
 	for {
-		output, ok := <-outputQueue // closeされると ok が false になる
-		if !ok {
+		select {
+		case output, ok := <-outputQueue: // closeされると ok が false になる
+			if !ok {
+				return
+			}
+			runningProcess = handleOutput(smc, output, runningProcess)
+		case <-ctx.Done():
+			for output := range outputQueue {
+				runningProcess = handleOutput(smc, output, runningProcess)
+			}
 			return
 		}
-		if output.Spawned {
-			runningProcess++
-			addReaction(smc, output, "eyes")
-		} else if output.Finished {
-			runningProcess--
-			if output.ExitCode == 0 {
-				addReaction(smc, output, "white_check_mark")
-			} else {
-				addReaction(smc, output, "x")
-			}
-			removeReaction(smc, output, "eyes")
+	}
+}
+
+func handleOutput(smc *socketmode.Client, output *cmd.CommandOutput, runningProcess int) int {
+	if output.Spawned {
+		runningProcess++
+		if err := addReaction(smc, output, "eyes"); err != nil {
+			smc.Debugf("[ERROR] addReaction: %s\n", err)
 		}
-		if hasMeaningfulText(output) {
-			postMessage(smc, output)
-		}
-		if output.ImageData != nil {
-			if err := uploadImage(smc, output); err != nil {
-				smc.Debugf("[ERROR] uploadImage: %s\n", err)
+	} else if output.Finished {
+		runningProcess--
+		if output.ExitCode == 0 {
+			if err := addReaction(smc, output, "white_check_mark"); err != nil {
+				smc.Debugf("[ERROR] addReaction: %s\n", err)
 			}
+		} else {
+			if err := addReaction(smc, output, "x"); err != nil {
+				smc.Debugf("[ERROR] addReaction: %s\n", err)
+			}
+		}
+		if err := removeReaction(smc, output, "eyes"); err != nil {
+			smc.Debugf("[ERROR] removeReaction: %s\n", err)
 		}
 	}
+	if hasMeaningfulText(output) {
+		if err := postMessage(smc, output); err != nil {
+			smc.Debugf("[ERROR] postMessage: %s\n", err)
+		}
+	}
+	if output.ImageData != nil {
+		if err := uploadImage(smc, output); err != nil {
+			smc.Debugf("[ERROR] uploadImage: %s\n", err)
+		}
+	}
+	return runningProcess
 }
 
 func addReaction(smc *socketmode.Client, output *cmd.CommandOutput, name string) error {
@@ -198,7 +221,7 @@ func getText(output *cmd.CommandOutput) string {
 
 func getReplyBroadcast(output *cmd.CommandOutput) bool {
 	cfg := getConfig(output)
-	if cfg.PostAsReply == false {
+	if !cfg.PostAsReply {
 		return false
 	}
 	if cfg.AlwaysBroadcast {

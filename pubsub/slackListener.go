@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -35,47 +36,63 @@ func NewSlackInputFromAppMention(msg *slackevents.AppMentionEvent, text string) 
 }
 
 // SlackListener はSocket Modeでメッセージ監視し、コマンドをcommandQueueに投げます。
-func SlackListener(smc *socketmode.Client, commandQueue chan *cmd.CommandInput, cfg Config) {
-	for evt := range smc.Events {
-		ackSocketModeEvent(smc, evt)
-
-		switch evt.Type {
-		case socketmode.EventTypeConnecting:
-			smc.Debugf("[INFO] Connecting to Slack with Socket Mode...")
-		case socketmode.EventTypeConnectionError:
-			smc.Debugf("[INFO] Connection failed. Retrying later...")
-		case socketmode.EventTypeConnected:
-			smc.Debugf("[INFO] Connected to Slack with Socket Mode.")
-
-			authTest, authTestErr := smc.AuthTest()
-			if authTestErr != nil {
-				smc.Debugf("[WARN] AuthTest() failed. Continue without bot user ID: %v", authTestErr)
-				continue
-			}
-			userID = authTest.UserID
-		case socketmode.EventTypeEventsAPI:
-			eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+func SlackListener(
+	ctx context.Context,
+	smc *socketmode.Client,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-smc.Events:
 			if !ok {
-				smc.Debugf("[INFO] Ignored %+v\n", evt)
-				continue
+				return
 			}
-			switch eventsAPIEvent.Type {
-			case slackevents.CallbackEvent:
-				innerEvent := eventsAPIEvent.InnerEvent
-				switch ev := innerEvent.Data.(type) {
-				case *slackevents.MessageEvent:
-					onMessageEvent(smc, ev, commandQueue, cfg)
-				case *slackevents.AppMentionEvent:
-					onAppMentionEvent(smc, ev, commandQueue, cfg)
-				default:
-					smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
-				}
-			default:
-				smc.Debugf("[INFO] Unsupported Events API event received")
-			}
+			ackSocketModeEvent(smc, evt)
 
-		default:
-			smc.Debugf("[INFO] Unexpected event type received: %s\n", evt.Type)
+			switch evt.Type {
+			case socketmode.EventTypeConnecting:
+				smc.Debugf("[INFO] Connecting to Slack with Socket Mode...")
+			case socketmode.EventTypeConnectionError:
+				smc.Debugf("[INFO] Connection failed. Retrying later...")
+			case socketmode.EventTypeConnected:
+				smc.Debugf("[INFO] Connected to Slack with Socket Mode.")
+
+				authTest, authTestErr := smc.AuthTest()
+				if authTestErr != nil {
+					smc.Debugf(
+						"[WARN] AuthTest() failed. Continue without bot user ID: %v",
+						authTestErr,
+					)
+					continue
+				}
+				userID = authTest.UserID
+			case socketmode.EventTypeEventsAPI:
+				eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+				if !ok {
+					smc.Debugf("[INFO] Ignored %+v\n", evt)
+					continue
+				}
+				switch eventsAPIEvent.Type {
+				case slackevents.CallbackEvent:
+					innerEvent := eventsAPIEvent.InnerEvent
+					switch ev := innerEvent.Data.(type) {
+					case *slackevents.MessageEvent:
+						onMessageEvent(smc, ev, commandQueue, cfg)
+					case *slackevents.AppMentionEvent:
+						onAppMentionEvent(smc, ev, commandQueue, cfg)
+					default:
+						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
+					}
+				default:
+					smc.Debugf("[INFO] Unsupported Events API event received")
+				}
+
+			default:
+				smc.Debugf("[INFO] Unexpected event type received: %s\n", evt.Type)
+			}
 		}
 	}
 }

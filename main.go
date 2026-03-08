@@ -1,12 +1,16 @@
+// Package main is the entry point for slack-commander.
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -61,7 +65,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return
 	}
-	defer logger.Sync()
+	defer func() {
+		if syncErr := logger.Sync(); syncErr != nil {
+			fmt.Fprintf(os.Stderr, "%v", syncErr)
+		}
+	}()
 	sugar := logger.Sugar()
 	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
 	if err != nil {
@@ -95,7 +103,12 @@ func main() {
 		socketmode.OptionLog(stdLogger),
 	)
 
-	commandQueue := make(chan *cmd.CommandInput, 50) // チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、ack返せない問題への暫定対処
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、
+	// ack返せない問題への暫定対処。
+	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
@@ -111,21 +124,49 @@ func main() {
 		}
 		return cmd.NewExecRunner()
 	}
+	var executorWG sync.WaitGroup
 	for i := 0; i < cfg.NumWorkers; i++ {
-		go cmd.ExecutorWithRunner(commandQueue, outputQueue, cmdConfig, runnerFactory)
+		executorWG.Add(1)
+		go func() {
+			defer executorWG.Done()
+			cmd.ExecutorWithRunner(ctx, commandQueue, outputQueue, cmdConfig, runnerFactory)
+		}()
 	}
-	go pubsub.SlackWriter(smc, outputQueue)
-	go pubsub.SlackListener(smc, commandQueue, cfg.PubSubConfig)
+	var writerWG sync.WaitGroup
+	writerWG.Add(1)
+	go func() {
+		defer writerWG.Done()
+		pubsub.SlackWriter(ctx, smc, outputQueue)
+	}()
+	var listenerWG sync.WaitGroup
+	listenerWG.Add(1)
+	go func() {
+		defer listenerWG.Done()
+		pubsub.SlackListener(ctx, smc, commandQueue, cfg.PubSubConfig)
+	}()
 
-	smc.Run()
+	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		sugar.Errorf("Socket Mode error: %v", err)
+	}
+	stop()
+	listenerWG.Wait()
+	close(commandQueue)
+	executorWG.Wait()
+	close(outputQueue)
+	writerWG.Wait()
 }
 
 func validateConfig(cfg *Config) error {
 	if cfg.NumWorkers < 1 {
 		return fmt.Errorf("num_workers must be >= 1 (got %d)", cfg.NumWorkers)
 	}
-	if len(cfg.AllowedUserIDs) == 0 && len(cfg.AllowedChannelIDs) == 0 && !cfg.AllowUnsafeOpenAccess {
-		return errors.New("open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, or set allow_unsafe_open_access=true to keep old behavior")
+	if len(cfg.AllowedUserIDs) == 0 &&
+		len(cfg.AllowedChannelIDs) == 0 &&
+		!cfg.AllowUnsafeOpenAccess {
+		return errors.New(
+			"open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, " +
+				"or set allow_unsafe_open_access=true to keep old behavior",
+		)
 	}
 
 	for _, c := range cfg.Commands {

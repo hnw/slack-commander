@@ -1,5 +1,6 @@
 package pubsub
 
+// Config defines Slack pub/sub settings.
 type Config struct {
 	ReplyConfig
 	SlackBotToken         string   `toml:"slack_bot_token"`
@@ -12,6 +13,7 @@ type Config struct {
 	AllowedChannelIDs     []string `toml:"allowed_channel_ids"`
 }
 
+// ReplyConfig defines reply formatting options.
 type ReplyConfig struct {
 	Username        string `toml:"username"`
 	IconEmoji       string `toml:"icon_emoji"`

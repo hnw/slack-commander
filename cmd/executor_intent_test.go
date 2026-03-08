@@ -80,7 +80,7 @@ func runExecutorOnce(
 	runner := &fakeRunner{}
 	done := make(chan struct{})
 	go func() {
-		ExecutorWithRunner(rq, wq, cfgs, func(*CommandConfig) CommandRunner {
+		ExecutorWithRunner(context.Background(), rq, wq, cfgs, func(*CommandConfig) CommandRunner {
 			return runner
 		})
 		close(done)

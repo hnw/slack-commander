@@ -125,9 +125,14 @@ func (c *httpCmd) expandWildcard(value string) string {
 }
 
 func (c *httpCmd) handleRequestError(err error, timeout int) int {
-	if timeout > 0 && c.ctx != nil && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-		c.writeTimeout(timeout)
-		return 143
+	if c.ctx != nil {
+		if errors.Is(c.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+			return 143
+		}
+		if timeout > 0 && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+			c.writeTimeout(timeout)
+			return 143
+		}
 	}
 	c.writeErr(err)
 	return 127

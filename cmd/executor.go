@@ -28,6 +28,7 @@ type CommandOutput struct {
 	ExitCode    int
 }
 
+// Definition describes a command definition in the configuration.
 type Definition struct {
 	Timeout int
 	Keyword string
@@ -39,11 +40,13 @@ type Definition struct {
 	Body    string
 }
 
+// CommandConfig holds a Definition with reply configuration.
 type CommandConfig struct {
 	*Definition
 	ReplyConfig interface{} //*pubsub.ReplyConfig
 }
 
+// NewCommandConfig builds a CommandConfig from a definition and reply config.
 func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
 	return &CommandConfig{
 		Definition:  def,
@@ -51,8 +54,9 @@ func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
 	}
 }
 
+// Executor runs commands using the default runner factory.
 func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig) {
-	ExecutorWithRunner(rq, wq, cfgs, nil)
+	ExecutorWithRunner(context.Background(), rq, wq, cfgs, nil)
 }
 
 // RunnerFactory returns a runner for the given command config.
@@ -60,6 +64,7 @@ type RunnerFactory func(cfg *CommandConfig) CommandRunner
 
 // ExecutorWithRunner runs commands using runners provided by runnerFactory.
 func ExecutorWithRunner(
+	ctx context.Context,
 	rq chan *CommandInput,
 	wq chan *CommandOutput,
 	cfgs []*CommandConfig,
@@ -68,10 +73,21 @@ func ExecutorWithRunner(
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
 	matchers := buildMatchers(cfgs, runnerFactory)
 
-	for input := range rq {
-		cmdMsg, stdinText := splitCommandInput(input.Text)
-		cmds, parseErr := parseCommands(cmdMsg)
-		_ = executeCommands(cmds, parseErr, stdinText, input, matchers, wq)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case input, ok := <-rq:
+			if !ok {
+				return
+			}
+			cmdMsg, stdinText := splitCommandInput(input.Text)
+			cmds, parseErr := parseCommands(cmdMsg)
+			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq)
+		}
 	}
 }
 
@@ -125,6 +141,7 @@ func parseCommands(cmdMsg string) ([]*parsedCommand, error) {
 }
 
 func executeCommands(
+	ctx context.Context,
 	cmds []*parsedCommand,
 	parseErr error,
 	stdinText string,
@@ -168,7 +185,7 @@ func executeCommands(
 			ret = writeParseError(wq, input, parseErr)
 			return ret
 		}
-		ret = runMatchedCommand(m, args, stdinText, input, wq)
+		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq)
 	}
 	return ret
 }
@@ -195,25 +212,26 @@ func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *pars
 }
 
 func runMatchedCommand(
+	ctx context.Context,
 	m *Matcher,
 	args []string,
 	stdinText string,
 	input *CommandInput,
 	wq chan *CommandOutput,
 ) int {
-	var ctx context.Context
+	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if m.cfg.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(
-			context.Background(),
+		cmdCtx, cancel = context.WithTimeout(
+			ctx,
 			time.Duration(m.cfg.Timeout)*time.Second,
 		)
 	} else {
-		ctx, cancel = context.WithCancel(context.Background())
+		cmdCtx, cancel = context.WithCancel(ctx)
 	}
 	defer cancel()
 
-	execCmd := m.runner.CommandContext(ctx, args[0], args[1:]...)
+	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	execCmd.SetStdin(strings.NewReader(stdinText))
 	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
@@ -235,9 +253,10 @@ type parsedCommand struct {
 func newParsedCommand(op string, args []string) *parsedCommand {
 	skipIfSucceeded := false
 	skipIfFailed := false
-	if op == "&&" {
+	switch op {
+	case "&&":
 		skipIfFailed = true
-	} else if op == "||" {
+	case "||":
 		skipIfSucceeded = true
 	}
 	return &parsedCommand{

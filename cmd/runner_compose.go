@@ -109,11 +109,16 @@ func (c *composeCmd) Run(timeout int) int {
 		return ee.ExitCode()
 	}
 
-	if timeout > 0 && c.ctx != nil && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-		if c.stderr != nil {
-			_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%ds)", timeout)
+	if c.ctx != nil {
+		if errors.Is(c.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+			return 143
 		}
-		return 143
+		if timeout > 0 && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+			if c.stderr != nil {
+				_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%ds)", timeout)
+			}
+			return 143
+		}
 	}
 
 	if c.stderr != nil {

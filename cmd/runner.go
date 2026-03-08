@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -30,11 +31,12 @@ func NewExecRunner() CommandRunner {
 }
 
 func (r *execRunner) CommandContext(ctx context.Context, name string, arg ...string) Cmd {
-	return &execCmd{cmd: exec.CommandContext(ctx, name, arg...)}
+	return &execCmd{cmd: exec.CommandContext(ctx, name, arg...), ctx: ctx}
 }
 
 type execCmd struct {
 	cmd *exec.Cmd
+	ctx context.Context
 }
 
 func (c *execCmd) SetStdin(r io.Reader) {
@@ -76,7 +78,8 @@ func (c *execCmd) Run(timeout int) int {
 			if exitError.ExitCode() == -1 {
 				// https://pkg.go.dev/os#ProcessState.ExitCode
 				// -1 if the process hasn't exited or was terminated by a signal.
-				if c.cmd.Stderr != nil && timeout > 0 {
+				if c.cmd.Stderr != nil && timeout > 0 && c.ctx != nil &&
+					errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
 					_, _ = fmt.Fprintf(c.cmd.Stderr, "Timeout exceeded (%ds)", timeout)
 				}
 				return 143 // 128+15(SIGTERM)
