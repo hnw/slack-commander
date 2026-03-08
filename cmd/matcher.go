@@ -6,6 +6,23 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
+var wildcardReplacer = strings.NewReplacer(
+	`\`, `\\`,
+	` `, `\ `,
+	"\t", "\\\t",
+	"`", "\\`",
+	`(`, `\(`,
+	`)`, `\)`,
+	`"`, `\"`,
+	`'`, `\'`,
+	`;`, `\;`,
+	`&`, `\&`,
+	`|`, `\|`,
+	`<`, `\<`,
+	`>`, `\>`,
+)
+
+// Matcher matches parsed keywords to a configured command.
 type Matcher struct {
 	cfg      *CommandConfig
 	keywords []string
@@ -28,58 +45,80 @@ func newMatcher(cfg *CommandConfig) *Matcher {
 // Matcherの定義に従い、キーワード配列をコマンド配列に変換して返す
 // キーワード配列がマッチしなかった場合はnilを返す
 func (m *Matcher) build(keywords []string) []string {
-	hasWildcard := false
-	for _, v := range m.keywords {
-		if v == "*" {
-			hasWildcard = true
-			break
-		}
-	}
-
-	if hasWildcard {
-		if len(keywords) < len(m.keywords)-1 {
-			return nil
-		}
-	} else {
-		if len(keywords) != len(m.keywords) {
-			return nil
-		}
-	}
-	j := 0
-	wildcard := []string{}
-	for i, v := range m.keywords {
-		if v == "*" {
-			// wildcard match
-			delta := len(keywords) - len(m.keywords)
-			wildcard = keywords[i : i+delta+1]
-			j = delta
-		} else if i+j < 0 || i+j >= len(keywords) || v != keywords[i+j] {
-			return nil
-		}
+	hasWildcard := containsWildcard(m.keywords)
+	wildcard, ok := matchKeywords(m.keywords, keywords, hasWildcard)
+	if !ok {
+		return nil
 	}
 	runner := strings.ToLower(strings.TrimSpace(m.cfg.Runner))
 	if runner == "http" {
-		if hasWildcard {
-			return []string{"http", strings.Join(wildcard, " ")}
-		}
-		return []string{"http"}
+		return buildHTTPArgs(hasWildcard, wildcard)
 	}
-	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
-	line := m.cfg.Command
-	if hasWildcard {
-		replacer := strings.NewReplacer(`\`, `\\`, ` `, `\ `, "\t", "\\\t", "`", "\\`", `(`, `\(`, `)`, `\)`,
-			`"`, `\"`, `'`, `\'`, `;`, `\;`, `&`, `\&`, `|`, `\|`, `<`, `\<`, `>`, `\>`)
-		replaced := make([]string, len(wildcard))
-		for i, v := range wildcard {
-			replaced[i] = replacer.Replace(v)
+	return buildCommandArgs(m.cfg.Command, hasWildcard, wildcard)
+}
+
+func containsWildcard(keywords []string) bool {
+	for _, v := range keywords {
+		if v == "*" {
+			return true
 		}
-		line = strings.Replace(line, "*", strings.Join(replaced, " "), 1)
+	}
+	return false
+}
+
+func matchKeywords(template []string, keywords []string, hasWildcard bool) ([]string, bool) {
+	if hasWildcard {
+		if len(keywords) < len(template)-1 {
+			return nil, false
+		}
+	} else {
+		if len(keywords) != len(template) {
+			return nil, false
+		}
 	}
 
+	j := 0
+	wildcard := []string{}
+	for i, v := range template {
+		if v == "*" {
+			// wildcard match
+			delta := len(keywords) - len(template)
+			wildcard = keywords[i : i+delta+1]
+			j = delta
+			continue
+		}
+		idx := i + j
+		if idx < 0 || idx >= len(keywords) || v != keywords[idx] {
+			return nil, false
+		}
+	}
+	return wildcard, true
+}
+
+func buildHTTPArgs(hasWildcard bool, wildcard []string) []string {
+	if hasWildcard {
+		return []string{"http", strings.Join(wildcard, " ")}
+	}
+	return []string{"http"}
+}
+
+func buildCommandArgs(line string, hasWildcard bool, wildcard []string) []string {
+	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
+	if hasWildcard {
+		line = expandWildcard(line, wildcard)
+	}
 	parser := shellwords.NewParser()
 	args, err := parser.Parse(line)
 	if err != nil || parser.Position >= 0 {
 		return nil
 	}
 	return args
+}
+
+func expandWildcard(line string, wildcard []string) string {
+	replaced := make([]string, len(wildcard))
+	for i, v := range wildcard {
+		replaced[i] = wildcardReplacer.Replace(v)
+	}
+	return strings.Replace(line, "*", strings.Join(replaced, " "), 1)
 }

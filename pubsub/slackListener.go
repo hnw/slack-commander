@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
@@ -114,94 +115,148 @@ func extractEnvelopeID(raw json.RawMessage) (string, bool) {
 	return req.EnvelopeID, true
 }
 
-func onMessageEvent(smc *socketmode.Client, ev *slackevents.MessageEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
-	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
-		return
+func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
+	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
+		return true
 	}
-	if ev.SubType == "bot_message" &&
-		(ev.User == userID || cfg.AcceptBotMessage == false) {
+	if ev.SubType == "bot_message" && (ev.User == userID || !cfg.AcceptBotMessage) {
 		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
-		return
+		return true
 	}
-	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
-		return
+	if ev.ThreadTimeStamp != "" && !cfg.AcceptThreadMessage {
+		return true
 	}
-	senderID := ev.User
-	if ev.BotID != "" {
-		senderID = ev.BotID
-	}
-	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
-		return
-	}
-	text := ""
-	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
-		text = strings.TrimPrefix(ev.Text, "Reminder: ")
-		text = strings.TrimSuffix(text, ".")
-	} else if ev.Text != "" {
-		text = ev.Text
-	} else if ev.Message != nil && len(ev.Message.Attachments) > 0 {
-		if ev.Message.Attachments[0].Pretext != "" {
-			// attachmentのpretextとtextを文字列連結してtext扱いにする
-			text = ev.Message.Attachments[0].Pretext
-			if ev.Message.Attachments[0].Text != "" {
-				text = text + "\n" + ev.Message.Attachments[0].Text
-			}
-		} else if ev.Message.Attachments[0].Text != "" {
-			text = ev.Message.Attachments[0].Text
-		} else {
-			smc.Debugf("[DEBUG]: text(4) = ''")
-		}
-	} else if ev.Message != nil && ev.Message.Text != "" {
-		text = ev.Message.Text
-	}
-	text = removeMentionTarget(text)
-	text = normalizeSlackURLs(text)
-	text = normalizeQuotes(unescapeMessage(text))
-	if text != "" {
-		if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
-			smc.Debugf("[WARN] command queue is full; dropping message event command")
-			return
-		}
-		smc.Debugf("[DEBUG]: command = '%s'", text)
-	}
+	return false
 }
 
-func onAppMentionEvent(smc *socketmode.Client, ev *slackevents.AppMentionEvent, commandQueue chan *cmd.CommandInput, cfg Config) {
-	if ev.User == "USLACKBOT" && cfg.AcceptReminder == false {
-		return
+func shouldIgnoreAppMentionEvent(ev *slackevents.AppMentionEvent, cfg Config) bool {
+	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
+		return true
 	}
-	if ev.BotID != "" &&
-		(ev.User == userID || cfg.AcceptBotMessage == false) {
+	if ev.BotID != "" && (ev.User == userID || !cfg.AcceptBotMessage) {
 		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
-		return
+		return true
 	}
-	if ev.ThreadTimeStamp != "" && cfg.AcceptThreadMessage == false {
-		return
+	if ev.ThreadTimeStamp != "" && !cfg.AcceptThreadMessage {
+		return true
 	}
-	senderID := ev.User
-	if ev.BotID != "" {
-		senderID = ev.BotID
+	return false
+}
+
+func senderIDForEvent(user, botID string) string {
+	if botID != "" {
+		return botID
 	}
-	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
-		return
+	return user
+}
+
+func extractReminderText(user, text string) (string, bool) {
+	if user != "USLACKBOT" || !strings.HasPrefix(text, "Reminder: ") {
+		return "", false
 	}
-	text := ""
-	if ev.User == "USLACKBOT" && strings.HasPrefix(ev.Text, "Reminder: ") {
-		text = strings.TrimPrefix(ev.Text, "Reminder: ")
-		text = strings.TrimSuffix(text, ".")
-	} else if ev.Text != "" {
-		text = ev.Text
+	trimmed := strings.TrimPrefix(text, "Reminder: ")
+	trimmed = strings.TrimSuffix(trimmed, ".")
+	return trimmed, true
+}
+
+func extractMessageText(smc *socketmode.Client, ev *slackevents.MessageEvent) string {
+	if text, ok := extractReminderText(ev.User, ev.Text); ok {
+		return text
 	}
+	if ev.Text != "" {
+		return ev.Text
+	}
+	if ev.Message == nil {
+		return ""
+	}
+	if text := attachmentText(smc, ev.Message.Attachments); text != "" {
+		return text
+	}
+	if ev.Message.Text != "" {
+		return ev.Message.Text
+	}
+	return ""
+}
+
+func extractAppMentionText(ev *slackevents.AppMentionEvent) string {
+	if text, ok := extractReminderText(ev.User, ev.Text); ok {
+		return text
+	}
+	return ev.Text
+}
+
+func attachmentText(smc *socketmode.Client, attachments []slack.Attachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	attachment := attachments[0]
+	if attachment.Pretext != "" {
+		text := attachment.Pretext
+		if attachment.Text != "" {
+			text = text + "\n" + attachment.Text
+		}
+		return text
+	}
+	if attachment.Text != "" {
+		return attachment.Text
+	}
+	smc.Debugf("[DEBUG]: text(4) = ''")
+	return ""
+}
+
+func normalizeCommandText(text string) string {
 	text = removeMentionTarget(text)
 	text = normalizeSlackURLs(text)
 	text = normalizeQuotes(unescapeMessage(text))
-	if text != "" {
-		if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
-			smc.Debugf("[WARN] command queue is full; dropping app_mention command")
-			return
-		}
-		smc.Debugf("[DEBUG]: command = '%s'", text)
+	return text
+}
+
+func onMessageEvent(
+	smc *socketmode.Client,
+	ev *slackevents.MessageEvent,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+) {
+	if shouldIgnoreMessageEvent(ev, cfg) {
+		return
 	}
+	senderID := senderIDForEvent(ev.User, ev.BotID)
+	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
+		return
+	}
+	text := normalizeCommandText(extractMessageText(smc, ev))
+	if text == "" {
+		return
+	}
+	if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
+		smc.Debugf("[WARN] command queue is full; dropping message event command")
+		return
+	}
+	smc.Debugf("[DEBUG]: command = '%s'", text)
+}
+
+func onAppMentionEvent(
+	smc *socketmode.Client,
+	ev *slackevents.AppMentionEvent,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+) {
+	if shouldIgnoreAppMentionEvent(ev, cfg) {
+		return
+	}
+	senderID := senderIDForEvent(ev.User, ev.BotID)
+	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
+		return
+	}
+	text := normalizeCommandText(extractAppMentionText(ev))
+	if text == "" {
+		return
+	}
+	if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
+		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
+		return
+	}
+	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
 func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput) bool {
