@@ -34,3 +34,5 @@ go.work.sum
 /config.toml
 /slack-commander
 *~
+
+repomix-output.xml
