@@ -10,34 +10,53 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
+// ContinuationThread resumes a command after its process exits when a Slack
+// thread reply arrives.
+const ContinuationThread = "thread"
+
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
 type CommandInput struct {
-	ReplyInfo interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
-	Text      string      // 起動コマンド平文
+	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
+	Text                string      // 起動コマンド平文
+	ConversationContext ConversationContext
+	ThreadContinuation  bool
+}
+
+// ConversationContext identifies the Slack thread that receives command output.
+type ConversationContext struct {
+	ChannelID           string
+	RootThreadTimestamp string
 }
 
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
 type CommandOutput struct {
-	ReplyInfo   interface{}
-	ReplyConfig interface{}
-	Text        string // コマンドからのテキスト出力（ImageData と排他）
-	ImageData   []byte // sixel を変換した PNG バイト列（Text と排他）
-	IsErrOut    bool
-	Spawned     bool
-	Finished    bool
-	ExitCode    int
+	ReplyInfo           interface{}
+	ReplyConfig         interface{}
+	ConversationContext ConversationContext
+	Text                string // コマンドからのテキスト出力（ImageData と排他）
+	ImageData           []byte // sixel を変換した PNG バイト列（Text と排他）
+	IsErrOut            bool
+	Spawned             bool
+	Finished            bool
+	ExitCode            int
 }
 
 // Definition describes a command definition in the configuration.
 type Definition struct {
-	Timeout int
-	Keyword string
-	Command string
-	Runner  string
-	Method  string
-	URL     string
-	Headers map[string]string
-	Body    string
+	Timeout      int
+	Keyword      string
+	Command      string
+	Runner       string
+	Method       string
+	URL          string
+	Headers      map[string]string
+	Body         string
+	Continuation string
+}
+
+// IsThreadContinuation reports whether this definition resumes from thread replies.
+func (d Definition) IsThreadContinuation() bool {
+	return d.Continuation == ContinuationThread
 }
 
 // CommandConfig holds a Definition with reply configuration.
@@ -86,9 +105,34 @@ func ExecutorWithRunner(
 			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
+			if input.ThreadContinuation && !isThreadContinuationEligible(cmds, matchers) {
+				continue
+			}
 			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq)
 		}
 	}
+}
+
+func isThreadContinuationEligible(cmds []*parsedCommand, matchers []*Matcher) bool {
+	if len(cmds) == 0 {
+		return false
+	}
+	matcher, _ := findMatchedMatcher(cmds[0], matchers)
+	return matcher != nil && matcher.cfg.IsThreadContinuation()
+}
+
+// IsThreadContinuation reports whether the first command in text currently
+// matches a thread continuation definition. It uses the same parser and matcher as Executor.
+func IsThreadContinuation(text string, cfgs []*CommandConfig) bool {
+	commandLine, _ := splitCommandInput(text)
+	cmds, _ := parseCommands(commandLine)
+	matchers := make([]*Matcher, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if matcher := newMatcher(cfg); matcher != nil {
+			matchers = append(matchers, matcher)
+		}
+	}
+	return isThreadContinuationEligible(cmds, matchers)
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
@@ -167,15 +211,17 @@ func executeCommands(
 		if i == 0 {
 			// コマンド実行開始を通知
 			wq <- &CommandOutput{
-				ReplyInfo: input.ReplyInfo,
-				Spawned:   true,
+				ReplyInfo:           input.ReplyInfo,
+				ConversationContext: input.ConversationContext,
+				Spawned:             true,
 			}
 			// 関数を抜ける時に必ず終了通知を送る
 			defer func() {
 				wq <- &CommandOutput{
-					ReplyInfo: input.ReplyInfo,
-					Finished:  true,
-					ExitCode:  ret,
+					ReplyInfo:           input.ReplyInfo,
+					ConversationContext: input.ConversationContext,
+					Finished:            true,
+					ExitCode:            ret,
 				}
 			}()
 		}
@@ -198,14 +244,14 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 }
 
 func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, nil)
+	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2
 }
 
 func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *parsedCommand) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, nil)
+	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext)
 	_, _ = fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
 	_ = syserr.Flush()
 	return 127
@@ -233,8 +279,8 @@ func runMatchedCommand(
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	execCmd.SetStdin(strings.NewReader(stdinText))
-	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
-	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig)
+	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
+	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
 	ret := execCmd.Run(m.cfg.Timeout)

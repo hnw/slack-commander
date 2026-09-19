@@ -68,15 +68,15 @@ func handleOutput(smc *socketmode.Client, output *cmd.CommandOutput, runningProc
 }
 
 func addReaction(smc *socketmode.Client, output *cmd.CommandOutput, name string) error {
-	ch := getChannel(output)
-	ts := getTimeStamp(output)
+	ch := getReactionChannel(output)
+	ts := getReactionTimestamp(output)
 	item := slack.NewRefToMessage(ch, ts)
 	return smc.AddReaction(name, item)
 }
 
 func removeReaction(smc *socketmode.Client, output *cmd.CommandOutput, name string) error {
-	ch := getChannel(output)
-	ts := getTimeStamp(output)
+	ch := getReactionChannel(output)
+	ts := getReactionTimestamp(output)
 	item := slack.NewRefToMessage(ch, ts)
 	return smc.RemoveReaction(name, item)
 }
@@ -99,7 +99,7 @@ func postMessage(smc *socketmode.Client, output *cmd.CommandOutput) error {
 	}
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
-	ch := getChannel(output)
+	ch := getOutputChannel(output)
 	if _, _, err := smc.PostMessage(ch, msgOptParams, msgOptAttachment); err != nil {
 		smc.Debugf("[ERROR] %s\n", err)
 		return err
@@ -138,7 +138,7 @@ func postMessageWithImageBlock(
 		msgOpts = append(msgOpts, slack.MsgOptionText(getText(output), false))
 	}
 
-	ch := getChannel(output)
+	ch := getOutputChannel(output)
 	if _, _, err := smc.PostMessage(ch, msgOpts...); err != nil {
 		return err
 	}
@@ -205,9 +205,16 @@ func getConfig(output *cmd.CommandOutput) *ReplyConfig {
 func getThreadTimestamp(output *cmd.CommandOutput) string {
 	cfg := getConfig(output)
 	if cfg.PostAsReply {
+		if output.ConversationContext.RootThreadTimestamp != "" {
+			return output.ConversationContext.RootThreadTimestamp
+		}
 		return getTimeStamp(output)
 	}
 	return ""
+}
+
+func getReactionTimestamp(output *cmd.CommandOutput) string {
+	return getTimeStamp(output)
 }
 
 func getText(output *cmd.CommandOutput) string {
@@ -240,7 +247,14 @@ func getColor(output *cmd.CommandOutput) string {
 	return "good"
 }
 
-func getChannel(output *cmd.CommandOutput) string {
+func getOutputChannel(output *cmd.CommandOutput) string {
+	if output.ConversationContext.ChannelID != "" {
+		return output.ConversationContext.ChannelID
+	}
+	return getReactionChannel(output)
+}
+
+func getReactionChannel(output *cmd.CommandOutput) string {
 	switch origMsg := output.ReplyInfo.(type) {
 	case *slackevents.MessageEvent:
 		return origMsg.Channel

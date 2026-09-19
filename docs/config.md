@@ -109,6 +109,14 @@ botがSlackにポストする時のユーザー名を指定します。
 
 コマンドの出力をスレッド形式でポストします。
 
+### continuation `string`
+
+プロセス終了後の継続方法を指定します。省略時は継続しません。
+
+* `thread`: root 投稿のスレッド返信で新しいプロセスを起動し、conversation を継続します。command output は自動的に root thread への reply として投稿されるため、`post_as_reply` を別途指定する必要はありません。継続時は root 投稿の1行目を command と argv の決定にのみ使用し、stdin には含めません。root 投稿の2行目以降と後続の thread conversation を stdin に渡します。
+
+実行中プロセスへの stdin 転送は未実装です。process interaction と thread continuation は別概念として扱います。
+
 ### always_broadcast `bool`
 
 コマンドの出力をスレッド形式にした場合に、チャンネルにもポストします。

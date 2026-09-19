@@ -142,7 +142,7 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListener(ctx, smc, commandQueue, cfg.PubSubConfig)
+		pubsub.SlackListener(ctx, smc, commandQueue, cfg.PubSubConfig, cmdConfig)
 	}()
 
 	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -170,6 +170,21 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
+		continuation := strings.ToLower(strings.TrimSpace(c.Continuation))
+		switch continuation {
+		case "":
+			c.Continuation = ""
+		case cmd.ContinuationThread:
+			c.Continuation = continuation
+		default:
+			return fmt.Errorf(
+				"unknown continuation '%s' for keyword '%s'", c.Continuation, c.Keyword,
+			)
+		}
+		if c.IsThreadContinuation() {
+			c.PostAsReply = true
+		}
+
 		runner := strings.ToLower(strings.TrimSpace(c.Runner))
 		if runner == "" {
 			runner = "exec"

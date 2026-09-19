@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -24,6 +25,11 @@ func NewSlackInput(msg *slackevents.MessageEvent, text string) *cmd.CommandInput
 	return &cmd.CommandInput{
 		ReplyInfo: msg,
 		Text:      text,
+		ConversationContext: newConversationContext(
+			msg.Channel,
+			msg.TimeStamp,
+			msg.ThreadTimeStamp,
+		),
 	}
 }
 
@@ -32,6 +38,22 @@ func NewSlackInputFromAppMention(msg *slackevents.AppMentionEvent, text string) 
 	return &cmd.CommandInput{
 		ReplyInfo: msg,
 		Text:      text,
+		ConversationContext: newConversationContext(
+			msg.Channel,
+			msg.TimeStamp,
+			msg.ThreadTimeStamp,
+		),
+	}
+}
+
+func newConversationContext(channelID, timestamp, threadTimestamp string) cmd.ConversationContext {
+	rootTimestamp := timestamp
+	if threadTimestamp != "" {
+		rootTimestamp = threadTimestamp
+	}
+	return cmd.ConversationContext{
+		ChannelID:           channelID,
+		RootThreadTimestamp: rootTimestamp,
 	}
 }
 
@@ -41,6 +63,7 @@ func SlackListener(
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
+	commandConfigs []*cmd.CommandConfig,
 ) {
 	for {
 		select {
@@ -80,7 +103,7 @@ func SlackListener(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg)
+						onMessageEvent(smc, ev, commandQueue, cfg, commandConfigs)
 					case *slackevents.AppMentionEvent:
 						onAppMentionEvent(smc, ev, commandQueue, cfg)
 					default:
@@ -140,9 +163,6 @@ func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
 		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
 		return true
 	}
-	if ev.ThreadTimeStamp != "" && !cfg.AcceptThreadMessage {
-		return true
-	}
 	return false
 }
 
@@ -152,9 +172,6 @@ func shouldIgnoreAppMentionEvent(ev *slackevents.AppMentionEvent, cfg Config) bo
 	}
 	if ev.BotID != "" && (ev.User == userID || !cfg.AcceptBotMessage) {
 		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
-		return true
-	}
-	if ev.ThreadTimeStamp != "" && !cfg.AcceptThreadMessage {
 		return true
 	}
 	return false
@@ -176,23 +193,17 @@ func extractReminderText(user, text string) (string, bool) {
 	return trimmed, true
 }
 
-func extractMessageText(smc *socketmode.Client, ev *slackevents.MessageEvent) string {
+func extractMessageText(ev *slackevents.MessageEvent) string {
 	if text, ok := extractReminderText(ev.User, ev.Text); ok {
 		return text
 	}
-	if ev.Text != "" {
+	if ev.Message == nil {
 		return ev.Text
 	}
-	if ev.Message == nil {
-		return ""
-	}
-	if text := attachmentText(smc, ev.Message.Attachments); text != "" {
+	if text := slackMessageText(ev.Text, ev.Message.Attachments); text != "" {
 		return text
 	}
-	if ev.Message.Text != "" {
-		return ev.Message.Text
-	}
-	return ""
+	return ev.Message.Text
 }
 
 func extractAppMentionText(ev *slackevents.AppMentionEvent) string {
@@ -202,7 +213,14 @@ func extractAppMentionText(ev *slackevents.AppMentionEvent) string {
 	return ev.Text
 }
 
-func attachmentText(smc *socketmode.Client, attachments []slack.Attachment) string {
+func slackMessageText(text string, attachments []slack.Attachment) string {
+	if text != "" {
+		return text
+	}
+	return attachmentTextValue(attachments)
+}
+
+func attachmentTextValue(attachments []slack.Attachment) string {
 	if len(attachments) == 0 {
 		return ""
 	}
@@ -217,7 +235,6 @@ func attachmentText(smc *socketmode.Client, attachments []slack.Attachment) stri
 	if attachment.Text != "" {
 		return attachment.Text
 	}
-	smc.Debugf("[DEBUG]: text(4) = ''")
 	return ""
 }
 
@@ -233,6 +250,7 @@ func onMessageEvent(
 	ev *slackevents.MessageEvent,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
+	commandConfigs []*cmd.CommandConfig,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -241,7 +259,23 @@ func onMessageEvent(
 	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
-	text := normalizeCommandText(extractMessageText(smc, ev))
+	if ev.ThreadTimeStamp != "" {
+		input, matched, err := newThreadContinuationInput(smc, ev, cfg, commandConfigs)
+		if err != nil {
+			smc.Debugf("[WARN] thread continuation unavailable: %v", err)
+			return
+		}
+		if matched {
+			if !enqueueCommand(commandQueue, input) {
+				smc.Debugf("[WARN] command queue is full; dropping thread continuation")
+			}
+			return
+		}
+		if !cfg.AcceptThreadMessage {
+			return
+		}
+	}
+	text := normalizeCommandText(extractMessageText(ev))
 	if text == "" {
 		return
 	}
@@ -265,6 +299,11 @@ func onAppMentionEvent(
 	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
+	if ev.ThreadTimeStamp != "" {
+		if !cfg.AcceptThreadMessage {
+			return
+		}
+	}
 	text := normalizeCommandText(extractAppMentionText(ev))
 	if text == "" {
 		return
@@ -274,6 +313,48 @@ func onAppMentionEvent(
 		return
 	}
 	smc.Debugf("[DEBUG]: command = '%s'", text)
+}
+
+func newThreadContinuationInput(
+	smc *socketmode.Client,
+	ev *slackevents.MessageEvent,
+	cfg Config,
+	commandConfigs []*cmd.CommandConfig,
+) (*cmd.CommandInput, bool, error) {
+	history, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		ChannelID: ev.Channel,
+		Timestamp: ev.ThreadTimeStamp,
+	})
+	if err != nil || len(history) == 0 {
+		if err != nil {
+			return nil, false, err
+		}
+		return nil, false, fmt.Errorf("thread history is empty")
+	}
+	return buildThreadContinuationInput(ev, history, cfg, commandConfigs, userID)
+}
+
+func buildThreadContinuationInput(
+	ev *slackevents.MessageEvent,
+	history []slack.Message,
+	cfg Config,
+	commandConfigs []*cmd.CommandConfig,
+	commanderUserID string,
+) (*cmd.CommandInput, bool, error) {
+	history, err := historyThroughTrigger(history, ev.TimeStamp)
+	if err != nil {
+		return nil, false, err
+	}
+	rootText := slackMessageText(history[0].Text, history[0].Attachments)
+	history = filterThreadContinuationHistory(history, cfg, commanderUserID)
+	stdin := serializeThreadConversation(rootText, ev.ThreadTimeStamp, history, commanderUserID)
+	text := buildThreadContinuationCommandText(rootText, stdin)
+	if !cmd.IsThreadContinuation(text, commandConfigs) {
+		return nil, false, nil
+	}
+	input := NewSlackInput(ev, text)
+	input.ThreadContinuation = true
+	return input, true, nil
 }
 
 func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput) bool {

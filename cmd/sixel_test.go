@@ -21,7 +21,7 @@ var minimalRedSixel = []byte("\x1bPq\"1;1;4;6#1;2;100;0;0#1~~~~\x1b\\")
 func collectRawOutputs(t *testing.T, writes ...[]byte) []*CommandOutput {
 	t.Helper()
 	ch := make(chan *CommandOutput, 100)
-	raw := newRawWriter(ch, nil, nil, false)
+	raw := newRawWriter(ch, nil, nil, false, ConversationContext{})
 	for _, data := range writes {
 		if _, err := raw.Write(data); err != nil {
 			t.Fatalf("rawWriter.Write error: %v", err)

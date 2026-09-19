@@ -35,10 +35,12 @@ func (r *fakeRunner) Calls() []fakeCall {
 }
 
 type fakeCmd struct {
-	stdin    io.Reader
-	stdout   io.Writer
-	stderr   io.Writer
-	exitCode int
+	stdin      io.Reader
+	stdout     io.Writer
+	stderr     io.Writer
+	exitCode   int
+	stdoutText string
+	stderrText string
 }
 
 func (c *fakeCmd) SetStdin(r io.Reader) {
@@ -54,7 +56,19 @@ func (c *fakeCmd) SetStderr(w io.Writer) {
 }
 
 func (c *fakeCmd) Run(_ int) int {
+	if c.stdoutText != "" {
+		_, _ = io.WriteString(c.stdout, c.stdoutText)
+	}
+	if c.stderrText != "" {
+		_, _ = io.WriteString(c.stderr, c.stderrText)
+	}
 	return c.exitCode
+}
+
+type contextRunner struct{}
+
+func (contextRunner) CommandContext(_ context.Context, _ string, _ ...string) Cmd {
+	return &fakeCmd{stdoutText: "stdout", stderrText: "stderr"}
 }
 
 func drainOutputs(ch chan *CommandOutput) []*CommandOutput {
@@ -120,6 +134,119 @@ func TestExecutorIntentDetection(t *testing.T) {
 		"execute valid command and show error for invalid subsequent command",
 		testExecutorExecuteValidThenInvalidCommand,
 	)
+}
+
+func TestExecutorPropagatesConversationContext(t *testing.T) {
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 20)
+	done := make(chan struct{})
+	go func() {
+		ExecutorWithRunner(
+			context.Background(),
+			rq,
+			wq,
+			testCommandConfigs(),
+			func(*CommandConfig) CommandRunner {
+				return contextRunner{}
+			},
+		)
+		close(done)
+	}()
+
+	context := ConversationContext{
+		ChannelID:           "C123",
+		RootThreadTimestamp: "1700000000.000100",
+	}
+	rq <- &CommandInput{Text: "date", ConversationContext: context}
+	close(rq)
+	<-done
+
+	outputs := drainOutputs(wq)
+	if len(outputs) != 4 {
+		t.Fatalf("expected spawn, stdout, stderr, and finish outputs, got %d", len(outputs))
+	}
+	for _, output := range outputs {
+		if output.ConversationContext != context {
+			t.Fatalf("output context = %+v, want %+v", output.ConversationContext, context)
+		}
+	}
+}
+
+func TestExecutorThreadContinuationRequiresThreadMatch(t *testing.T) {
+	configs := []*CommandConfig{
+		NewCommandConfig(
+			&Definition{Keyword: "thread", Command: "thread", Continuation: ContinuationThread},
+			nil,
+		),
+		NewCommandConfig(
+			&Definition{Keyword: "plain", Command: "plain"},
+			nil,
+		),
+	}
+	for _, tc := range []struct {
+		name  string
+		input CommandInput
+		want  int
+	}{
+		{name: "mismatch does not run", input: CommandInput{Text: "missing", ThreadContinuation: true}, want: 0},
+		{name: "non thread does not run", input: CommandInput{Text: "plain", ThreadContinuation: true}, want: 0},
+		{name: "thread runs", input: CommandInput{Text: "thread", ThreadContinuation: true}, want: 1},
+		{name: "thread first replays later plain command", input: CommandInput{Text: "thread && plain", ThreadContinuation: true}, want: 2},
+		{name: "plain first does not reach later thread command", input: CommandInput{Text: "plain && thread", ThreadContinuation: true}, want: 0},
+		{name: "normal command runs", input: CommandInput{Text: "plain"}, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, _ := runExecutorInput(t, &tc.input, configs)
+			if len(calls) != tc.want {
+				t.Fatalf("calls = %d, want %d", len(calls), tc.want)
+			}
+		})
+	}
+}
+
+func TestIsThreadContinuationUsesFirstCommand(t *testing.T) {
+	configs := []*CommandConfig{
+		NewCommandConfig(
+			&Definition{Keyword: "thread", Command: "thread", Continuation: ContinuationThread},
+			nil,
+		),
+		NewCommandConfig(
+			&Definition{Keyword: "plain", Command: "plain"},
+			nil,
+		),
+	}
+	if !IsThreadContinuation("thread && plain", configs) {
+		t.Fatal("thread first command should be eligible")
+	}
+	if IsThreadContinuation("plain && thread", configs) {
+		t.Fatal("plain first command should not be eligible")
+	}
+}
+
+func runExecutorInput(
+	t *testing.T,
+	input *CommandInput,
+	cfgs []*CommandConfig,
+) ([]fakeCall, []*CommandOutput) {
+	t.Helper()
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 20)
+	runner := &fakeRunner{}
+	done := make(chan struct{})
+	go func() {
+		ExecutorWithRunner(
+			context.Background(),
+			rq,
+			wq,
+			cfgs,
+			func(*CommandConfig) CommandRunner { return runner },
+		)
+		close(done)
+	}()
+	rq <- input
+	close(rq)
+	<-done
+	return runner.Calls(), drainOutputs(wq)
 }
 
 func testExecutorSingleCommand(t *testing.T) {
