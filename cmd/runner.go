@@ -57,6 +57,28 @@ func (c *execCmd) SetStderr(w io.Writer) {
 // - 127: failed to start or unknown error
 // - 143: terminated by signal or timeout
 func (c *execCmd) Run(timeout int) int {
+	return c.run(timeout, nil)
+}
+
+func (c *execCmd) RunLive(timeout int, started func(io.WriteCloser) func()) int {
+	stdin, err := c.cmd.StdinPipe()
+	if err != nil {
+		if c.cmd.Stderr != nil {
+			_, _ = fmt.Fprint(c.cmd.Stderr, err)
+		}
+		return 127
+	}
+	defer func() { _ = stdin.Close() }()
+	var cleanup func()
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
+	return c.run(timeout, func() { cleanup = started(stdin) })
+}
+
+func (c *execCmd) run(timeout int, started func()) int {
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.cmd.Cancel = func() error {
 		// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
@@ -72,6 +94,9 @@ func (c *execCmd) Run(timeout int) int {
 		return 127
 	}
 
+	if started != nil {
+		started()
+	}
 	err := c.cmd.Wait()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
