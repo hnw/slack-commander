@@ -6,7 +6,119 @@ import (
 	"time"
 
 	"github.com/hnw/slack-commander/cmd"
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 )
+
+func TestNewSlackInputSetsConversationContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    *slackevents.MessageEvent
+		wantRootTS string
+	}{
+		{
+			name:       "root message uses its timestamp",
+			message:    &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000100"},
+			wantRootTS: "1700000000.000100",
+		},
+		{
+			name: "thread reply uses root timestamp",
+			message: &slackevents.MessageEvent{
+				Channel:         "C123",
+				TimeStamp:       "1700000000.000200",
+				ThreadTimeStamp: "1700000000.000100",
+			},
+			wantRootTS: "1700000000.000100",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewSlackInput(tc.message, "date")
+			if input.ConversationContext.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			}
+			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+				t.Fatalf(
+					"root timestamp = %q, want %q",
+					input.ConversationContext.RootThreadTimestamp,
+					tc.wantRootTS,
+				)
+			}
+		})
+	}
+}
+
+func TestExtractMessageTextPreservesFallbackOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *slackevents.MessageEvent
+		want  string
+	}{
+		{name: "top level text", event: &slackevents.MessageEvent{Text: "top"}, want: "top"},
+		{
+			name: "attachment text",
+			event: &slackevents.MessageEvent{
+				Message: &slack.Msg{Attachments: []slack.Attachment{{Text: "attachment"}}},
+			},
+			want: "attachment",
+		},
+		{
+			name:  "nested message fallback",
+			event: &slackevents.MessageEvent{Message: &slack.Msg{Text: "fallback"}},
+			want:  "fallback",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractMessageText(tc.event); got != tc.want {
+				t.Fatalf("text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    *slackevents.AppMentionEvent
+		wantRootTS string
+	}{
+		{
+			name: "root mention uses its timestamp",
+			message: &slackevents.AppMentionEvent{
+				Channel:   "C123",
+				TimeStamp: "1700000000.000100",
+			},
+			wantRootTS: "1700000000.000100",
+		},
+		{
+			name: "thread mention uses root timestamp",
+			message: &slackevents.AppMentionEvent{
+				Channel:         "C123",
+				TimeStamp:       "1700000000.000200",
+				ThreadTimeStamp: "1700000000.000100",
+			},
+			wantRootTS: "1700000000.000100",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewSlackInputFromAppMention(tc.message, "date")
+			if input.ConversationContext.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			}
+			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+				t.Fatalf(
+					"root timestamp = %q, want %q",
+					input.ConversationContext.RootThreadTimestamp,
+					tc.wantRootTS,
+				)
+			}
+		})
+	}
+}
 
 func TestEnqueueCommand(t *testing.T) {
 	ch := make(chan *cmd.CommandInput, 1)

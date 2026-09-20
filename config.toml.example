@@ -22,6 +22,11 @@ command = '/bin/echo *'
 monospaced = true
 
 [[commands]]
+keyword = 'agent *'
+command = 'agent *'
+continuation = 'thread'
+
+[[commands]]
 keyword = 'notify *'
 runner = 'http'
 method = 'POST'
