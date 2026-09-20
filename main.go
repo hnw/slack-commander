@@ -181,10 +181,6 @@ func validateConfig(cfg *Config) error {
 				"unknown continuation '%s' for keyword '%s'", c.Continuation, c.Keyword,
 			)
 		}
-		if c.IsThreadContinuation() {
-			c.PostAsReply = true
-		}
-
 		runner := strings.ToLower(strings.TrimSpace(c.Runner))
 		if runner == "" {
 			runner = "exec"

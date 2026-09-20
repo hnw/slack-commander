@@ -9,6 +9,8 @@ keyword = 'date'
 command = 'date'
 icon_emoji = ':alarm_clock:'
 username = 'Clock'
+# command output は常に thread reply として投稿されます。
+# reply_broadcast = true # 省略時も true。false にすると thread 内だけに投稿します。
 
 [[commands]]
 keyword = 'uname'
