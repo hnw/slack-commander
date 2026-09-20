@@ -7,7 +7,7 @@ require (
 	github.com/hnw/compose-exec v0.3.9
 	github.com/mattn/go-shellwords v1.0.12
 	github.com/mattn/go-sixel v0.0.8
-	github.com/slack-go/slack v0.18.0
+	github.com/slack-go/slack v0.23.1
 	go.uber.org/zap v1.27.1
 )
 
