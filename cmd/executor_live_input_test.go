@@ -37,7 +37,7 @@ func TestExecutorLiveInputStartFailureAndFiniteFallback(t *testing.T) {
 	for _, runner := range []CommandRunner{NewHTTPRunner(nil), NewComposeRunner("")} {
 		c := runner.CommandContext(context.Background(), "unused")
 		if _, live := c.(interface {
-			RunLive(int, func(io.WriteCloser) func()) int
+			RunLive(int, func(io.WriteCloser)) int
 		}); live {
 			t.Fatalf("non-exec runner %T gained live input", runner)
 		}
@@ -119,11 +119,10 @@ func (*liveTestCmd) SetStdin(io.Reader)  {}
 func (*liveTestCmd) SetStdout(io.Writer) {}
 func (*liveTestCmd) SetStderr(io.Writer) {}
 func (*liveTestCmd) Run(int) int         { return 99 }
-func (c *liveTestCmd) RunLive(_ int, started func(io.WriteCloser) func()) int {
+func (c *liveTestCmd) RunLive(_ int, started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
-	cleanup := started(w)
-	defer cleanup()
+	started(w)
 	close(c.started)
 	<-c.read
 	reader := bufio.NewReader(r)

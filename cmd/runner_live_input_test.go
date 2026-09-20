@@ -22,14 +22,13 @@ func TestExecLiveInput(t *testing.T) {
 			var out bytes.Buffer
 			c.SetStdout(&out)
 			started := false
-			code := c.RunLive(0, func(stdin io.WriteCloser) func() {
+			code := c.RunLive(0, func(stdin io.WriteCloser) {
 				started = true
 				if tt.input != "" {
 					if _, err := io.WriteString(stdin, tt.input); err != nil {
 						t.Error(err)
 					}
 				}
-				return func() {}
 			})
 			if !started || code != 0 || out.String() != tt.output {
 				t.Fatalf("started=%v code=%d output=%q", started, code, out.String())
@@ -44,15 +43,21 @@ func TestExecLiveInputWaitsForEOF(t *testing.T) {
 	c := NewExecRunner().CommandContext(ctx, "/usr/bin/wc", "-l").(*execCmd)
 	var out bytes.Buffer
 	c.SetStdout(&out)
-	cleaned := false
-	code := c.RunLive(1, func(stdin io.WriteCloser) func() {
+	var input io.WriteCloser
+	code := c.RunLive(1, func(stdin io.WriteCloser) {
+		input = stdin
 		if _, err := io.WriteString(stdin, "alpha\n"); err != nil {
 			t.Error(err)
 		}
-		return func() { cleaned = true }
 	})
-	if code != 143 || out.Len() != 0 || !cleaned {
-		t.Fatalf("code=%d output=%q cleaned=%v", code, out.String(), cleaned)
+	if code != 143 || out.Len() != 0 {
+		t.Fatalf("code=%d output=%q", code, out.String())
+	}
+	if input == nil {
+		t.Fatal("not started")
+	}
+	if _, err := io.WriteString(input, "after exit\n"); err == nil {
+		t.Fatal("stdin still writable after exit")
 	}
 }
 
@@ -72,9 +77,8 @@ func TestExecLiveInputProcessesSeparateAwkReplies(t *testing.T) {
 	started := make(chan io.WriteCloser, 1)
 	done := make(chan int, 1)
 	go func() {
-		done <- c.RunLive(0, func(stdin io.WriteCloser) func() {
+		done <- c.RunLive(0, func(stdin io.WriteCloser) {
 			started <- stdin
-			return func() {}
 		})
 	}()
 	var stdin io.WriteCloser

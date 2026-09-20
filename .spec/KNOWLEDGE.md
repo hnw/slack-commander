@@ -1,5 +1,10 @@
 # KNOWLEDGE
 
+## exec stdin lifecycle の責務整理（2026-09-21）
+- `cmd/runner.go` の共通 `run` は process lifecycle を担当し、finite/live の接続差分は private な `execStdin` に分離する。finite Reader の転送・EOF は従来どおり `os/exec` に任せる。
+- `cmd/execStdin.go` は Start 前だけ writer を所有する。Start 成功後は保持を解除して LiveInput に渡し、executor の defer が unregister / endpoint.Close を担当する。`os/exec.Wait` 自体による pipe close は維持する。
+- ADR候補: ユーザーの指摘により、execCmd と LiveInput に重複していたアプリケーション側の writer close 責務を整理した。外部契約・永続化を変えない局所的で戻せる変更のため、独立 ADR の起票は見送る。
+
 ## live stdin の設計判断
 - ユーザー決定: opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。
 - ユーザー決定: reply 本文が LF で終わらなければ1つ補い、本文中の改行は保持する。

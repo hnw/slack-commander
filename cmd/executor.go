@@ -313,7 +313,7 @@ func runWithInput(
 	registry *LiveInputRegistry,
 ) int {
 	live, ok := command.(interface {
-		RunLive(int, func(io.WriteCloser) func()) int
+		RunLive(int, func(io.WriteCloser)) int
 	})
 	if !ok || registry == nil || conversation.ChannelID == "" ||
 		conversation.RootThreadTimestamp == "" {
@@ -325,20 +325,24 @@ func runWithInput(
 		ChannelID:           conversation.ChannelID,
 		RootThreadTimestamp: conversation.RootThreadTimestamp,
 	}
-	return live.RunLive(timeout, func(stdin io.WriteCloser) func() {
-		endpoint := NewLiveInput(stdin, initial, func(err error) {
-			log.Printf(
-				"[WARN] live stdin write failed channel=%s thread=%s: %v",
-				key.ChannelID,
-				key.RootThreadTimestamp,
-				err,
-			)
-		})
-		registry.Register(key, endpoint)
-		return func() {
+	var endpoint *LiveInput
+	defer func() {
+		if endpoint != nil {
 			registry.Unregister(key, endpoint)
 			endpoint.Close()
 		}
+	}()
+	onError := func(err error) {
+		log.Printf(
+			"[WARN] live stdin write failed channel=%s thread=%s: %v",
+			key.ChannelID,
+			key.RootThreadTimestamp,
+			err,
+		)
+	}
+	return live.RunLive(timeout, func(stdin io.WriteCloser) {
+		endpoint = NewLiveInput(stdin, initial, onError)
+		registry.Register(key, endpoint)
 	})
 }
 

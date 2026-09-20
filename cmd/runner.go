@@ -57,28 +57,23 @@ func (c *execCmd) SetStderr(w io.Writer) {
 // - 127: failed to start or unknown error
 // - 143: terminated by signal or timeout
 func (c *execCmd) Run(timeout int) int {
-	return c.run(timeout, nil)
+	return c.run(timeout, execStdin{})
 }
 
-func (c *execCmd) RunLive(timeout int, started func(io.WriteCloser) func()) int {
-	stdin, err := c.cmd.StdinPipe()
-	if err != nil {
+// RunLive は Start 後、Wait を妨げない入力処理の接続に writer を渡す。
+// started は入力の完了を待たずに戻り、呼び出し側が endpoint を後始末する。
+func (c *execCmd) RunLive(timeout int, started func(io.WriteCloser)) int {
+	return c.run(timeout, execStdin{onStarted: started})
+}
+
+func (c *execCmd) run(timeout int, stdin execStdin) int {
+	if err := stdin.prepare(c.cmd); err != nil {
 		if c.cmd.Stderr != nil {
 			_, _ = fmt.Fprint(c.cmd.Stderr, err)
 		}
 		return 127
 	}
-	defer func() { _ = stdin.Close() }()
-	var cleanup func()
-	defer func() {
-		if cleanup != nil {
-			cleanup()
-		}
-	}()
-	return c.run(timeout, func() { cleanup = started(stdin) })
-}
-
-func (c *execCmd) run(timeout int, started func()) int {
+	defer stdin.closeUnclaimed()
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.cmd.Cancel = func() error {
 		// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
@@ -94,9 +89,7 @@ func (c *execCmd) run(timeout int, started func()) int {
 		return 127
 	}
 
-	if started != nil {
-		started()
-	}
+	stdin.started()
 	err := c.cmd.Wait()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
