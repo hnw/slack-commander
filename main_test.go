@@ -6,7 +6,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
 )
 
 func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
@@ -28,16 +27,9 @@ func TestValidateConfigNormalizesContinuation(t *testing.T) {
 		name         string
 		continuation string
 		want         string
-		postAsReply  bool
 	}{
 		{name: "unset defaults to empty", want: ""},
-		{
-			name:         "thread accepts post as reply",
-			continuation: "thread",
-			want:         "thread",
-			postAsReply:  true,
-		},
-		{name: "thread enables post as reply", continuation: "thread", want: "thread"},
+		{name: "thread is accepted", continuation: "thread", want: "thread"},
 	}
 
 	for _, tc := range tests {
@@ -49,7 +41,7 @@ func TestValidateConfigNormalizesContinuation(t *testing.T) {
 					Keyword:      "date",
 					Command:      "date",
 					Continuation: tc.continuation,
-				}, ReplyConfig: pubsub.ReplyConfig{PostAsReply: tc.postAsReply}}},
+				}}},
 			}
 
 			if err := validateConfig(cfg); err != nil {
@@ -57,10 +49,6 @@ func TestValidateConfigNormalizesContinuation(t *testing.T) {
 			}
 			if got := cfg.Commands[0].Continuation; got != tc.want {
 				t.Fatalf("continuation = %q, want %q", got, tc.want)
-			}
-			wantPostAsReply := tc.postAsReply || tc.want == cmd.ContinuationThread
-			if got := cfg.Commands[0].PostAsReply; got != wantPostAsReply {
-				t.Fatalf("post_as_reply = %v, want %v", got, wantPostAsReply)
 			}
 		})
 	}
@@ -82,6 +70,39 @@ continuation = "thread"
 
 	if got := cfg.Commands[0].Continuation; got != cmd.ContinuationThread {
 		t.Fatalf("continuation = %q, want %q", got, cmd.ContinuationThread)
+	}
+}
+
+func TestConfigDecodesReplyBroadcast(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "default"
+command = "date"
+
+[[commands]]
+keyword = "broadcast"
+command = "date"
+reply_broadcast = true
+
+[[commands]]
+keyword = "thread-only"
+command = "date"
+reply_broadcast = false
+`, &cfg); err != nil {
+		t.Fatalf("toml.Decode() error = %v", err)
+	}
+
+	if cfg.Commands[0].ReplyBroadcast != nil {
+		t.Fatalf("default reply_broadcast = %v, want unset", *cfg.Commands[0].ReplyBroadcast)
+	}
+	if cfg.Commands[1].ReplyBroadcast == nil || !*cfg.Commands[1].ReplyBroadcast {
+		t.Fatal("reply_broadcast = true was not decoded")
+	}
+	if cfg.Commands[2].ReplyBroadcast == nil || *cfg.Commands[2].ReplyBroadcast {
+		t.Fatal("reply_broadcast = false was not decoded")
 	}
 }
 

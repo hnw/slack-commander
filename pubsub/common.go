@@ -15,10 +15,9 @@ type Config struct {
 
 // ReplyConfig defines reply formatting options.
 type ReplyConfig struct {
-	Username        string `toml:"username"`
-	IconEmoji       string `toml:"icon_emoji"`
-	IconURL         string `toml:"icon_url"`
-	PostAsReply     bool   `toml:"post_as_reply"`
-	AlwaysBroadcast bool   `toml:"always_broadcast"`
-	Monospaced      bool
+	Username       string `toml:"username"`
+	IconEmoji      string `toml:"icon_emoji"`
+	IconURL        string `toml:"icon_url"`
+	ReplyBroadcast *bool  `toml:"reply_broadcast"`
+	Monospaced     bool
 }

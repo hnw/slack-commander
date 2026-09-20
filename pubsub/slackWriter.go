@@ -203,14 +203,10 @@ func getConfig(output *cmd.CommandOutput) *ReplyConfig {
 }
 
 func getThreadTimestamp(output *cmd.CommandOutput) string {
-	cfg := getConfig(output)
-	if cfg.PostAsReply {
-		if output.ConversationContext.RootThreadTimestamp != "" {
-			return output.ConversationContext.RootThreadTimestamp
-		}
-		return getTimeStamp(output)
+	if output.ConversationContext.RootThreadTimestamp != "" {
+		return output.ConversationContext.RootThreadTimestamp
 	}
-	return ""
+	return getTimeStamp(output)
 }
 
 func getReactionTimestamp(output *cmd.CommandOutput) string {
@@ -228,16 +224,10 @@ func getText(output *cmd.CommandOutput) string {
 
 func getReplyBroadcast(output *cmd.CommandOutput) bool {
 	cfg := getConfig(output)
-	if !cfg.PostAsReply {
-		return false
-	}
-	if cfg.AlwaysBroadcast {
+	if cfg.ReplyBroadcast == nil {
 		return true
 	}
-	if output.IsErrOut {
-		return true
-	}
-	return false
+	return *cfg.ReplyBroadcast
 }
 
 func getColor(output *cmd.CommandOutput) string {
