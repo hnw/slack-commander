@@ -22,7 +22,7 @@ func TestExecLiveInput(t *testing.T) {
 			var out bytes.Buffer
 			c.SetStdout(&out)
 			started := false
-			code := c.RunLive(0, func(stdin io.WriteCloser) {
+			code := c.RunWithStdin(0, func(stdin io.WriteCloser) {
 				started = true
 				if tt.input != "" {
 					if _, err := io.WriteString(stdin, tt.input); err != nil {
@@ -44,7 +44,7 @@ func TestExecLiveInputWaitsForEOF(t *testing.T) {
 	var out bytes.Buffer
 	c.SetStdout(&out)
 	var input io.WriteCloser
-	code := c.RunLive(1, func(stdin io.WriteCloser) {
+	code := c.RunWithStdin(1, func(stdin io.WriteCloser) {
 		input = stdin
 		if _, err := io.WriteString(stdin, "alpha\n"); err != nil {
 			t.Error(err)
@@ -77,7 +77,7 @@ func TestExecLiveInputProcessesSeparateAwkReplies(t *testing.T) {
 	started := make(chan io.WriteCloser, 1)
 	done := make(chan int, 1)
 	go func() {
-		done <- c.RunLive(0, func(stdin io.WriteCloser) {
+		done <- c.RunWithStdin(0, func(stdin io.WriteCloser) {
 			started <- stdin
 		})
 	}()

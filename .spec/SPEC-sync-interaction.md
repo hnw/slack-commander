@@ -12,8 +12,8 @@ Slack thread の返信本文を、その thread で exec runner が実行中の�
 ## 確定した方針と前提
 - stdin を読まないコマンド、1行で終了するコマンドは、入力側の EOF なしで終了できること。
 - live stdin の接続・コピー処理が Run/Wait の完了を妨げてはならない。
-- EOF を必要とするコマンドの待機は本来の挙動として扱い、既存 timeout を安全弁とする。
-- timeout の値・未設定時の意味は変更せず、新たな既定 timeout や EOF 操作を追加しない。
+- `stdin_idle_timeout` は optional な秒単位の `int` とする。未指定または `0` では従来どおり自動 EOF を送らず、正の値では最後に入力を受け付けてから指定秒数後に stdin を閉じる。負数は設定エラーとする。
+- stdin の close は通常の EOF を渡す操作であり、process を kill しない。process timeout は従来どおり独立した安全弁として有効にする。
 - live stdin 対応は exec runner のみを対象とする。compose / HTTP runner は既存動作を維持する。
 - compose の live stdin 対応は tasks/compose-live-input.md の別タスクに分離する。
 - 通常出力の投稿先・reply_broadcast は既存動作を維持する。
@@ -42,7 +42,9 @@ app_mention も同じ routing table を参照する。イベントの重複排�
 - 実行待ち command queue を live reply の経路にせず、実行中でも入力を届けられる構造にする。
 - 初期 stdin（初回の2行目以降、continuation の transcript）を先に渡し、以後の reply を順に渡す。
 - 初期 stdin が空なら何も書き込まず、空行も補わない。空でなく末尾が LF でなければ LF を1つ補い、既存の改行は保持する。
-- 初期入力を渡し終えても stdin は閉じない。有限 reader を live reader に単純置換するだけの実装にはしない。
+- idle timer は Start 成功後、stdin writer を session に接続した時点から開始する。初期入力が空でも開始し、空でなければ最初の入力として扱う。TrySend で入力を正常に受け付けた時点で timer を reset し、Busy / Closed で拒否した入力は activity とみなさず reset しない。
+- `stdin_idle_timeout` が未指定または `0` なら、初期入力を渡し終えても stdin は閉じない。正の値では idle timeout が stdin を閉じて EOF を渡す。有限 reader を live reader に単純置換するだけの実装にはしない。
+- idle EOF 後は stdin 受付 endpoint を registry から解除する。process が EOF 後も処理を続けていても stdin 受付は終了してよい。endpoint 不在後の thread reply は既存 routing に進み、取得済み endpoint が Closed / Busy で拒否した reply は continuation に fallback しない。
 - exec は OS pipe の直接接続など、stdin 読み取り goroutine が Wait を保持しない接続を使う。
 - endpoint は listener を blocking stdin write から切り離し、受け付けた入力を順番に転送する。即時受付できない reply は drop してログに残し、入力保持のために無制限な queue や goroutine を増やさない。
 - 第一候補は live reply 用 channel の buffer 1 とする。producer / consumer の瞬間的なずれを吸収する最小バッファとして、転送中の入力とは別に未処理 reply を最大1件だけ保持する。writer が空いていれば受け付け、前の入力を処理中なら次の1件を保持し、その枠も埋まっていれば即時 drop してログに残す。
@@ -52,7 +54,7 @@ app_mention も同じ routing table を参照する。イベントの重複排�
 ## 既存仕様との差分
 SPEC-thread-continuation.md の「transcript 全体を stdin に渡して閉じる」は、exec のみ「渡した後も live stdin を維持する」に変更する。compose は従来の有限入力を維持する。
 continuation の eligibility、履歴の組み立て、再実行の条件は変更しない。
-EOF 待ちのコマンドは、入力末尾ではなく設定済み timeout 等によって終了する場合がある。
+EOF 待ちのコマンドは、`stdin_idle_timeout` が正なら idle EOF によって正常終了できる。EOF 後も終了しない場合は、設定済み process timeout によって終了する場合がある。
 
 ## Tech Stack / Project Structure / Code Style
 Go 1.25.0（go.mod）、標準 os/exec、slack-go/slack v0.23.1 を使用する。
@@ -78,7 +80,7 @@ unit test は routing、入力順序、登録・削除、終了競合を扱い�
 ## Success Criteria
 - date と1行 read は live stdin を開いたまま正常終了し、registry から解除される。
 - fflush を使う awk は2回の入力を逐次出力し、入力間も生存する。
-- wc -l は EOF 前に結果を出さず、設定済み timeout で停止・解除される。
+- wc -l は EOF 前に結果を出さず、`stdin_idle_timeout` を設定した場合は EOF により正常終了・解除される。idle EOF 後も終了しない場合、process timeout が設定されていれば停止・解除される。
 - exec で起動失敗・自然終了・timeout・キャンセル後に入力処理が残らない。
 - endpoint の公開直後に受け付けた reply も、初期 stdin の後に流れる。即時受付できなければ drop し、初期入力を追い越さない。
 - 受け付けた live reply は履歴取得なしで転送され、本文に履歴や role prefix が混ざらない。

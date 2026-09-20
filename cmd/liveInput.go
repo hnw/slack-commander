@@ -3,8 +3,7 @@ package cmd
 import (
 	"errors"
 	"io"
-	"strings"
-	"sync"
+	"time"
 )
 
 var (
@@ -14,25 +13,26 @@ var (
 	ErrLiveInputClosed = errors.New("live input is closed")
 )
 
-// LiveInput は listener を blocking stdin write から切り離す。
+// LiveInput は listener に interactive session の追加入力だけを公開する。
 type LiveInput struct {
-	mu       sync.Mutex
-	closed   bool
-	writer   io.WriteCloser
-	replies  chan string
-	stop     chan struct{}
-	finished chan struct{}
+	*stdinSession
 }
 
-// NewLiveInput は公開直後の reply が初期入力を追い越さないように転送順を固定する。
+func newInteractiveStdinSession(
+	initial string,
+	idle time.Duration,
+	onError func(error),
+) *LiveInput {
+	s := newStdinSession(initial, onError)
+	s.replies = make(chan string, 1)
+	s.idle = idle
+	return &LiveInput{stdinSession: s}
+}
+
+// NewLiveInput は既存の呼び出し元で idle EOF 無効の session を接続する。
 func NewLiveInput(writer io.WriteCloser, initial string, onError func(error)) *LiveInput {
-	e := &LiveInput{
-		writer:   writer,
-		replies:  make(chan string, 1),
-		stop:     make(chan struct{}),
-		finished: make(chan struct{}),
-	}
-	go e.forward(initial, onError)
+	e := newInteractiveStdinSession(initial, 0, onError)
+	e.Start(writer)
 	return e
 }
 
@@ -45,64 +45,9 @@ func (e *LiveInput) TrySend(text string) error {
 	}
 	select {
 	case e.replies <- text:
+		e.resetIdle()
 		return nil
 	default:
 		return ErrLiveInputBusy
-	}
-}
-
-// Close は blocked write を解除し、終了後に転送処理が残るのを防ぐ。
-func (e *LiveInput) Close() {
-	e.closeInput()
-	<-e.finished
-}
-
-func (e *LiveInput) closeInput() {
-	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
-		return
-	}
-	e.closed = true
-	close(e.stop)
-	e.mu.Unlock()
-	_ = e.writer.Close()
-}
-
-func (e *LiveInput) forward(initial string, onError func(error)) {
-	defer close(e.finished)
-	defer e.closeInput()
-	write := func(text string) bool {
-		select {
-		case <-e.stop:
-			return false
-		default:
-		}
-		if !strings.HasSuffix(text, "\n") {
-			text += "\n"
-		}
-		if _, err := io.WriteString(e.writer, text); err != nil {
-			e.mu.Lock()
-			closed := e.closed
-			e.mu.Unlock()
-			if !closed && onError != nil {
-				onError(err)
-			}
-			return false
-		}
-		return true
-	}
-	if initial != "" && !write(initial) {
-		return
-	}
-	for {
-		select {
-		case <-e.stop:
-			return
-		case text := <-e.replies:
-			if !write(text) {
-				return
-			}
-		}
 	}
 }

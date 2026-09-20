@@ -183,6 +183,9 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
+		if c.StdinIdleTimeout < 0 {
+			return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
+		}
 		continuation := strings.ToLower(strings.TrimSpace(c.Continuation))
 		switch continuation {
 		case "":

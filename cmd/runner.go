@@ -60,9 +60,9 @@ func (c *execCmd) Run(timeout int) int {
 	return c.run(timeout, execStdin{})
 }
 
-// RunLive は Start 後、Wait を妨げない入力処理の接続に writer を渡す。
+// RunWithStdin は Start 後、Wait を妨げない入力処理の接続に writer を渡す。
 // started は入力の完了を待たずに戻り、呼び出し側が endpoint を後始末する。
-func (c *execCmd) RunLive(timeout int, started func(io.WriteCloser)) int {
+func (c *execCmd) RunWithStdin(timeout int, started func(io.WriteCloser)) int {
 	return c.run(timeout, execStdin{onStarted: started})
 }
 

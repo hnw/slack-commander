@@ -45,15 +45,16 @@ type CommandOutput struct {
 
 // Definition describes a command definition in the configuration.
 type Definition struct {
-	Timeout      int
-	Keyword      string
-	Command      string
-	Runner       string
-	Method       string
-	URL          string
-	Headers      map[string]string
-	Body         string
-	Continuation string
+	StdinIdleTimeout int `toml:"stdin_idle_timeout"`
+	Timeout          int
+	Keyword          string
+	Command          string
+	Runner           string
+	Method           string
+	URL              string
+	Headers          map[string]string
+	Body             string
+	Continuation     string
 }
 
 // IsThreadContinuation reports whether this definition resumes from thread replies.
@@ -298,7 +299,8 @@ func runMatchedCommand(
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithInput(execCmd, m.cfg.Timeout, stdinText, input.ConversationContext, registry)
+	ret := runWithInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second,
+		stdinText, input.ConversationContext, registry)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -308,30 +310,28 @@ func runMatchedCommand(
 func runWithInput(
 	command Cmd,
 	timeout int,
+	idle time.Duration,
 	initial string,
 	conversation ConversationContext,
 	registry *LiveInputRegistry,
 ) int {
-	live, ok := command.(interface {
-		RunLive(int, func(io.WriteCloser)) int
+	runner, ok := command.(interface {
+		RunWithStdin(int, func(io.WriteCloser)) int
 	})
-	if !ok || registry == nil || conversation.ChannelID == "" ||
-		conversation.RootThreadTimestamp == "" {
+	if !ok {
 		command.SetStdin(strings.NewReader(initial))
 		return command.Run(timeout)
+	}
+	if registry == nil || conversation.ChannelID == "" || conversation.RootThreadTimestamp == "" {
+		session := newStdinSession(initial, nil)
+		defer session.Close()
+		return runner.RunWithStdin(timeout, session.Start)
 	}
 	//nolint:staticcheck // ConversationContext に項目が増えても thread 識別子の2項目だけを使う。
 	key := ThreadKey{
 		ChannelID:           conversation.ChannelID,
 		RootThreadTimestamp: conversation.RootThreadTimestamp,
 	}
-	var endpoint *LiveInput
-	defer func() {
-		if endpoint != nil {
-			registry.Unregister(key, endpoint)
-			endpoint.Close()
-		}
-	}()
 	onError := func(err error) {
 		log.Printf(
 			"[WARN] live stdin write failed channel=%s thread=%s: %v",
@@ -340,8 +340,11 @@ func runWithInput(
 			err,
 		)
 	}
-	return live.RunLive(timeout, func(stdin io.WriteCloser) {
-		endpoint = NewLiveInput(stdin, initial, onError)
+	endpoint := newInteractiveStdinSession(initial, idle, onError)
+	endpoint.onClose = func() { registry.Unregister(key, endpoint) }
+	defer endpoint.Close()
+	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {
+		endpoint.Start(stdin)
 		registry.Register(key, endpoint)
 	})
 }

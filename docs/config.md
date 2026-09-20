@@ -129,9 +129,34 @@ drop した返信は再試行せず、continuation にも回しません。受�
 
 同じ thread に複数のプロセスがある場合、最後に登録されたプロセスが送信先になります。
 送信先がない場合は既存の continuation / thread 処理に進みます。command chain のプロセス切り替え中も同じ扱いです。
-初期入力の転送後も stdin は閉じないため、`wc -l` のように EOF を必要とするコマンドには既存の `timeout` を設定してください。
+初期入力の転送後も stdin は開いたままです。`wc -l` のように EOF を必要とするコマンドは、`stdin_idle_timeout` を設定すると無入力時に EOF を受け取り、正常終了できます。
 
+### stdin_idle_timeout `int`
+
+exec runner の interactive stdin を、最後に入力を受け付けてから何秒後に閉じるか指定します。
+省略または `0` は無効で、自動では EOF を送りません。compose / HTTP runner には適用しません。
+負数は設定エラーです。
+
+計測はプロセスの Start 成功後、stdin writer を session に接続した時点から始まります。
+初期入力が空でも計測し、空でなければ最初の入力として扱います。
+返信を受け付けるたびに期限を延長します。書き込み完了は待たず、Busy で drop した返信や Closed で拒否した返信では延長しません。
+
+期限が来ると stdin を閉じ、通常の EOF を渡します。プロセスを強制終了する設定ではありません。
+入力先の登録も解除するため、その後の返信は送信先がない場合の既存 routing に進みます。
+すでに入力先を取得した返信が終了と競合して Closed になった場合は、continuation に回しません。
+
+```toml
+[[commands]]
+keyword = "agent"
+command = "..."
+stdin_idle_timeout = 300
+timeout = 3600
+```
+
+この例では、300秒間入力を受け付けなければ EOF を渡します。
+EOF 後も終了しないプロセスには、起動から3600秒の `timeout` が最終的な安全弁として働きます。
 
 ### timeout `int`
 
 外部コマンドのタイムアウト時間を秒で指定します。
+プロセスの実行時間を制限する設定で、stdin の無入力時間を計る `stdin_idle_timeout` とは独立しています。

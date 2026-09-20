@@ -6,7 +6,6 @@ import (
 )
 
 // execStdin は Start 前の接続を所有し、成功後は入力側へ所有権を渡す。
-// finite input の転送と EOF は os/exec に任せ、元の Reader をそのまま使う。
 type execStdin struct {
 	onStarted func(io.WriteCloser)
 	unclaimed io.WriteCloser

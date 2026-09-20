@@ -1,12 +1,19 @@
 # KNOWLEDGE
 
+## stdin session と idle EOF（2026-09-21）
+- exec の finite / interactive は private な `stdinSession` の Start / Close を共有し、EOF のアプリケーション側所有者を session に統一する。finite は入力を改変せず転送後に閉じ、interactive のみ LF 補完・追加入力を扱う。
+- idle timer は interactive session が所有する。writer 接続時に開始し、TrySend の受付成功時に reset する。Busy / Closed は activity に含めず、受付と期限切れを同じロックで順序付ける。process timeout とは独立し、idle EOF 自体は kill しない。
+- `stdin_idle_timeout` は秒単位の `int` で、未指定または `0` は無効、正の値のみ有効、負数は設定エラーとする。
+- Executor が session の終了通知で unregister し、process 終了時は defer Close で転送処理を回収する。登録時に closed を確認し、Start 直後の EOF / write error と登録の競合でも stale endpoint を残さない。
+- ADR候補: ユーザーの確定仕様により、以前の「EOF 待ちは process timeout で扱う」方針に任意の stdin idle EOF を追加する。既定値0で従来動作を維持し、EOF による正常終了と強制終了の安全弁を分離する。局所的で戻せる追加設定のため独立 ADR は見送り、この節を判断記録とする。
+
 ## exec stdin lifecycle の責務整理（2026-09-21）
-- `cmd/runner.go` の共通 `run` は process lifecycle を担当し、finite/live の接続差分は private な `execStdin` に分離する。finite Reader の転送・EOF は従来どおり `os/exec` に任せる。
+- `cmd/runner.go` の共通 `run` は process lifecycle を担当し、接続は private な `execStdin` に分離する。finite Reader を `os/exec` に任せる旧方式は、上記 stdin session へ移行した。
 - `cmd/execStdin.go` は Start 前だけ writer を所有する。Start 成功後は保持を解除して LiveInput に渡し、executor の defer が unregister / endpoint.Close を担当する。`os/exec.Wait` 自体による pipe close は維持する。
 - ADR候補: ユーザーの指摘により、execCmd と LiveInput に重複していたアプリケーション側の writer close 責務を整理した。外部契約・永続化を変えない局所的で戻せる変更のため、独立 ADR の起票は見送る。
 
 ## live stdin の設計判断
-- ユーザー決定: opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。
+- ユーザー決定: live 入力自体に opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。任意の idle EOF は上記の追加仕様に従う。
 - ユーザー決定: reply 本文が LF で終わらなければ1つ補い、本文中の改行は保持する。
 - ユーザー決定: 初期 stdin にも末尾 LF 補完を適用する。ただし初期 stdin が空の場合は空行を送らない。
 - ユーザー決定: live reply は本文を保持し、command parsing 用の変換を通さない。メンション・URL・引用符等の変換は実利用で必要になった時点で再検討する。

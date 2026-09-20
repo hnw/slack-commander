@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -77,7 +78,8 @@ func TestLiveInputReportsWriteError(t *testing.T) {
 func TestLiveInputRegistryReplacement(t *testing.T) {
 	var registry LiveInputRegistry
 	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
-	a, b := &LiveInput{}, &LiveInput{}
+	a := newInteractiveStdinSession("", 0, nil)
+	b := newInteractiveStdinSession("", 0, nil)
 	registry.Register(key, a)
 	if registry.Lookup(key) != a {
 		t.Fatal("registration not found")
@@ -99,4 +101,27 @@ func TestLiveInputRegistryReplacement(t *testing.T) {
 	if registry.Lookup(key) != nil {
 		t.Fatal("old endpoint restored")
 	}
+}
+
+func TestLiveInputIdleCleanupKeepsNewRegistration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var registry LiveInputRegistry
+		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+		r, w := io.Pipe()
+		defer func() { _ = r.Close() }()
+		old := newInteractiveStdinSession("", time.Second, nil)
+		old.onClose = func() { registry.Unregister(key, old) }
+		defer old.Close()
+		old.Start(w)
+		registry.Register(key, old)
+		newer := newInteractiveStdinSession("", 0, nil)
+		defer newer.Close()
+		registry.Register(key, newer)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		registry.Register(key, old)
+		if registry.Lookup(key) != newer {
+			t.Fatal("closed endpoint replaced or removed newer registration")
+		}
+	})
 }

@@ -16,6 +16,11 @@ type LiveInputRegistry struct {
 
 // Register は多重起動を制御せず、最後に登録された process を送信先にする。
 func (r *LiveInputRegistry) Register(key ThreadKey, input *LiveInput) {
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if input.closed {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.inputs == nil {
