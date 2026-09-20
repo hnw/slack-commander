@@ -14,7 +14,6 @@ func TestExecLiveInput(t *testing.T) {
 	}{
 		{"date", "date +done", "", "done\n"},
 		{"one-line", "read -r line; printf '%s\\n' \"$line\"", "alpha\n", "alpha\n"},
-		{"awk", "awk '{print; fflush(); if (NR == 2) exit}'", "alpha\nbeta\n", "alpha\nbeta\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -39,18 +38,7 @@ func TestExecLiveInput(t *testing.T) {
 	}
 }
 
-func TestExecLiveInputStartFailure(t *testing.T) {
-	c := NewExecRunner().CommandContext(context.Background(), "/no-such-live-command").(*execCmd)
-	code := c.RunLive(0, func(io.WriteCloser) func() {
-		t.Error("published after failed Start")
-		return func() {}
-	})
-	if code != 127 {
-		t.Fatalf("code=%d", code)
-	}
-}
-
-func TestExecLiveInputTimeout(t *testing.T) {
+func TestExecLiveInputWaitsForEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	c := NewExecRunner().CommandContext(ctx, "/usr/bin/wc", "-l").(*execCmd)

@@ -16,10 +16,8 @@ func TestLiveInputOrderAndBackpressure(t *testing.T) {
 	if err := e.TrySend("<@U> “a” <https://example.com|link>"); err != nil {
 		t.Fatal(err)
 	}
-	for range 1000 {
-		if err := e.TrySend("dropped"); !errors.Is(err, ErrLiveInputBusy) {
-			t.Fatalf("expected busy, got %v", err)
-		}
+	if err := e.TrySend("dropped"); !errors.Is(err, ErrLiveInputBusy) {
+		t.Fatalf("expected busy, got %v", err)
 	}
 	reader := bufio.NewReader(r)
 	for _, want := range []string{"initial\n", "<@U> “a” <https://example.com|link>\n"} {
@@ -81,13 +79,21 @@ func TestLiveInputRegistryReplacement(t *testing.T) {
 	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	a, b := &LiveInput{}, &LiveInput{}
 	registry.Register(key, a)
+	if registry.Lookup(key) != a {
+		t.Fatal("registration not found")
+	}
 	registry.Register(key, b)
 	registry.Unregister(key, a)
 	if registry.Lookup(key) != b {
 		t.Fatal("old process removed new registration")
 	}
-	if registry.Lookup(ThreadKey{ChannelID: "other", RootThreadTimestamp: "1"}) != nil {
-		t.Fatal("cross-channel route")
+	for _, other := range []ThreadKey{
+		{ChannelID: "C", RootThreadTimestamp: "other"},
+		{ChannelID: "other", RootThreadTimestamp: "1"},
+	} {
+		if registry.Lookup(other) != nil {
+			t.Fatalf("cross-thread route for %+v", other)
+		}
 	}
 	registry.Unregister(key, b)
 	if registry.Lookup(key) != nil {

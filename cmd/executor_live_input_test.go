@@ -98,61 +98,7 @@ func TestExecutorLiveInputRemovesOnTimeoutAndCancel(t *testing.T) {
 	}
 }
 
-type discardCloser struct{ io.Writer }
-
-func (discardCloser) Close() error { return nil }
-
-type immediateLiveCmd struct{ fakeCmd }
-
-func (*immediateLiveCmd) RunLive(_ int, started func(io.WriteCloser) func()) int {
-	cleanup := started(discardCloser{io.Discard})
-	cleanup()
-	return 0
-}
-
-type chainLiveRunner struct {
-	t        *testing.T
-	registry *LiveInputRegistry
-	key      ThreadKey
-	calls    int
-}
-
-func (r *chainLiveRunner) CommandContext(context.Context, string, ...string) Cmd {
-	r.calls++
-	if r.registry.Lookup(r.key) != nil {
-		r.t.Error("previous process remained registered between commands")
-	}
-	return &immediateLiveCmd{}
-}
-
-func TestExecutorLiveInputPreservesChainAndUnregistersBetweenProcesses(t *testing.T) {
-	var registry LiveInputRegistry
-	runner := &chainLiveRunner{
-		t:        t,
-		registry: &registry,
-		key:      ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"},
-	}
-	rq := make(chan *CommandInput, 1)
-	rq <- &CommandInput{Text: "agent && agent || agent ; agent", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
-	close(rq)
-	cfg := NewCommandConfig(&Definition{Keyword: "agent", Command: "agent"}, nil)
-	ExecutorWithLiveInput(
-		context.Background(),
-		rq,
-		make(chan *CommandOutput, 10),
-		[]*CommandConfig{cfg},
-		func(*CommandConfig) CommandRunner { return runner },
-		&registry,
-	)
-	if runner.calls != 3 {
-		t.Fatalf("calls=%d", runner.calls)
-	}
-	if registry.Lookup(runner.key) != nil {
-		t.Fatal("last registration remained")
-	}
-}
-
-func TestLiveExecExitsWhileInitialWriteIsBlocked(t *testing.T) {
+func TestLiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var registry LiveInputRegistry

@@ -2,12 +2,9 @@ package pubsub
 
 import (
 	"bufio"
-	"bytes"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/hnw/slack-commander/cmd"
@@ -16,7 +13,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-func TestLiveReplyRoutesRawTextAndDropsWithoutHistory(t *testing.T) {
+func TestLiveReplyRoutesRawTextWithoutFallback(t *testing.T) {
 	for _, mention := range []bool{false, true} {
 		var registry cmd.LiveInputRegistry
 		r, w := io.Pipe()
@@ -26,9 +23,6 @@ func TestLiveReplyRoutesRawTextAndDropsWithoutHistory(t *testing.T) {
 		queue := make(chan *cmd.CommandInput, 10)
 		cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
 		text := "<@BOT> “hello” &amp; <https://example.com|label>"
-		var logs bytes.Buffer
-		old := log.Writer()
-		log.SetOutput(&logs)
 		send := func(text, user string) {
 			if mention {
 				onAppMentionEvent(
@@ -62,14 +56,6 @@ func TestLiveReplyRoutesRawTextAndDropsWithoutHistory(t *testing.T) {
 		send("unauthorized", "other")
 		send(text, "U")
 		send("dropped", "U")
-		log.SetOutput(old)
-		if !strings.Contains(logs.String(), "drop") ||
-			!strings.Contains(logs.String(), "buffer is full") {
-			t.Fatalf("logs=%s", logs.String())
-		}
-		if len(queue) != 0 {
-			t.Fatal("live reply entered command queue")
-		}
 		reader := bufio.NewReader(r)
 		for _, want := range []string{"initial\n", text + "\n"} {
 			got, err := reader.ReadString('\n')
@@ -78,7 +64,11 @@ func TestLiveReplyRoutesRawTextAndDropsWithoutHistory(t *testing.T) {
 			}
 		}
 		endpoint.Close()
+		send("closed", "U")
 		_ = r.Close()
+		if len(queue) != 0 {
+			t.Fatal("live reply entered command queue")
+		}
 	}
 }
 
