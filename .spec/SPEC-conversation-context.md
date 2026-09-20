@@ -9,7 +9,7 @@ Slack のイベントを、返信対象のイベント本体とは独立した c
 - 通常のチャンネル投稿は `channel ID` と自分の `timestamp` を root thread として持つ。
 - スレッド内の返信は `channel ID` とイベントの `thread_ts` を root thread として持つ。
 - 同じスレッドのすべての入力は、同一の会話コンテキストを得る。
-- 出力は明示された root thread に投稿できる。既存の `post_as_reply` の挙動は後方互換に保つ。
+- 出力は明示された root thread に投稿できる。
 
 ## Tech Stack
 
@@ -65,7 +65,7 @@ type ConversationContext struct {
 
 - `CommandInput` と `CommandOutput` が typed な conversation context を運べる。
 - root の算出規則が通常投稿・スレッド返信・app mention で一貫する。
-- `post_as_reply` が true の出力は、入力メッセージではなく context の root thread に投稿される。
+- thread への出力先は、context の root thread から決定される。
 - `go test ./...`、`go vet ./...`、`golangci-lint run`、`go build ./...` が通る。
 
 ## Open Questions

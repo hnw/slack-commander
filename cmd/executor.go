@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -89,6 +91,18 @@ func ExecutorWithRunner(
 	cfgs []*CommandConfig,
 	runnerFactory RunnerFactory,
 ) {
+	ExecutorWithLiveInput(ctx, rq, wq, cfgs, runnerFactory, nil)
+}
+
+// ExecutorWithLiveInput は実行中の入力先を listener と他の worker に公開する。
+func ExecutorWithLiveInput(
+	ctx context.Context,
+	rq chan *CommandInput,
+	wq chan *CommandOutput,
+	cfgs []*CommandConfig,
+	runnerFactory RunnerFactory,
+	registry *LiveInputRegistry,
+) {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
 	matchers := buildMatchers(cfgs, runnerFactory)
 
@@ -108,7 +122,7 @@ func ExecutorWithRunner(
 			if input.ThreadContinuation && !isThreadContinuationEligible(cmds, matchers) {
 				continue
 			}
-			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq)
+			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
 		}
 	}
 }
@@ -192,6 +206,7 @@ func executeCommands(
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
+	registry *LiveInputRegistry,
 ) int {
 	ret := 0
 	for i, cmd := range cmds {
@@ -231,7 +246,7 @@ func executeCommands(
 			ret = writeParseError(wq, input, parseErr)
 			return ret
 		}
-		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq)
+		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, registry)
 	}
 	return ret
 }
@@ -264,6 +279,7 @@ func runMatchedCommand(
 	stdinText string,
 	input *CommandInput,
 	wq chan *CommandOutput,
+	registry *LiveInputRegistry,
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
@@ -278,16 +294,52 @@ func runMatchedCommand(
 	defer cancel()
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
-	execCmd.SetStdin(strings.NewReader(stdinText))
 	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := execCmd.Run(m.cfg.Timeout)
+	ret := runWithInput(execCmd, m.cfg.Timeout, stdinText, input.ConversationContext, registry)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
 	return ret
+}
+
+func runWithInput(
+	command Cmd,
+	timeout int,
+	initial string,
+	conversation ConversationContext,
+	registry *LiveInputRegistry,
+) int {
+	live, ok := command.(interface {
+		RunLive(int, func(io.WriteCloser) func()) int
+	})
+	if !ok || registry == nil || conversation.ChannelID == "" ||
+		conversation.RootThreadTimestamp == "" {
+		command.SetStdin(strings.NewReader(initial))
+		return command.Run(timeout)
+	}
+	//nolint:staticcheck // ConversationContext に項目が増えても thread 識別子の2項目だけを使う。
+	key := ThreadKey{
+		ChannelID:           conversation.ChannelID,
+		RootThreadTimestamp: conversation.RootThreadTimestamp,
+	}
+	return live.RunLive(timeout, func(stdin io.WriteCloser) func() {
+		endpoint := NewLiveInput(stdin, initial, func(err error) {
+			log.Printf(
+				"[WARN] live stdin write failed channel=%s thread=%s: %v",
+				key.ChannelID,
+				key.RootThreadTimestamp,
+				err,
+			)
+		})
+		registry.Register(key, endpoint)
+		return func() {
+			registry.Unregister(key, endpoint)
+			endpoint.Close()
+		}
+	})
 }
 
 type parsedCommand struct {

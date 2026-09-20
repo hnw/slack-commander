@@ -8,10 +8,13 @@ import (
 )
 
 var (
-	ErrLiveInputBusy   = errors.New("live input buffer is full")
+	// ErrLiveInputBusy により、listener は入力を溜めずに drop を記録できる。
+	ErrLiveInputBusy = errors.New("live input buffer is full")
+	// ErrLiveInputClosed は、終了と競合した入力を continuation に回さないために使う。
 	ErrLiveInputClosed = errors.New("live input is closed")
 )
 
+// LiveInput は listener を blocking stdin write から切り離す。
 type LiveInput struct {
 	mu       sync.Mutex
 	closed   bool
@@ -21,6 +24,7 @@ type LiveInput struct {
 	finished chan struct{}
 }
 
+// NewLiveInput は公開直後の reply が初期入力を追い越さないように転送順を固定する。
 func NewLiveInput(writer io.WriteCloser, initial string, onError func(error)) *LiveInput {
 	e := &LiveInput{
 		writer:   writer,
@@ -32,6 +36,7 @@ func NewLiveInput(writer io.WriteCloser, initial string, onError func(error)) *L
 	return e
 }
 
+// TrySend は次の1件だけを保持し、stdin 未消費による待機の増加を防ぐ。
 func (e *LiveInput) TrySend(text string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -46,6 +51,7 @@ func (e *LiveInput) TrySend(text string) error {
 	}
 }
 
+// Close は blocked write を解除し、終了後に転送処理が残るのを防ぐ。
 func (e *LiveInput) Close() {
 	e.closeInput()
 	<-e.finished

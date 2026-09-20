@@ -10,7 +10,7 @@ import (
 
 func TestLiveInputOrderAndBackpressure(t *testing.T) {
 	r, w := io.Pipe()
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	e := NewLiveInput(w, "initial", func(err error) { t.Error(err) })
 	defer e.Close()
 	if err := e.TrySend("<@U> “a” <https://example.com|link>"); err != nil {
@@ -32,7 +32,7 @@ func TestLiveInputOrderAndBackpressure(t *testing.T) {
 
 func TestLiveInputEmptyInitialAndClose(t *testing.T) {
 	r, w := io.Pipe()
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	e := NewLiveInput(w, "", func(err error) { t.Error(err) })
 	if err := e.TrySend("alpha\n"); err != nil {
 		t.Fatal(err)

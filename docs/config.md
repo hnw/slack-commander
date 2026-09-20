@@ -118,7 +118,18 @@ botがSlackにポストする時のユーザー名を指定します。
 
 * `thread`: root 投稿のスレッド返信で新しいプロセスを起動し、conversation を継続します。command output は常に root thread への reply として投稿されます。継続時は root 投稿の1行目を command と argv の決定にのみ使用し、stdin には含めません。root 投稿の2行目以降と後続の thread conversation を stdin に渡します。
 
-実行中プロセスへの stdin 転送は未実装です。process interaction と thread continuation は別概念として扱います。
+exec runner の実行中は、同じ thread への返信を実行中プロセスの stdin に渡します。
+この転送には `continuation` や `accept_thread_message` の有効化は不要で、既存の投稿者・チャンネルの許可判定が適用されます。
+compose / HTTP runner は対象外です。
+
+初期 stdin は空文字列なら何も書き込まず、空でなければ末尾に LF がない場合だけ補います。
+返信は Slack の本文をそのまま渡し、末尾の LF だけ必要に応じて補います。メンション・URL・引用符などは変換しません。
+初期入力と受け付けた返信は順番に転送します。転送中の入力とは別に未処理の返信を最大1件保持し、その枠も埋まっていれば新しい返信を drop してログに残します。
+drop した返信は再試行せず、continuation にも回しません。受付後の stdin write error は executor 側でログに残します。
+
+同じ thread に複数のプロセスがある場合、最後に登録されたプロセスが送信先になります。
+送信先がない場合は既存の continuation / thread 処理に進みます。command chain のプロセス切り替え中も同じ扱いです。
+初期入力の転送後も stdin は閉じないため、`wc -l` のように EOF を必要とするコマンドには既存の `timeout` を設定してください。
 
 
 ### timeout `int`

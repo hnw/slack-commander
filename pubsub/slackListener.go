@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -65,6 +66,18 @@ func SlackListener(
 	cfg Config,
 	commandConfigs []*cmd.CommandConfig,
 ) {
+	SlackListenerWithLiveInput(ctx, smc, commandQueue, cfg, commandConfigs, nil)
+}
+
+// SlackListenerWithLiveInput は実行中の返信を通常 command queue から分離する。
+func SlackListenerWithLiveInput(
+	ctx context.Context,
+	smc *socketmode.Client,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+	commandConfigs []*cmd.CommandConfig,
+	registry *cmd.LiveInputRegistry,
+) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -103,9 +116,9 @@ func SlackListener(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg, commandConfigs)
+						onMessageEvent(smc, ev, commandQueue, cfg, commandConfigs, registry)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, commandQueue, cfg)
+						onAppMentionEvent(smc, ev, commandQueue, cfg, registry)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -251,6 +264,7 @@ func onMessageEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	commandConfigs []*cmd.CommandConfig,
+	registry *cmd.LiveInputRegistry,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -260,6 +274,9 @@ func onMessageEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
+		if routeLiveReply(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
+			return
+		}
 		input, matched, err := newThreadContinuationInput(smc, ev, cfg, commandConfigs)
 		if err != nil {
 			smc.Debugf("[WARN] thread continuation unavailable: %v", err)
@@ -291,6 +308,7 @@ func onAppMentionEvent(
 	ev *slackevents.AppMentionEvent,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
+	registry *cmd.LiveInputRegistry,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -300,6 +318,9 @@ func onAppMentionEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
+		if routeLiveReply(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
+			return
+		}
 		if !cfg.AcceptThreadMessage {
 			return
 		}
@@ -313,6 +334,17 @@ func onAppMentionEvent(
 		return
 	}
 	smc.Debugf("[DEBUG]: command = '%s'", text)
+}
+
+func routeLiveReply(registry *cmd.LiveInputRegistry, channel, thread, text string) bool {
+	endpoint := registry.Lookup(cmd.ThreadKey{ChannelID: channel, RootThreadTimestamp: thread})
+	if endpoint == nil {
+		return false
+	}
+	if err := endpoint.TrySend(text); err != nil {
+		log.Printf("[WARN] dropping live input channel=%s thread=%s: %v", channel, thread, err)
+	}
+	return true
 }
 
 func newThreadContinuationInput(

@@ -1,0 +1,17 @@
+# KNOWLEDGE
+
+## live stdin の設計判断
+- ユーザー決定: opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。
+- ユーザー決定: reply 本文が LF で終わらなければ1つ補い、本文中の改行は保持する。
+- ユーザー決定: 初期 stdin にも末尾 LF 補完を適用する。ただし初期 stdin が空の場合は空行を送らない。
+- ユーザー決定: live reply は本文を保持し、command parsing 用の変換を通さない。メンション・URL・引用符等の変換は実利用で必要になった時点で再検討する。
+- ユーザー決定: registry は `(ChannelID, RootThreadTimestamp) -> live input endpoint` の一時的な routing table に限定する。履歴は Slack を正とし、固定キュー容量・重複排除・thread reservation・多重起動制御は追加しない。
+- ユーザー決定: 今回は exec のみ対応する。compose は既存動作を維持し、live stdin 対応と検証は tasks/compose-live-input.md の別タスクにする。
+- ユーザー決定: Start 成功後、初期入力を先頭として順序確定してから endpoint を公開する。同じ thread の送信先は最後に登録された process とする。
+- ユーザー決定: live reply channel は buffer 1 を第一候補とし、producer / consumer の瞬間的なずれを吸収する。転送中とは別に未処理 reply を1件だけ保持し、即時受付できない reply は drop してログに残す。無制限 queue / goroutine は作らない。
+- ユーザー決定: chain 切り替え中も registry に対象がなければ既存 routing に進む。thread reservation / chain-level state は追加しない。
+- exec 相当の実測では、OS pipe 直接接続で date / 1行 read は EOF 前に終了、awk は逐次出力、wc -l は EOF 待ちとなった。
+- io.Pipe を exec.Cmd.Stdin に渡す場合の Wait ブロックは、子プロセスの stdin semantics と分離する。Go の入力コピー処理を終了待ちに残さない接続が必要。
+- 実験コードとログ: /private/tmp/slack-stdin-check.J2oHRy/{main.go,results.jsonl}。compose の実環境検証は未実施。
+- ADR候補: 互換性懸念だけで opt-in を増やさず、live stdin を標準動作とし EOF 待ちには既存 timeout を使う。根拠はユーザー指示と上記実測。仕様承認時に起票を判断する。
+- ADR候補: registry を process の一時参照だけに限定し、先回りしたキュー・重複・起動制御を外す。ユーザーが計画を簡素化するよう指示したため。追加策は実際の問題を観測してから検討する。
