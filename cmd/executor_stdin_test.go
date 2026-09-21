@@ -113,13 +113,17 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	if err != nil || string(got) != "no-final-newline" || registry.Lookup(key) != nil {
 		t.Fatalf("finite input changed: %q err=%v", got, err)
 	}
-	for _, runner := range []CommandRunner{NewHTTPRunner(nil), NewComposeRunner("")} {
-		c := runner.CommandContext(context.Background(), "unused")
-		if _, live := c.(interface {
-			RunWithStdin(int, func(io.WriteCloser)) int
-		}); live {
-			t.Fatalf("non-exec runner %T gained interactive stdin", runner)
-		}
+	compose := NewComposeRunner("").CommandContext(context.Background(), "unused")
+	if _, live := compose.(interface {
+		RunWithStdin(int, func(io.WriteCloser)) int
+	}); !live {
+		t.Fatalf("compose runner %T lacks interactive stdin", compose)
+	}
+	http := NewHTTPRunner(nil).CommandContext(context.Background(), "unused")
+	if _, live := http.(interface {
+		RunWithStdin(int, func(io.WriteCloser)) int
+	}); live {
+		t.Fatalf("http runner %T gained interactive stdin", http)
 	}
 }
 

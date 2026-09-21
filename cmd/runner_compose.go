@@ -87,20 +87,50 @@ func (c *composeCmd) SetStderr(w io.Writer) {
 }
 
 func (c *composeCmd) Run(timeout int) int {
+	if code, invalid := c.validate(); invalid {
+		return code
+	}
+	return c.finish(timeout, c.cmd.Run())
+}
+
+// RunWithStdin starts the compose command before exposing its stdin writer.
+// The callback owns the writer after it is called.
+func (c *composeCmd) RunWithStdin(timeout int, started func(io.WriteCloser)) int {
+	if code, invalid := c.validate(); invalid {
+		return code
+	}
+	stdin, err := c.cmd.StdinPipe()
+	if err != nil {
+		return c.finish(timeout, err)
+	}
+	if err := c.cmd.Start(); err != nil {
+		return c.finish(timeout, err)
+	}
+	if started != nil {
+		started(stdin)
+	} else {
+		_ = stdin.Close()
+	}
+	return c.finish(timeout, c.cmd.Wait())
+}
+
+func (c *composeCmd) validate() (int, bool) {
 	if c.loadErr != nil {
 		if c.stderr != nil {
 			_, _ = fmt.Fprintf(c.stderr, "%v", c.loadErr)
 		}
-		return 127
+		return 127, true
 	}
 	if c.cmd == nil {
 		if c.stderr != nil {
 			_, _ = fmt.Fprintf(c.stderr, "Error: compose command is nil")
 		}
-		return 127
+		return 127, true
 	}
+	return 0, false
+}
 
-	err := c.cmd.Run()
+func (c *composeCmd) finish(timeout int, err error) int {
 	if err == nil {
 		return 0
 	}

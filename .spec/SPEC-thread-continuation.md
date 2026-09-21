@@ -4,7 +4,7 @@
 
 `continuation = "thread"` は、Slack thread の返信を受け、同じ command definition で新しいプロセスを起動して会話を継続する設定である。これは非同期実行モードではない。
 
-exec runner のプロセスが生存中の返信は SPEC-sync-interaction.md に従い、そのプロセスの `InteractiveStdin` endpoint へ渡す。process lifecycle と continuation は別の概念として扱う。
+exec / compose runner のプロセスが生存中の返信は SPEC-sync-interaction.md に従い、そのプロセスの `InteractiveStdin` endpoint へ渡す。process lifecycle と continuation は別の概念として扱う。
 
 ## Configuration
 
@@ -22,7 +22,7 @@ continuation = "thread"
 1. 初回実行は通常の command 実行と同じ process を起動し、出力を root thread へ投稿する。
 2. thread reply を受信すると、current configuration から root message の1行目を再評価する。
 3. 現在も `continuation = "thread"` に一致するときだけ、thread history を取得して transcript を構築する。
-4. 元の command と同じ設定で新しい process を起動し、transcript 全体を stdin に渡す。exec は SPEC-sync-interaction.md に従って必要な末尾 LF を補い、初期入力として順序確定してから endpoint を公開し、live stdin を維持する。compose は従来どおり有限の transcript を渡して入力を閉じる。
+4. 元の command と同じ設定で新しい process を起動し、transcript 全体を stdin に渡す。exec / compose は SPEC-sync-interaction.md に従って必要な末尾 LF を補い、初期入力として順序確定してから endpoint を公開し、live stdin を維持する。
 5. stdout / stderr / 終了状態は通常実行と同じ方法で処理し、同じ root thread に出力する。
 
 サーバーは command ID や conversation history を永続化しない。再起動後も Slack の root message と thread replies、現在の設定から再構成する。
@@ -43,7 +43,7 @@ slack-commander 自身の出力だけを `assistant:` とし、許可済みの�
 
 ## Boundaries
 
-- 実行中 process への stdin 転送、waiting status protocol、`thread` 以外の continuation policy、transcript format 選択、reply broadcast 出力モデルはこの continuation 仕様の範囲外とする。exec の live stdin は SPEC-sync-interaction.md で定める。
+- 実行中 process への stdin 転送、waiting status protocol、`thread` 以外の continuation policy、transcript format 選択、reply broadcast 出力モデルはこの continuation 仕様の範囲外とする。exec / compose の live stdin は SPEC-sync-interaction.md で定める。
 - thread reply は root command の matcher 入力にしない。eligibility は最初の parsed command が current configuration で `continuation = "thread"` に一致するかだけで判定する。
 - Slack API error、空の history、未知の continuation は実行しない。
 
