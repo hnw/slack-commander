@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -43,15 +45,16 @@ type CommandOutput struct {
 
 // Definition describes a command definition in the configuration.
 type Definition struct {
-	Timeout      int
-	Keyword      string
-	Command      string
-	Runner       string
-	Method       string
-	URL          string
-	Headers      map[string]string
-	Body         string
-	Continuation string
+	StdinIdleTimeout int `toml:"stdin_idle_timeout"`
+	Timeout          int
+	Keyword          string
+	Command          string
+	Runner           string
+	Method           string
+	URL              string
+	Headers          map[string]string
+	Body             string
+	Continuation     string
 }
 
 // IsThreadContinuation reports whether this definition resumes from thread replies.
@@ -89,6 +92,18 @@ func ExecutorWithRunner(
 	cfgs []*CommandConfig,
 	runnerFactory RunnerFactory,
 ) {
+	ExecutorWithThreadInput(ctx, rq, wq, cfgs, runnerFactory, nil)
+}
+
+// ExecutorWithThreadInput は実行中の thread 入力先を listener と他の worker に公開する。
+func ExecutorWithThreadInput(
+	ctx context.Context,
+	rq chan *CommandInput,
+	wq chan *CommandOutput,
+	cfgs []*CommandConfig,
+	runnerFactory RunnerFactory,
+	registry *ThreadInputRegistry,
+) {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
 	matchers := buildMatchers(cfgs, runnerFactory)
 
@@ -108,7 +123,7 @@ func ExecutorWithRunner(
 			if input.ThreadContinuation && !isThreadContinuationEligible(cmds, matchers) {
 				continue
 			}
-			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq)
+			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
 		}
 	}
 }
@@ -192,6 +207,7 @@ func executeCommands(
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
+	registry *ThreadInputRegistry,
 ) int {
 	ret := 0
 	for i, cmd := range cmds {
@@ -231,7 +247,7 @@ func executeCommands(
 			ret = writeParseError(wq, input, parseErr)
 			return ret
 		}
-		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq)
+		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, registry)
 	}
 	return ret
 }
@@ -264,6 +280,7 @@ func runMatchedCommand(
 	stdinText string,
 	input *CommandInput,
 	wq chan *CommandOutput,
+	registry *ThreadInputRegistry,
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
@@ -278,16 +295,58 @@ func runMatchedCommand(
 	defer cancel()
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
-	execCmd.SetStdin(strings.NewReader(stdinText))
 	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := execCmd.Run(m.cfg.Timeout)
+	ret := runWithInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second,
+		stdinText, input.ConversationContext, registry)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
 	return ret
+}
+
+func runWithInput(
+	command Cmd,
+	timeout int,
+	idle time.Duration,
+	initial string,
+	conversation ConversationContext,
+	registry *ThreadInputRegistry,
+) int {
+	runner, ok := command.(interface {
+		RunWithStdin(int, func(io.WriteCloser)) int
+	})
+	if !ok {
+		command.SetStdin(strings.NewReader(initial))
+		return command.Run(timeout)
+	}
+	if registry == nil || conversation.ChannelID == "" || conversation.RootThreadTimestamp == "" {
+		session := newStdinSession(initial, nil)
+		defer session.Close()
+		return runner.RunWithStdin(timeout, session.Start)
+	}
+	//nolint:staticcheck // ConversationContext に項目が増えても thread 識別子の2項目だけを使う。
+	key := ThreadKey{
+		ChannelID:           conversation.ChannelID,
+		RootThreadTimestamp: conversation.RootThreadTimestamp,
+	}
+	onError := func(err error) {
+		log.Printf(
+			"[WARN] live stdin write failed channel=%s thread=%s: %v",
+			key.ChannelID,
+			key.RootThreadTimestamp,
+			err,
+		)
+	}
+	endpoint := newInteractiveStdinSession(initial, idle, onError)
+	endpoint.onClose = func() { registry.Unregister(key, endpoint) }
+	defer endpoint.Close()
+	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {
+		endpoint.Start(stdin)
+		registry.Register(key, endpoint)
+	})
 }
 
 type parsedCommand struct {

@@ -66,9 +66,7 @@ func main() {
 		return
 	}
 	defer func() {
-		if syncErr := logger.Sync(); syncErr != nil {
-			fmt.Fprintf(os.Stderr, "%v", syncErr)
-		}
+		_ = logger.Sync()
 	}()
 	sugar := logger.Sugar()
 	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
@@ -110,6 +108,7 @@ func main() {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
+	var threadInputs cmd.ThreadInputRegistry
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
 	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
@@ -129,7 +128,14 @@ func main() {
 		executorWG.Add(1)
 		go func() {
 			defer executorWG.Done()
-			cmd.ExecutorWithRunner(ctx, commandQueue, outputQueue, cmdConfig, runnerFactory)
+			cmd.ExecutorWithThreadInput(
+				ctx,
+				commandQueue,
+				outputQueue,
+				cmdConfig,
+				runnerFactory,
+				&threadInputs,
+			)
 		}()
 	}
 	var writerWG sync.WaitGroup
@@ -142,7 +148,14 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListener(ctx, smc, commandQueue, cfg.PubSubConfig, cmdConfig)
+		pubsub.SlackListenerWithThreadInput(
+			ctx,
+			smc,
+			commandQueue,
+			cfg.PubSubConfig,
+			cmdConfig,
+			&threadInputs,
+		)
 	}()
 
 	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -170,6 +183,9 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
+		if c.StdinIdleTimeout < 0 {
+			return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
+		}
 		continuation := strings.ToLower(strings.TrimSpace(c.Continuation))
 		switch continuation {
 		case "":

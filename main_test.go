@@ -8,6 +8,68 @@ import (
 	"github.com/hnw/slack-commander/cmd"
 )
 
+func TestConfigStdinIdleTimeout(t *testing.T) {
+	for _, setting := range []string{"", "stdin_idle_timeout = 0", "stdin_idle_timeout = 300"} {
+		var cfg Config
+		_, err := toml.Decode(
+			"[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\ntimeout = 3600\n"+setting,
+			&cfg,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if strings.HasSuffix(setting, "300") {
+			want = 300
+		}
+		if len(cfg.Commands) != 1 || cfg.Commands[0].StdinIdleTimeout != want ||
+			cfg.Commands[0].Timeout != 3600 {
+			t.Fatalf("config=%+v", cfg)
+		}
+	}
+}
+
+func TestValidateConfigStdinIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout int
+		wantErr string
+	}{
+		{
+			name:    "negative is rejected",
+			timeout: -1,
+			wantErr: "stdin_idle_timeout must be >= 0 for keyword 'agent'",
+		},
+		{name: "zero is allowed"},
+		{name: "positive is allowed", timeout: 300},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				NumWorkers:   1,
+				Commands: []*CommandConfig{{Definition: cmd.Definition{
+					Keyword:          "agent",
+					Command:          "cat",
+					StdinIdleTimeout: tc.timeout,
+				}}},
+			}
+
+			err := validateConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
 	cfg := &Config{
 		NumWorkers: 1,

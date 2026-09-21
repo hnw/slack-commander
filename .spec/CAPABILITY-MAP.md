@@ -9,4 +9,4 @@
 
 実装順: `conversation-context` → `thread-continuation` → `sync-interaction` → `structured-blocks`
 
-今回の対象は `conversation-context` と `thread-continuation` である。後続モジュールの要件とプロトコルは、この2モジュールの実装後に別途仕様化する。
+今回の対象は `sync-interaction` であり、仕様は SPEC-sync-interaction.md に記載する。`structured-blocks` は対象外とする。
