@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestExecLiveInput(t *testing.T) {
+func TestExecStdin(t *testing.T) {
 	for _, tt := range []struct {
 		name, command, input, output string
 	}{
@@ -37,7 +37,7 @@ func TestExecLiveInput(t *testing.T) {
 	}
 }
 
-func TestExecLiveInputWaitsForEOF(t *testing.T) {
+func TestExecStdinWaitsForEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	c := NewExecRunner().CommandContext(ctx, "/usr/bin/wc", "-l").(*execCmd)
@@ -61,18 +61,18 @@ func TestExecLiveInputWaitsForEOF(t *testing.T) {
 	}
 }
 
-type liveOutputChannel chan string
+type stdinOutputChannel chan string
 
-func (w liveOutputChannel) Write(data []byte) (int, error) {
+func (w stdinOutputChannel) Write(data []byte) (int, error) {
 	w <- string(data)
 	return len(data), nil
 }
 
-func TestExecLiveInputProcessesSeparateAwkReplies(t *testing.T) {
+func TestExecStdinProcessesSeparateAwkReplies(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	c := NewExecRunner().CommandContext(ctx, "/usr/bin/awk", "{print; fflush(); if (NR == 2) exit}").(*execCmd)
-	output := make(liveOutputChannel, 4)
+	output := make(stdinOutputChannel, 4)
 	c.SetStdout(output)
 	started := make(chan io.WriteCloser, 1)
 	done := make(chan int, 1)

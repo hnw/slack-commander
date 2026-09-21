@@ -43,7 +43,7 @@ func TestStdinSessionIdleEOF(t *testing.T) {
 				if string(got) != want || err != nil {
 					t.Fatalf("got=%q err=%v", got, err)
 				}
-				if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+				if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 					t.Fatal(err)
 				}
 				e.Close()
@@ -69,7 +69,7 @@ func TestStdinSessionAcceptedInputExtendsIdle(t *testing.T) {
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
-		if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+		if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 			t.Fatal(err)
 		}
 	})
@@ -87,12 +87,12 @@ func TestStdinSessionBusyDoesNotExtendIdle(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(750 * time.Millisecond)
-		if err := e.TrySend("dropped"); !errors.Is(err, ErrLiveInputBusy) {
+		if err := e.TrySend("dropped"); !errors.Is(err, ErrInteractiveStdinBusy) {
 			t.Fatal(err)
 		}
 		time.Sleep(250 * time.Millisecond)
 		synctest.Wait()
-		if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+		if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 			t.Fatal(err)
 		}
 	})
@@ -110,7 +110,7 @@ func TestStdinSessionCloseRaces(t *testing.T) {
 			synctest.Wait()
 			e.Close()
 			_ = r.Close()
-			if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+			if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 				t.Fatal(err)
 			}
 		}

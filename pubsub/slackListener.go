@@ -66,17 +66,17 @@ func SlackListener(
 	cfg Config,
 	commandConfigs []*cmd.CommandConfig,
 ) {
-	SlackListenerWithLiveInput(ctx, smc, commandQueue, cfg, commandConfigs, nil)
+	SlackListenerWithThreadInput(ctx, smc, commandQueue, cfg, commandConfigs, nil)
 }
 
-// SlackListenerWithLiveInput は実行中の返信を通常 command queue から分離する。
-func SlackListenerWithLiveInput(
+// SlackListenerWithThreadInput は実行中の返信を通常 command queue から分離する。
+func SlackListenerWithThreadInput(
 	ctx context.Context,
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	commandConfigs []*cmd.CommandConfig,
-	registry *cmd.LiveInputRegistry,
+	registry *cmd.ThreadInputRegistry,
 ) {
 	for {
 		select {
@@ -264,7 +264,7 @@ func onMessageEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	commandConfigs []*cmd.CommandConfig,
-	registry *cmd.LiveInputRegistry,
+	registry *cmd.ThreadInputRegistry,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -274,7 +274,7 @@ func onMessageEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
-		if routeLiveReply(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
+		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
 		input, matched, err := newThreadContinuationInput(smc, ev, cfg, commandConfigs)
@@ -308,7 +308,7 @@ func onAppMentionEvent(
 	ev *slackevents.AppMentionEvent,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	registry *cmd.LiveInputRegistry,
+	registry *cmd.ThreadInputRegistry,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -318,7 +318,7 @@ func onAppMentionEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
-		if routeLiveReply(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
+		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
 		if !cfg.AcceptThreadMessage {
@@ -336,13 +336,18 @@ func onAppMentionEvent(
 	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
-func routeLiveReply(registry *cmd.LiveInputRegistry, channel, thread, text string) bool {
+func routeThreadInput(registry *cmd.ThreadInputRegistry, channel, thread, text string) bool {
 	endpoint := registry.Lookup(cmd.ThreadKey{ChannelID: channel, RootThreadTimestamp: thread})
 	if endpoint == nil {
 		return false
 	}
 	if err := endpoint.TrySend(text); err != nil {
-		log.Printf("[WARN] dropping live input channel=%s thread=%s: %v", channel, thread, err)
+		log.Printf(
+			"[WARN] dropping interactive stdin channel=%s thread=%s: %v",
+			channel,
+			thread,
+			err,
+		)
 	}
 	return true
 }

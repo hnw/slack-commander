@@ -92,17 +92,17 @@ func ExecutorWithRunner(
 	cfgs []*CommandConfig,
 	runnerFactory RunnerFactory,
 ) {
-	ExecutorWithLiveInput(ctx, rq, wq, cfgs, runnerFactory, nil)
+	ExecutorWithThreadInput(ctx, rq, wq, cfgs, runnerFactory, nil)
 }
 
-// ExecutorWithLiveInput は実行中の入力先を listener と他の worker に公開する。
-func ExecutorWithLiveInput(
+// ExecutorWithThreadInput は実行中の thread 入力先を listener と他の worker に公開する。
+func ExecutorWithThreadInput(
 	ctx context.Context,
 	rq chan *CommandInput,
 	wq chan *CommandOutput,
 	cfgs []*CommandConfig,
 	runnerFactory RunnerFactory,
-	registry *LiveInputRegistry,
+	registry *ThreadInputRegistry,
 ) {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
 	matchers := buildMatchers(cfgs, runnerFactory)
@@ -207,7 +207,7 @@ func executeCommands(
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
-	registry *LiveInputRegistry,
+	registry *ThreadInputRegistry,
 ) int {
 	ret := 0
 	for i, cmd := range cmds {
@@ -280,7 +280,7 @@ func runMatchedCommand(
 	stdinText string,
 	input *CommandInput,
 	wq chan *CommandOutput,
-	registry *LiveInputRegistry,
+	registry *ThreadInputRegistry,
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
@@ -313,7 +313,7 @@ func runWithInput(
 	idle time.Duration,
 	initial string,
 	conversation ConversationContext,
-	registry *LiveInputRegistry,
+	registry *ThreadInputRegistry,
 ) int {
 	runner, ok := command.(interface {
 		RunWithStdin(int, func(io.WriteCloser)) int

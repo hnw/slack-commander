@@ -24,7 +24,7 @@ Slack thread の返信本文を、その thread で exec runner が実行中の�
 3. 対象があれば endpoint への即時受付を試みる。受け付けられない reply は drop して理由をログに残す。履歴取得・matcher・continuation は実行しない。
 4. 対象がなければ既存のイベント種別ごとの処理へ進む。
 5. 対象を見つけた後の drop、終了競合や write 失敗はログに残し、continuation として再解釈しない。drop した reply の再試行・保留は行わない。
-listener の責務は endpoint の受付結果までとする。即時受付不能は listener が drop としてログに残し、受付後の stdin write error は live input / executor 側でログに残す。listener への非同期エラー通知は追加しない。
+listener の責務は endpoint の受付結果までとする。即時受付不能は listener が drop としてログに残し、受付後の stdin write error は `InteractiveStdin` / executor 側でログに残す。listener への非同期エラー通知は追加しない。
 accept_thread_message は通常コマンドとしての受け付け設定であり、live stdin の有効化条件にはしない。
 本文に履歴・role prefix を追加しない。受け付けた入力の順序を保ち、別 thread へ転送しない。受付成功は stdin write 完了や子プロセスの読み取り完了を意味しない。
 返信本文が LF で終わっていなければ末尾に LF を1つ補う。本文中と既存末尾の改行は保持する。
@@ -33,8 +33,8 @@ app_mention も同じ routing table を参照する。イベントの重複排�
 
 ## Process lifecycle / stdin
 - registry は worker 間で共有する一時的な routing table とし、キーは ChannelID と RootThreadTimestamp の組だけにする。ConversationContext 全体をキーにしない。
-- registry の値は thread に対応する live input endpoint とし、生の stdin 参照に限定しない。保持するのは現在の running process への入力先だけであり、会話履歴の source of truth は Slack とする。履歴・永続状態は持たせない。
-- exec process の Start 成功後、初期 stdin を live input の先頭として順序確定してから endpoint を registry に公開する。以後の reply は必ず初期 stdin より後に流す。公開前に初期入力の write 完了を待つ必要はない。
+- registry の値は thread に対応する `InteractiveStdin` とし、生の stdin 参照に限定しない。保持するのは現在の running process への入力先だけであり、会話履歴の source of truth は Slack とする。履歴・永続状態は持たせない。
+- exec process の Start 成功後、初期 stdin を `InteractiveStdin` の先頭として順序確定してから endpoint を registry に公開する。以後の reply は必ず初期 stdin より後に流す。公開前に初期入力の write 完了を待つ必要はない。
 - command chain の排他や同一 thread の多重起動制御は追加せず、既存の起動挙動を維持する。
 - command chain の process 切り替え中に registry が空になる期間も、対象なしとして既存 routing へ進む。thread reservation や chain-level state でこの race を解消しない。
 - 同じ thread で複数 process が生存する場合、最後に登録された process の endpoint を送信先とする。終了時は自身の登録と一致する場合だけ削除し、置換後の endpoint を古いプロセスが消さない。過去の送信先を保持・復元しない。

@@ -9,15 +9,15 @@
 
 ## exec stdin lifecycle の責務整理（2026-09-21）
 - `cmd/runner.go` の共通 `run` は process lifecycle を担当し、接続は private な `execStdin` に分離する。finite Reader を `os/exec` に任せる旧方式は、上記 stdin session へ移行した。
-- `cmd/execStdin.go` は Start 前だけ writer を所有する。Start 成功後は保持を解除して LiveInput に渡し、executor の defer が unregister / endpoint.Close を担当する。`os/exec.Wait` 自体による pipe close は維持する。
-- ADR候補: ユーザーの指摘により、execCmd と LiveInput に重複していたアプリケーション側の writer close 責務を整理した。外部契約・永続化を変えない局所的で戻せる変更のため、独立 ADR の起票は見送る。
+- `cmd/execStdin.go` は Start 前だけ writer を所有する。Start 成功後は保持を解除して `InteractiveStdin` に渡し、executor の defer が unregister / endpoint.Close を担当する。`os/exec.Wait` 自体による pipe close は維持する。
+- ADR候補: ユーザーの指摘により、execCmd と `InteractiveStdin` に重複していたアプリケーション側の writer close 責務を整理した。外部契約・永続化を変えない局所的で戻せる変更のため、独立 ADR の起票は見送る。
 
 ## live stdin の設計判断
 - ユーザー決定: live 入力自体に opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。任意の idle EOF は上記の追加仕様に従う。
 - ユーザー決定: reply 本文が LF で終わらなければ1つ補い、本文中の改行は保持する。
 - ユーザー決定: 初期 stdin にも末尾 LF 補完を適用する。ただし初期 stdin が空の場合は空行を送らない。
 - ユーザー決定: live reply は本文を保持し、command parsing 用の変換を通さない。メンション・URL・引用符等の変換は実利用で必要になった時点で再検討する。
-- ユーザー決定: registry は `(ChannelID, RootThreadTimestamp) -> live input endpoint` の一時的な routing table に限定する。履歴は Slack を正とし、固定キュー容量・重複排除・thread reservation・多重起動制御は追加しない。
+- ユーザー決定: `ThreadInputRegistry` は `(ChannelID, RootThreadTimestamp) -> InteractiveStdin` の一時的な routing table に限定する。履歴は Slack を正とし、固定キュー容量・重複排除・thread reservation・多重起動制御は追加しない。
 - ユーザー決定: 今回は exec のみ対応する。compose は既存動作を維持し、live stdin 対応と検証は tasks/compose-live-input.md の別タスクにする。
 - ユーザー決定: Start 成功後、初期入力を先頭として順序確定してから endpoint を公開する。同じ thread の送信先は最後に登録された process とする。
 - ユーザー決定: live reply channel は buffer 1 を第一候補とし、producer / consumer の瞬間的なずれを吸収する。転送中とは別に未処理 reply を1件だけ保持し、即時受付できない reply は drop してログに残す。無制限 queue / goroutine は作らない。

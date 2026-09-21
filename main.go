@@ -108,7 +108,7 @@ func main() {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	var liveInputs cmd.LiveInputRegistry
+	var threadInputs cmd.ThreadInputRegistry
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
 	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
@@ -128,13 +128,13 @@ func main() {
 		executorWG.Add(1)
 		go func() {
 			defer executorWG.Done()
-			cmd.ExecutorWithLiveInput(
+			cmd.ExecutorWithThreadInput(
 				ctx,
 				commandQueue,
 				outputQueue,
 				cmdConfig,
 				runnerFactory,
-				&liveInputs,
+				&threadInputs,
 			)
 		}()
 	}
@@ -148,13 +148,13 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListenerWithLiveInput(
+		pubsub.SlackListenerWithThreadInput(
 			ctx,
 			smc,
 			commandQueue,
 			cfg.PubSubConfig,
 			cmdConfig,
-			&liveInputs,
+			&threadInputs,
 		)
 	}()
 

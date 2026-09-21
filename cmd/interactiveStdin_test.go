@@ -9,15 +9,15 @@ import (
 	"time"
 )
 
-func TestLiveInputOrderAndBackpressure(t *testing.T) {
+func TestInteractiveStdinOrderAndBackpressure(t *testing.T) {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
-	e := NewLiveInput(w, "initial", func(err error) { t.Error(err) })
+	e := NewInteractiveStdin(w, "initial", func(err error) { t.Error(err) })
 	defer e.Close()
 	if err := e.TrySend("<@U> “a” <https://example.com|link>"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.TrySend("dropped"); !errors.Is(err, ErrLiveInputBusy) {
+	if err := e.TrySend("dropped"); !errors.Is(err, ErrInteractiveStdinBusy) {
 		t.Fatalf("expected busy, got %v", err)
 	}
 	reader := bufio.NewReader(r)
@@ -29,10 +29,10 @@ func TestLiveInputOrderAndBackpressure(t *testing.T) {
 	}
 }
 
-func TestLiveInputEmptyInitialAndClose(t *testing.T) {
+func TestInteractiveStdinEmptyInitialAndClose(t *testing.T) {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
-	e := NewLiveInput(w, "", func(err error) { t.Error(err) })
+	e := NewInteractiveStdin(w, "", func(err error) { t.Error(err) })
 	if err := e.TrySend("alpha\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -50,16 +50,16 @@ func TestLiveInputEmptyInitialAndClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("close did not unblock writer")
 	}
-	if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+	if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 		t.Fatalf("expected closed, got %v", err)
 	}
 }
 
-func TestLiveInputReportsWriteError(t *testing.T) {
+func TestInteractiveStdinReportsWriteError(t *testing.T) {
 	r, w := io.Pipe()
 	_ = r.Close()
 	errs := make(chan error, 1)
-	e := NewLiveInput(w, "initial", func(err error) { errs <- err })
+	e := NewInteractiveStdin(w, "initial", func(err error) { errs <- err })
 	defer e.Close()
 	select {
 	case err := <-errs:
@@ -70,13 +70,13 @@ func TestLiveInputReportsWriteError(t *testing.T) {
 		t.Fatal("no write error")
 	}
 	<-e.finished
-	if err := e.TrySend("late"); !errors.Is(err, ErrLiveInputClosed) {
+	if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 		t.Fatal(err)
 	}
 }
 
-func TestLiveInputRegistryReplacement(t *testing.T) {
-	var registry LiveInputRegistry
+func TestThreadInputRegistryReplacement(t *testing.T) {
+	var registry ThreadInputRegistry
 	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	a := newInteractiveStdinSession("", 0, nil)
 	b := newInteractiveStdinSession("", 0, nil)
@@ -103,9 +103,9 @@ func TestLiveInputRegistryReplacement(t *testing.T) {
 	}
 }
 
-func TestLiveInputIdleCleanupKeepsNewRegistration(t *testing.T) {
+func TestThreadInputRegistryIdleCleanupKeepsNewRegistration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var registry LiveInputRegistry
+		var registry ThreadInputRegistry
 		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		r, w := io.Pipe()
 		defer func() { _ = r.Close() }()

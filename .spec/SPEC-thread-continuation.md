@@ -4,7 +4,7 @@
 
 `continuation = "thread"` は、Slack thread の返信を受け、同じ command definition で新しいプロセスを起動して会話を継続する設定である。これは非同期実行モードではない。
 
-exec runner のプロセスが生存中の返信は SPEC-sync-interaction.md に従い、そのプロセスの live input endpoint へ渡す。process lifecycle と continuation は別の概念として扱う。
+exec runner のプロセスが生存中の返信は SPEC-sync-interaction.md に従い、そのプロセスの `InteractiveStdin` endpoint へ渡す。process lifecycle と continuation は別の概念として扱う。
 
 ## Configuration
 

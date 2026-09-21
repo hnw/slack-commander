@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-type liveTestCmd struct {
+type stdinTestCmd struct {
 	started chan struct{}
 	read    chan struct{}
 	lines   chan string
@@ -20,7 +20,7 @@ type liveTestCmd struct {
 func TestExecSessionEOF(t *testing.T) {
 	for _, interactive := range []bool{false, true} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		var registry LiveInputRegistry
+		var registry ThreadInputRegistry
 		conversation := ConversationContext{}
 		want := "raw input"
 		if interactive {
@@ -42,7 +42,7 @@ func TestExecSessionEOF(t *testing.T) {
 }
 
 type eofTestCmd struct {
-	liveTestCmd
+	stdinTestCmd
 	afterEOF func()
 }
 
@@ -57,7 +57,7 @@ func (c *eofTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
 
 func TestExecutorIdleUnregistersBeforeProcessExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var registry LiveInputRegistry
+		var registry ThreadInputRegistry
 		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		command := &eofTestCmd{afterEOF: func() {
 			synctest.Wait()
@@ -94,8 +94,8 @@ func TestExecutorFiniteCanExitWithoutConsumingStdin(t *testing.T) {
 	}
 }
 
-func TestExecutorLiveInputStartFailureAndFiniteFallback(t *testing.T) {
-	var registry LiveInputRegistry
+func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
+	var registry ThreadInputRegistry
 	conversation := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
 	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	command := NewExecRunner().CommandContext(context.Background(), "/no-such-live-command")
@@ -118,12 +118,16 @@ func TestExecutorLiveInputStartFailureAndFiniteFallback(t *testing.T) {
 		if _, live := c.(interface {
 			RunWithStdin(int, func(io.WriteCloser)) int
 		}); live {
-			t.Fatalf("non-exec runner %T gained live input", runner)
+			t.Fatalf("non-exec runner %T gained interactive stdin", runner)
 		}
 	}
 }
 
-func waitForLiveInput(t *testing.T, registry *LiveInputRegistry, key ThreadKey) *LiveInput {
+func waitForInteractiveStdin(
+	t *testing.T,
+	registry *ThreadInputRegistry,
+	key ThreadKey,
+) *InteractiveStdin {
 	t.Helper()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
@@ -136,12 +140,12 @@ func waitForLiveInput(t *testing.T, registry *LiveInputRegistry, key ThreadKey) 
 		select {
 		case <-ticker.C:
 		case <-timeout.C:
-			t.Fatal("live input not published")
+			t.Fatal("interactive stdin not published")
 		}
 	}
 }
 
-func TestExecutorLiveInputRemovesOnTimeoutAndCancel(t *testing.T) {
+func TestExecutorStdinRemovesOnTimeoutAndCancel(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		duration := 5 * time.Second
 		if timeout {
@@ -149,14 +153,14 @@ func TestExecutorLiveInputRemovesOnTimeoutAndCancel(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), duration)
 		t.Cleanup(cancel)
-		var registry LiveInputRegistry
+		var registry ThreadInputRegistry
 		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "read value")
 		done := make(chan int, 1)
 		go func() {
 			done <- runWithInput(command, 1, 0, "", ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}, &registry)
 		}()
-		endpoint := waitForLiveInput(t, &registry, key)
+		endpoint := waitForInteractiveStdin(t, &registry, key)
 		if !timeout {
 			cancel()
 		}
@@ -171,16 +175,16 @@ func TestExecutorLiveInputRemovesOnTimeoutAndCancel(t *testing.T) {
 		if registry.Lookup(key) != nil {
 			t.Fatal("registration survived cancellation")
 		}
-		if err := endpoint.TrySend("late"); err != ErrLiveInputClosed {
+		if err := endpoint.TrySend("late"); err != ErrInteractiveStdinClosed {
 			t.Fatalf("err=%v", err)
 		}
 	}
 }
 
-func TestLiveExecCanExitWithoutConsumingStdin(t *testing.T) {
+func TestInteractiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var registry LiveInputRegistry
+	var registry ThreadInputRegistry
 	command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "exit 0")
 	code := runWithInput(
 		command,
@@ -195,11 +199,11 @@ func TestLiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	}
 }
 
-func (*liveTestCmd) SetStdin(io.Reader)  {}
-func (*liveTestCmd) SetStdout(io.Writer) {}
-func (*liveTestCmd) SetStderr(io.Writer) {}
-func (*liveTestCmd) Run(int) int         { return 99 }
-func (c *liveTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+func (*stdinTestCmd) SetStdin(io.Reader)  {}
+func (*stdinTestCmd) SetStdout(io.Writer) {}
+func (*stdinTestCmd) SetStderr(io.Writer) {}
+func (*stdinTestCmd) Run(int) int         { return 99 }
+func (c *stdinTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -220,14 +224,14 @@ type singleCmdRunner struct{ command Cmd }
 
 func (r singleCmdRunner) CommandContext(context.Context, string, ...string) Cmd { return r.command }
 
-func TestExecutorLiveInputPublishesAfterInitialIsOrdered(t *testing.T) {
+func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	for _, continuation := range []bool{false, true} {
-		c := &liveTestCmd{
+		c := &stdinTestCmd{
 			started: make(chan struct{}),
 			read:    make(chan struct{}),
 			lines:   make(chan string, 2),
 		}
-		var registry LiveInputRegistry
+		var registry ThreadInputRegistry
 		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		rq := make(chan *CommandInput, 1)
@@ -243,7 +247,7 @@ func TestExecutorLiveInputPublishesAfterInitialIsOrdered(t *testing.T) {
 		close(rq)
 		done := make(chan struct{})
 		go func() {
-			ExecutorWithLiveInput(
+			ExecutorWithThreadInput(
 				ctx,
 				rq,
 				wq,

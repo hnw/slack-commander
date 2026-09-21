@@ -13,11 +13,11 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-func TestLiveReplyRoutesRawTextWithoutFallback(t *testing.T) {
+func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 	for _, mention := range []bool{false, true} {
-		var registry cmd.LiveInputRegistry
+		var registry cmd.ThreadInputRegistry
 		r, w := io.Pipe()
-		endpoint := cmd.NewLiveInput(w, "initial", func(err error) { t.Error(err) })
+		endpoint := cmd.NewInteractiveStdin(w, "initial", func(err error) { t.Error(err) })
 		key := cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		registry.Register(key, endpoint)
 		queue := make(chan *cmd.CommandInput, 10)
@@ -72,7 +72,7 @@ func TestLiveReplyRoutesRawTextWithoutFallback(t *testing.T) {
 	}
 }
 
-func TestAbsentLiveInputUsesExistingThreadRouting(t *testing.T) {
+func TestAbsentThreadInputUsesExistingThreadRouting(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/conversations.replies" {
 			t.Errorf("unexpected API %s", r.URL.Path)
@@ -85,7 +85,7 @@ func TestAbsentLiveInputUsesExistingThreadRouting(t *testing.T) {
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
-	var registry cmd.LiveInputRegistry
+	var registry cmd.ThreadInputRegistry
 	queue := make(chan *cmd.CommandInput, 1)
 	configs := []*cmd.CommandConfig{
 		cmd.NewCommandConfig(

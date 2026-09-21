@@ -17,7 +17,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-func TestSlackLiveInputWithConcurrentExecWorkers(t *testing.T) {
+func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(
 			w,
@@ -28,7 +28,7 @@ func TestSlackLiveInputWithConcurrentExecWorkers(t *testing.T) {
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var registry cmd.LiveInputRegistry
+	var registry cmd.ThreadInputRegistry
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	configs := []*cmd.CommandConfig{cmd.NewCommandConfig(&cmd.Definition{
@@ -39,12 +39,12 @@ func TestSlackLiveInputWithConcurrentExecWorkers(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			cmd.ExecutorWithLiveInput(ctx, requests, outputs, configs, nil, &registry)
+			cmd.ExecutorWithThreadInput(ctx, requests, outputs, configs, nil, &registry)
 		}()
 	}
 	listenerDone := make(chan struct{})
 	go func() {
-		pubsub.SlackListenerWithLiveInput(ctx, smc, requests, pubsub.Config{
+		pubsub.SlackListenerWithThreadInput(ctx, smc, requests, pubsub.Config{
 			AllowedUserIDs: []string{
 				"U",
 			}, AllowedChannelIDs: []string{"C"}, AcceptThreadMessage: true,
@@ -61,31 +61,31 @@ func TestSlackLiveInputWithConcurrentExecWorkers(t *testing.T) {
 	}
 	key := cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	send("", "agent\nold")
-	old := awaitLiveEndpoint(t, &registry, key, nil)
+	old := awaitInteractiveStdinEndpoint(t, &registry, key, nil)
 	send("", "agent\nnew")
-	latest := awaitLiveEndpoint(t, &registry, key, old)
+	latest := awaitInteractiveStdinEndpoint(t, &registry, key, old)
 	if err := old.TrySend("finish-old"); err != nil {
 		t.Fatal(err)
 	}
-	awaitLiveOutput(t, outputs, "old|finish-old\n")
+	awaitThreadStdinOutput(t, outputs, "old|finish-old\n")
 	if registry.Lookup(key) != latest {
 		t.Fatal("old exit removed latest endpoint")
 	}
 	send("1", "<@BOT> “raw” &amp;")
-	awaitLiveOutput(t, outputs, "new|<@BOT> “raw” &amp;\n")
+	awaitThreadStdinOutput(t, outputs, "new|<@BOT> “raw” &amp;\n")
 	if registry.Lookup(key) != nil {
 		t.Fatal("endpoint survived process exit")
 	}
 	send("1", "agent\nafter\nexit")
-	awaitLiveOutput(t, outputs, "after|exit\n")
+	awaitThreadStdinOutput(t, outputs, "after|exit\n")
 }
 
-func awaitLiveEndpoint(
+func awaitInteractiveStdinEndpoint(
 	t *testing.T,
-	registry *cmd.LiveInputRegistry,
+	registry *cmd.ThreadInputRegistry,
 	key cmd.ThreadKey,
-	previous *cmd.LiveInput,
-) *cmd.LiveInput {
+	previous *cmd.InteractiveStdin,
+) *cmd.InteractiveStdin {
 	t.Helper()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
@@ -103,7 +103,7 @@ func awaitLiveEndpoint(
 	}
 }
 
-func awaitLiveOutput(t *testing.T, outputs <-chan *cmd.CommandOutput, want string) {
+func awaitThreadStdinOutput(t *testing.T, outputs <-chan *cmd.CommandOutput, want string) {
 	t.Helper()
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
