@@ -94,6 +94,19 @@ func ExecutorWithThreadInput(
 	runnerFactory RunnerFactory,
 	registry *ThreadInputRegistry,
 ) {
+	ExecutorWithThreadInputAndLocks(ctx, rq, wq, cfgs, runnerFactory, registry, nil)
+}
+
+// ExecutorWithThreadInputAndLocks serializes new commands from the same Slack thread.
+func ExecutorWithThreadInputAndLocks(
+	ctx context.Context,
+	rq chan *CommandInput,
+	wq chan *CommandOutput,
+	cfgs []*CommandConfig,
+	runnerFactory RunnerFactory,
+	registry *ThreadInputRegistry,
+	threadLocks *ThreadLocks,
+) {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
 	matchers := buildMatchers(cfgs, runnerFactory)
 
@@ -110,9 +123,37 @@ func ExecutorWithThreadInput(
 			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
-			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
+
+			executeCommandsWithThreadLock(
+				ctx,
+				cmds,
+				parseErr,
+				stdinText,
+				input,
+				matchers,
+				wq,
+				registry,
+				threadLocks,
+			)
+
 		}
 	}
+}
+
+func executeCommandsWithThreadLock(
+	ctx context.Context,
+	cmds []*parsedCommand,
+	parseErr error,
+	stdinText string,
+	input *CommandInput,
+	matchers []*Matcher,
+	wq chan *CommandOutput,
+	registry *ThreadInputRegistry,
+	threadLocks *ThreadLocks,
+) {
+	unlock := threadLocks.Lock(input.ConversationContext)
+	defer unlock()
+	_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
@@ -260,6 +301,7 @@ func runMatchedCommand(
 	defer cancel()
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
+	setSlackContextEnvironment(execCmd, input.ConversationContext)
 	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	if m.cfg.TTY {

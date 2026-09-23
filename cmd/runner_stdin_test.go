@@ -9,6 +9,29 @@ import (
 	"time"
 )
 
+func TestExecCmdSetEnvOverridesExistingSlackContext(t *testing.T) {
+	command := NewExecRunner().CommandContext(context.Background(), "/usr/bin/env").(*execCmd)
+	command.cmd.Env = []string{"SLACK_CHANNEL_ID=static"}
+	command.SetEnv([]string{
+		"SLACK_CHANNEL_ID=C123",
+		"SLACK_THREAD_TS=1700000000.000100",
+	})
+	var output bytes.Buffer
+	command.SetStdout(&output)
+	if code := command.Run(0); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(output.String(), "SLACK_CHANNEL_ID=C123\n") {
+		t.Fatalf("channel environment = %q", output.String())
+	}
+	if strings.Contains(output.String(), "SLACK_CHANNEL_ID=static\n") {
+		t.Fatalf("static channel environment survived: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "SLACK_THREAD_TS=1700000000.000100\n") {
+		t.Fatalf("thread environment = %q", output.String())
+	}
+}
+
 func TestExecStdin(t *testing.T) {
 	for _, tt := range []struct {
 		name, command, input, output string

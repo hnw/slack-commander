@@ -62,6 +62,17 @@ Botの発言もキーワードマッチの対象にするか指定します。
 * `compose`: `docker-compose.yml` のサービスを実行します。`command` には `<service> <args>` を指定してください。
 * `http`: HTTPリクエストを送信します。`method` と `url` を指定してください。
 
+### Slack thread context
+
+Slackから起動する`exec`および`compose` runnerのコマンドには、次の環境変数を設定します。
+
+* `SLACK_CHANNEL_ID`: Slack channel ID
+* `SLACK_THREAD_TS`: root messageのtimestamp
+
+root messageから起動した場合も、そのmessage自身のtimestampを`SLACK_THREAD_TS`に使用します。そのため、同じSlack threadに属するroot messageとreplyでは同じ値になります。これらの値は実行時のSlack eventから得るため、既存の同名環境変数より優先されます。
+
+同じSlack threadから起動したcommandは同時には実行されません。mutexの待機順は厳密なFIFOではなく、待機中のcommandも`num_workers`のworkerを1つ使用します。
+
 ### command `string`
 
 キーワードにマッチした場合に起動するコマンドを指定します。

@@ -86,6 +86,12 @@ func (c *composeCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 }
 
+func (c *composeCmd) SetEnv(environment []string) {
+	if c.cmd != nil {
+		c.cmd.Env = mergeEnvironment(c.cmd.Env, environment)
+	}
+}
+
 func (c *composeCmd) SetTTY() {
 	if c.cmd != nil {
 		c.cmd.TTY = true

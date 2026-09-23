@@ -109,6 +109,7 @@ func main() {
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	var threadInputs cmd.ThreadInputRegistry
+	var threadLocks cmd.ThreadLocks
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
 	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
@@ -128,13 +129,14 @@ func main() {
 		executorWG.Add(1)
 		go func() {
 			defer executorWG.Done()
-			cmd.ExecutorWithThreadInput(
+			cmd.ExecutorWithThreadInputAndLocks(
 				ctx,
 				commandQueue,
 				outputQueue,
 				cmdConfig,
 				runnerFactory,
 				&threadInputs,
+				&threadLocks,
 			)
 		}()
 	}
