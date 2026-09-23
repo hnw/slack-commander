@@ -197,15 +197,12 @@ func validateConfig(cfg *Config) error {
 				"unknown continuation '%s' for keyword '%s'", c.Continuation, c.Keyword,
 			)
 		}
-		runner := strings.ToLower(strings.TrimSpace(c.Runner))
-		if runner == "" {
-			runner = "exec"
+		runner, err := normalizeRunner(c)
+		if err != nil {
+			return err
 		}
-		switch runner {
-		case "exec", "compose", "http":
-			c.Runner = runner
-		default:
-			return fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+		if err := validateTTY(c); err != nil {
+			return err
 		}
 		if runner != "http" {
 			if strings.HasPrefix(c.Command, "*") {
@@ -222,4 +219,31 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func validateTTY(c *CommandConfig) error {
+	if c.TTY && c.StdinIdleTimeout > 0 {
+		return fmt.Errorf(
+			"tty cannot be used with stdin_idle_timeout for keyword '%s'",
+			c.Keyword,
+		)
+	}
+	return nil
+}
+
+func normalizeRunner(c *CommandConfig) (string, error) {
+	runner := strings.ToLower(strings.TrimSpace(c.Runner))
+	if runner == "" {
+		runner = "exec"
+	}
+	switch runner {
+	case "exec", "compose", "http":
+		c.Runner = runner
+	default:
+		return "", fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+	}
+	if c.TTY && runner == "http" {
+		return "", fmt.Errorf("tty is not supported for http runner (keyword '%s')", c.Keyword)
+	}
+	return runner, nil
 }

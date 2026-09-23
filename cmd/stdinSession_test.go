@@ -8,6 +8,38 @@ import (
 	"time"
 )
 
+func TestEnsureInputTerminator(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		terminator string
+		want       string
+	}{
+		{name: "LF appends", text: "reply", terminator: "\n", want: "reply\n"},
+		{name: "LF preserves", text: "reply\n", terminator: "\n", want: "reply\n"},
+		{name: "CR appends", text: "reply", terminator: "\r", want: "reply\r"},
+		{name: "CR replaces LF", text: "reply\n", terminator: "\r", want: "reply\r"},
+		{name: "CR replaces CRLF", text: "reply\r\n", terminator: "\r", want: "reply\r"},
+		{name: "CR preserves", text: "reply\r", terminator: "\r", want: "reply\r"},
+		{name: "CR preserves LF before CR", text: "a\n\r", terminator: "\r", want: "a\n\r"},
+		{name: "CR preserves internal LF", text: "a\nb", terminator: "\r", want: "a\nb\r"},
+		{name: "CR replaces final LF only", text: "a\nb\n", terminator: "\r", want: "a\nb\r"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ensureInputTerminator(tt.text, tt.terminator); got != tt.want {
+				t.Fatalf(
+					"ensureInputTerminator(%q, %q) = %q, want %q",
+					tt.text,
+					tt.terminator,
+					got,
+					tt.want,
+				)
+			}
+		})
+	}
+}
+
 func TestStdinSessionFinitePreservesInput(t *testing.T) {
 	for _, initial := range []string{"", "no-final-newline", "two\nlines\n"} {
 		r, w := io.Pipe()

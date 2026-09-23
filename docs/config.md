@@ -18,15 +18,15 @@ Slack管理画面「General」「Basic Information」「App-Level Tokens」で�
 
 ### accept_reminder `bool`
 
-Reminderの発言もキーワードマッチの対象にするか（`cron`や`at`の代用になります）
+Reminderの発言もキーワードマッチの対象にするか指定します。`cron`や`at`の代用になります。
 
 ### accept_bot_message `bool`
 
-Botの発言もキーワードマッチの対象にする
+Botの発言もキーワードマッチの対象にするか指定します。
 
 ### accept_thread_message `bool`
 
-返信（スレッド内）の発言もキーワードマッチの対象にする
+返信（スレッド内）の発言もキーワードマッチの対象にするか指定します。
 
 ### allowed_user_ids `[]string`
 
@@ -50,15 +50,15 @@ Botの発言もキーワードマッチの対象にする
 
 マッチするキーワードを指定します。キーワードにはワイルドカード `*` を含めることができます。
 
-ワイルドカードは1つのキーワード指定について1個しか使えません。また、単体のトークンになっていないとワイルドカードと見なされません（例：`ssh*`はワイルドカード扱いにならない、`ssh *`なら大丈夫）
+ワイルドカードは1つのキーワード指定につき1個だけ使用できます。また、単体のトークンになっている必要があります。たとえば `ssh*` はワイルドカードとして扱われませんが、`ssh *` はワイルドカードとして扱われます。
 
-2つ以上のキーワードにマッチするような場合、先に定義した方が採用されます。
+複数のキーワードにマッチする場合は、先に定義したものが採用されます。
 
 ### runner `string`
 
 コマンドの実行ランナーを指定します。省略時は `exec` です。
 
-* `exec`: ホスト上で外部コマンドを実行します（従来通り）。
+* `exec`: ホスト上で外部コマンドを実行します。
 * `compose`: `docker-compose.yml` のサービスを実行します。`command` には `<service> <args>` を指定してください。
 * `http`: HTTPリクエストを送信します。`method` と `url` を指定してください。
 
@@ -69,6 +69,28 @@ Botの発言もキーワードマッチの対象にする
 ワイルドカード `*` が指定された場合、キーワードの `*` にマッチした内容が展開されます。
 
 `runner = "http"` の場合、この項目は使用されません。
+
+### tty `bool`
+
+`true` にすると、`exec` または `compose` runnerでTTYを確保してコマンドを実行します。省略時は `false` です。
+
+TTYを要求するCLIのための互換機能です。TTYなしで正常に動作するCLIでは、通常どおり `tty = false` のまま利用してください。
+
+TTYではstdoutとstderrを分離せず、1本のterminal outputとしてSlackへ投稿します。ESCで始まる7-bit形式のterminal control sequenceは除去します。raw 8-bit C1 controlは、UTF-8のcontinuation byteと値域が重なるため解釈しません。
+
+CRLFと単独CRはLFへ正規化します。cursor positioningによる画面状態の再現、full-screen TUI、terminal resize、特殊キー入力には対応しません。
+
+Slackスレッドから受け取ったinteractive inputは、TTY上のEnter操作に相当するCRで終端します。通常のinteractive inputはLFで終端します。
+
+TTYでは `stdin_idle_timeout` を使用できません。コマンドが応答しない場合の安全弁には `timeout` を指定してください。
+
+```toml
+[[commands]]
+keyword = "opencode *"
+command = "opencode *"
+tty = true
+timeout = 3600
+```
 
 ### method `string`
 
@@ -81,13 +103,18 @@ Botの発言もキーワードマッチの対象にする
 ### headers `map[string]string`
 
 `runner = "http"` の場合に付与するHTTPヘッダーを指定します。
-TOMLのインラインテーブル形式で指定してください（例: `headers = { "Content-Type" = "application/json" }`）。
+
+TOMLのインラインテーブル形式で指定してください。
+
+```toml
+headers = { "Content-Type" = "application/json" }
+```
 
 ### body `string`
 
 `runner = "http"` の場合に送信するリクエストボディを指定します。
-キーワードの `*` にマッチした文字列があれば、`body` 内の `*` がその文字列で置換されます。
-同様に `url` や `headers` の値に `*` が含まれている場合も置換されます。
+
+キーワードの `*` にマッチした文字列があれば、`body` 内の `*` がその文字列で置換されます。同様に、`url` や `headers` の値に `*` が含まれている場合も置換されます。
 
 ### icon_emoji `string`
 
@@ -107,43 +134,57 @@ botがSlackにポストする時のユーザー名を指定します。
 
 ### reply_broadcast `bool`
 
-コマンドの出力は常に入力に対応する root thread への reply として投稿されます。
+コマンドの出力は常に入力に対応するroot threadへのreplyとして投稿されます。
 
-`true`（デフォルト）にすると、同じ thread reply が Slack の “Also send to channel” 相当の reply broadcast によりチャンネルにも表示されます。
-`false` にすると、出力は thread reply としてのみ投稿されます。
+`true`（デフォルト）にすると、Slackの「Also send to channel」に相当するreply broadcastにより、同じ内容がチャンネルにも表示されます。
+
+`false` にすると、出力はthread内だけに投稿されます。
 
 ### continuation `string`
 
-プロセス終了後の継続方法を指定します。省略時は継続しません。
+プロセス終了後にSlack threadへの返信を受け取った場合の継続方法を指定します。省略時は継続しません。
 
-* `thread`: root 投稿のスレッド返信で新しいプロセスを起動し、conversation を継続します。command output は常に root thread への reply として投稿されます。継続時は root 投稿の1行目を command と argv の決定にのみ使用し、stdin には含めません。root 投稿の2行目以降と後続の thread conversation を stdin に渡します。
+* `thread`: root投稿のthread replyを受け取るたびに新しいプロセスを起動し、それまでのconversationをstdinへ渡します。
 
-exec / compose runner の実行中は、同じ thread への返信を実行中プロセスの stdin に渡します。
-この転送には `continuation` や `accept_thread_message` の有効化は不要で、既存の投稿者・チャンネルの許可判定が適用されます。
-HTTP runner は対象外です。
+`thread`では、root投稿の1行目をcommandとargvの決定にだけ使用し、stdinには含めません。root投稿の2行目以降と、その後のthread conversationをstdinへ渡します。
 
-初期 stdin は空文字列なら何も書き込まず、空でなければ末尾に LF がない場合だけ補います。
-返信は Slack の本文をそのまま渡し、末尾の LF だけ必要に応じて補います。メンション・URL・引用符などは変換しません。
-初期入力と受け付けた返信は順番に転送します。転送中の入力とは別に未処理の返信を最大1件保持し、その枠も埋まっていれば新しい返信を drop してログに残します。
-drop した返信は再試行せず、continuation にも回しません。受付後の stdin write error は executor 側でログに残します。
+command outputはroot threadへのreplyとして投稿されるため、その出力も次回のconversationに含まれます。
 
-同じ thread に複数のプロセスがある場合、最後に登録されたプロセスが送信先になります。
-送信先がない場合は既存の continuation / thread 処理に進みます。command chain のプロセス切り替え中も同じ扱いです。
-初期入力の転送後も stdin は開いたままです。`wc -l` のように EOF を必要とするコマンドは、`stdin_idle_timeout` を設定すると無入力時に EOF を受け取り、正常終了できます。
+実行中のプロセスに対するthread replyのstdin転送は、`continuation` とは別の機能です。詳細は後述の[Interactive stdin](#interactive-stdin)を参照してください。
+
+### Interactive stdin
+
+`exec` と `compose` runnerでは、コマンドの実行中に同じSlack threadへ返信すると、その本文を実行中プロセスのstdinへ渡します。HTTP runnerは対象外です。
+
+投稿者とチャンネルには通常の許可判定が適用されます。
+
+初期stdinが空の場合は何も書き込みません。空でない場合は、末尾にLFがなければLFを補います。
+
+thread replyはSlackの本文をそのまま渡し、末尾にLFがなければ補います。メンション、URL、引用符などの変換は行いません。
+
+初期入力と返信は順番に転送します。転送中の入力とは別に、未処理の返信を最大1件保持します。すでに1件保持している場合、新しい返信はdropしてログに記録します。dropした返信は再試行せず、`continuation` にも回しません。
+
+stdinへの書き込みでエラーが発生した場合はexecutor側でログに記録します。
+
+同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。送信先がない場合は、通常の `continuation` / thread routingへ進みます。command chainでプロセスが切り替わる途中も同様です。
+
+初期入力を送信した後もstdinは開いたままです。`wc -l` のようにEOFを待つコマンドでは、必要に応じて `stdin_idle_timeout` を設定してください。
+
+TTYモードでは入力終端が異なり、`stdin_idle_timeout` は使用できません。詳細は [`tty`](#tty-bool) を参照してください。
 
 ### stdin_idle_timeout `int`
 
-exec / compose runner の interactive stdin を、最後に入力を受け付けてから何秒後に閉じるか指定します。
-省略または `0` は無効で、自動では EOF を送りません。HTTP runner には適用しません。
-負数は設定エラーです。
+`exec` / `compose` runnerのinteractive stdinを、最後に入力を受け付けてから何秒後に閉じるか指定します。
 
-計測はプロセスの Start 成功後、stdin writer を session に接続した時点から始まります。
-初期入力が空でも計測し、空でなければ最初の入力として扱います。
-返信を受け付けるたびに期限を延長します。書き込み完了は待たず、Busy で drop した返信や Closed で拒否した返信では延長しません。
+省略または `0` の場合は無効で、自動的にEOFを送りません。HTTP runnerには適用されません。負数は設定エラーです。
 
-期限が来ると stdin を閉じ、通常の EOF を渡します。プロセスや compose container を強制終了する設定ではありません。
-入力先の登録も解除するため、その後の返信は送信先がない場合の既存 routing に進みます。
-すでに入力先を取得した返信が終了と競合して Closed になった場合は、continuation に回しません。
+計測はプロセスのStart成功後、stdin writerをsessionに接続した時点から始まります。初期入力が空でも計測を開始し、空でなければ最初の入力として扱います。
+
+thread replyを受け付けるたびに期限を延長します。stdinへの書き込み完了は待ちません。Busyでdropした返信やClosedで拒否した返信では期限を延長しません。
+
+期限が来るとstdinを閉じ、通常のEOFを渡します。プロセスやcompose containerを強制終了する設定ではありません。
+
+入力先の登録も解除されるため、その後の返信は送信先がない場合の通常のroutingへ進みます。すでに入力先を取得した返信が終了処理と競合してClosedになった場合は、`continuation` には回しません。
 
 ```toml
 [[commands]]
@@ -153,10 +194,12 @@ stdin_idle_timeout = 300
 timeout = 3600
 ```
 
-この例では、300秒間入力を受け付けなければ EOF を渡します。
-EOF 後も終了しないプロセスには、起動から3600秒の `timeout` が最終的な安全弁として働きます。
+この例では、300秒間入力を受け付けなければEOFを渡します。EOF後も終了しないプロセスには、起動から3600秒の `timeout` が最終的な安全弁として働きます。
+
+`tty = true` とは併用できません。
 
 ### timeout `int`
 
 外部コマンドのタイムアウト時間を秒で指定します。
-プロセスの実行時間を制限する設定で、stdin の無入力時間を計る `stdin_idle_timeout` とは独立しています。
+
+プロセスの実行時間全体を制限します。stdinの無入力時間を計る `stdin_idle_timeout` とは独立しています。

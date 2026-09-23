@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // Cmd is an executable command abstraction for different runners.
@@ -35,8 +37,19 @@ func (r *execRunner) CommandContext(ctx context.Context, name string, arg ...str
 }
 
 type execCmd struct {
-	cmd *exec.Cmd
-	ctx context.Context
+	cmd    *exec.Cmd
+	ctx    context.Context
+	tty    bool
+	stdout io.Writer
+	stderr io.Writer
+}
+
+type ttyInputWriter struct {
+	io.Writer
+}
+
+func (*ttyInputWriter) Close() error {
+	return nil
 }
 
 func (c *execCmd) SetStdin(r io.Reader) {
@@ -44,11 +57,17 @@ func (c *execCmd) SetStdin(r io.Reader) {
 }
 
 func (c *execCmd) SetStdout(w io.Writer) {
+	c.stdout = w
 	c.cmd.Stdout = w
 }
 
 func (c *execCmd) SetStderr(w io.Writer) {
+	c.stderr = w
 	c.cmd.Stderr = w
+}
+
+func (c *execCmd) SetTTY() {
+	c.tty = true
 }
 
 // Run executes the command and returns its exit code.
@@ -67,6 +86,9 @@ func (c *execCmd) RunWithStdin(timeout int, started func(io.WriteCloser)) int {
 }
 
 func (c *execCmd) run(timeout int, stdin execStdin) int {
+	if c.tty {
+		return c.runTTY(timeout, stdin)
+	}
 	if err := stdin.prepare(c.cmd); err != nil {
 		if c.cmd.Stderr != nil {
 			_, _ = fmt.Fprint(c.cmd.Stderr, err)
@@ -106,6 +128,66 @@ func (c *execCmd) run(timeout int, stdin execStdin) int {
 		}
 		if c.cmd.Stderr != nil {
 			_, _ = fmt.Fprintf(c.cmd.Stderr, "Error: %v", err)
+		}
+		return 127
+	}
+	return c.cmd.ProcessState.ExitCode()
+}
+
+func (c *execCmd) runTTY(timeout int, stdin execStdin) int {
+	defer stdin.closeUnclaimed()
+	c.cmd.Stdin = nil
+	c.cmd.Stdout = nil
+	c.cmd.Stderr = nil
+	c.cmd.Cancel = func() error {
+		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM)
+		time.Sleep(2 * time.Second)
+		return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	terminal, err := pty.StartWithSize(c.cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		if c.stderr != nil {
+			_, _ = fmt.Fprint(c.stderr, err)
+		}
+		return 127
+	}
+	defer func() { _ = terminal.Close() }()
+
+	stdout := c.stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	outputDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stdout, terminal)
+		close(outputDone)
+	}()
+
+	if stdin.onStarted != nil {
+		stdin.unclaimed = &ttyInputWriter{Writer: terminal}
+		stdin.started()
+	}
+	err = c.cmd.Wait()
+	_ = terminal.Close()
+	<-outputDone
+	return c.exitCode(timeout, err, c.stderr)
+}
+
+func (c *execCmd) exitCode(timeout int, err error, stderr io.Writer) int {
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == -1 {
+				if stderr != nil && timeout > 0 && c.ctx != nil &&
+					errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+					_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%ds)", timeout)
+				}
+				return 143
+			}
+			return exitError.ExitCode()
+		}
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error: %v", err)
 		}
 		return 127
 	}

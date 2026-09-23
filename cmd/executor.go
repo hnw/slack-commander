@@ -45,7 +45,8 @@ type CommandOutput struct {
 
 // Definition describes a command definition in the configuration.
 type Definition struct {
-	StdinIdleTimeout int `toml:"stdin_idle_timeout"`
+	StdinIdleTimeout int  `toml:"stdin_idle_timeout"`
+	TTY              bool `toml:"tty"`
 	Timeout          int
 	Keyword          string
 	Command          string
@@ -297,6 +298,25 @@ func runMatchedCommand(
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
 	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
+	if m.cfg.TTY {
+		terminal := newTTYOutputNormalizer(stdout)
+		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {
+			cmd.SetTTY()
+		}
+		execCmd.SetStdout(terminal)
+		execCmd.SetStderr(terminal)
+		ret := runWithInputWithLineEnding(
+			execCmd,
+			m.cfg.Timeout,
+			0,
+			stdinText,
+			input.ConversationContext,
+			registry,
+			"\r",
+		)
+		_ = terminal.Flush()
+		return ret
+	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
 	ret := runWithInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second,
@@ -314,6 +334,18 @@ func runWithInput(
 	initial string,
 	conversation ConversationContext,
 	registry *ThreadInputRegistry,
+) int {
+	return runWithInputWithLineEnding(command, timeout, idle, initial, conversation, registry, "\n")
+}
+
+func runWithInputWithLineEnding(
+	command Cmd,
+	timeout int,
+	idle time.Duration,
+	initial string,
+	conversation ConversationContext,
+	registry *ThreadInputRegistry,
+	lineEnding string,
 ) int {
 	runner, ok := command.(interface {
 		RunWithStdin(int, func(io.WriteCloser)) int
@@ -340,7 +372,7 @@ func runWithInput(
 			err,
 		)
 	}
-	endpoint := newInteractiveStdinSession(initial, idle, onError)
+	endpoint := newInteractiveStdinSessionWithLineEnding(initial, idle, onError, lineEnding)
 	endpoint.onClose = func() { registry.Unregister(key, endpoint) }
 	defer endpoint.Close()
 	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {

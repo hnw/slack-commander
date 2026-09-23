@@ -203,6 +203,120 @@ func TestInteractiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	}
 }
 
+func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var registry ThreadInputRegistry
+	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	config := NewCommandConfig(&Definition{TTY: true}, nil)
+	matcher := &Matcher{cfg: config, runner: NewExecRunner()}
+	outputs := make(chan *CommandOutput, 10)
+	done := make(chan int, 1)
+	go func() {
+		done <- runMatchedCommand(
+			ctx,
+			matcher,
+			[]string{
+				"/bin/sh",
+				"-c",
+				"IFS= read -r first; IFS= read -r second; printf '\\033[31m%s|%s\\033[0m\\r\\n' \"$first\" \"$second\"; printf ERR >&2",
+			},
+			"initial\n",
+			&CommandInput{ConversationContext: ConversationContext(key)},
+			outputs,
+			&registry,
+		)
+	}()
+
+	endpoint := waitForInteractiveStdin(t, &registry, key)
+	if err := endpoint.TrySend("reply\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("code=%d", code)
+		}
+	case <-ctx.Done():
+		t.Fatal("TTY command did not finish")
+	}
+	if registry.Lookup(key) != nil {
+		t.Fatal("TTY endpoint survived command exit")
+	}
+
+	var text string
+	for _, output := range drainOutputs(outputs) {
+		if output.IsErrOut {
+			t.Fatal("TTY output was classified as stderr")
+		}
+		text += output.Text
+	}
+	if strings.ContainsAny(text, "\x1b\r") ||
+		!strings.Contains(text, "initial|reply") || !strings.Contains(text, "ERR") {
+		t.Fatalf("TTY output=%q", text)
+	}
+}
+
+type stdinCaptureCmd struct {
+	want     int
+	captured []byte
+}
+
+func (*stdinCaptureCmd) SetStdin(io.Reader)  {}
+func (*stdinCaptureCmd) SetStdout(io.Writer) {}
+func (*stdinCaptureCmd) SetStderr(io.Writer) {}
+func (*stdinCaptureCmd) Run(int) int         { return 99 }
+func (c *stdinCaptureCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+	r, w := io.Pipe()
+	defer func() { _ = r.Close() }()
+	started(w)
+	c.captured = make([]byte, c.want)
+	if _, err := io.ReadFull(r, c.captured); err != nil {
+		return 127
+	}
+	return 0
+}
+
+func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	const expected = "initial\rreply\r"
+	capture := &stdinCaptureCmd{want: len(expected)}
+	var registry ThreadInputRegistry
+	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	matcher := &Matcher{
+		cfg:    NewCommandConfig(&Definition{TTY: true}, nil),
+		runner: singleCmdRunner{command: capture},
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- runMatchedCommand(
+			ctx,
+			matcher,
+			[]string{"unused"},
+			"initial",
+			&CommandInput{ConversationContext: ConversationContext(key)},
+			make(chan *CommandOutput, 1),
+			&registry,
+		)
+	}()
+	endpoint := waitForInteractiveStdin(t, &registry, key)
+	if err := endpoint.TrySend("reply"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("code=%d", code)
+		}
+	case <-ctx.Done():
+		t.Fatal("TTY command did not finish")
+	}
+	if got := string(capture.captured); got != expected {
+		t.Fatalf("stdin=%q, want %q", got, expected)
+	}
+}
+
 func (*stdinTestCmd) SetStdin(io.Reader)  {}
 func (*stdinTestCmd) SetStdout(io.Writer) {}
 func (*stdinTestCmd) SetStderr(io.Writer) {}

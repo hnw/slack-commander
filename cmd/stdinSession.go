@@ -8,23 +8,24 @@ import (
 )
 
 type stdinSession struct {
-	mu       sync.Mutex
-	closed   bool
-	writer   io.WriteCloser
-	initial  string
-	onError  func(error)
-	onClose  func()
-	replies  chan string
-	stop     chan struct{}
-	finished chan struct{}
-	idle     time.Duration
-	deadline time.Time
-	timer    *time.Timer
+	mu         sync.Mutex
+	closed     bool
+	writer     io.WriteCloser
+	initial    string
+	lineEnding string
+	onError    func(error)
+	onClose    func()
+	replies    chan string
+	stop       chan struct{}
+	finished   chan struct{}
+	idle       time.Duration
+	deadline   time.Time
+	timer      *time.Timer
 }
 
 func newStdinSession(initial string, onError func(error)) *stdinSession {
 	return &stdinSession{
-		initial: initial, onError: onError,
+		initial: initial, lineEnding: "\n", onError: onError,
 		stop: make(chan struct{}), finished: make(chan struct{}),
 	}
 }
@@ -103,8 +104,8 @@ func (s *stdinSession) write(text string) bool {
 		return false
 	default:
 	}
-	if s.replies != nil && !strings.HasSuffix(text, "\n") {
-		text += "\n"
+	if s.replies != nil {
+		text = ensureInputTerminator(text, s.lineEnding)
 	}
 	if _, err := io.WriteString(s.writer, text); err != nil {
 		s.mu.Lock()
@@ -116,6 +117,24 @@ func (s *stdinSession) write(text string) bool {
 		return false
 	}
 	return true
+}
+
+func ensureInputTerminator(text, lineEnding string) string {
+	if lineEnding == "\r" {
+		switch {
+		case strings.HasSuffix(text, "\r\n"):
+			text = text[:len(text)-2]
+		case strings.HasSuffix(text, "\n"):
+			text = text[:len(text)-1]
+		case strings.HasSuffix(text, "\r"):
+			return text
+		}
+		return text + "\r"
+	}
+	if strings.HasSuffix(text, "\n") {
+		return text
+	}
+	return text + "\n"
 }
 
 func (s *stdinSession) forward() {
