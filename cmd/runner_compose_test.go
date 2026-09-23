@@ -25,3 +25,11 @@ func TestComposeStdinStartFailureDoesNotPublishWriter(t *testing.T) {
 		t.Fatal("stdin pipe remained open after start failure")
 	}
 }
+
+func TestComposeCmdTTYEnablesComposeTTY(t *testing.T) {
+	c := &composeCmd{cmd: &compose.Cmd{}}
+	c.SetTTY()
+	if !c.cmd.TTY {
+		t.Fatal("compose TTY is disabled")
+	}
+}

@@ -86,6 +86,12 @@ func (c *composeCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 }
 
+func (c *composeCmd) SetTTY() {
+	if c.cmd != nil {
+		c.cmd.TTY = true
+	}
+}
+
 func (c *composeCmd) Run(timeout int) int {
 	if code, invalid := c.validate(); invalid {
 		return code

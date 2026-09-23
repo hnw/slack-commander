@@ -29,6 +29,73 @@ func TestConfigStdinIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestConfigTTYDefaultsToFalse(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands[0].TTY {
+		t.Fatal("tty default = true, want false")
+	}
+}
+
+func TestConfigDecodesTTY(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(
+		"[[commands]]\nkeyword = 'agent'\ncommand = 'agent'\ntty = true",
+		&cfg,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Commands[0].TTY {
+		t.Fatal("tty = true was not decoded")
+	}
+}
+
+func TestValidateConfigTTY(t *testing.T) {
+	tests := []struct {
+		name    string
+		runner  string
+		idle    int
+		wantErr string
+	}{
+		{name: "exec", runner: "exec"},
+		{name: "compose", runner: "compose"},
+		{name: "http", runner: "http", wantErr: "tty is not supported for http runner"},
+		{
+			name: "idle timeout", runner: "exec", idle: 300,
+			wantErr: "tty cannot be used with stdin_idle_timeout",
+		},
+		{name: "zero idle timeout", runner: "exec", idle: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			definition := cmd.Definition{
+				Keyword: "agent", Command: "cat", Runner: tt.runner, TTY: true, StdinIdleTimeout: tt.idle,
+			}
+			if tt.runner == "http" {
+				definition.URL = "http://example.com/hook"
+			}
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				NumWorkers:   1,
+				Commands:     []*CommandConfig{{Definition: definition}},
+			}
+			err := validateConfig(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name    string

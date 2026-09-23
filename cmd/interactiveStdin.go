@@ -23,7 +23,17 @@ func newInteractiveStdinSession(
 	idle time.Duration,
 	onError func(error),
 ) *InteractiveStdin {
+	return newInteractiveStdinSessionWithLineEnding(initial, idle, onError, "\n")
+}
+
+func newInteractiveStdinSessionWithLineEnding(
+	initial string,
+	idle time.Duration,
+	onError func(error),
+	lineEnding string,
+) *InteractiveStdin {
 	s := newStdinSession(initial, onError)
+	s.lineEnding = lineEnding
 	s.replies = make(chan string, 1)
 	s.idle = idle
 	return &InteractiveStdin{stdinSession: s}
