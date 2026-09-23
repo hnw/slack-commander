@@ -1,5 +1,10 @@
 # KNOWLEDGE
 
+## Slack thread context と実行直列化（2026-09-23）
+- `ConversationContext` の `ChannelID` と `RootThreadTimestamp` を実行直前に環境変数へ合成することで、exec / compose の runner 実装ごとの分岐を避けつつ、Slack event の値を既存同名値より優先できる。
+- Executor worker 間で `ThreadLocks` を共有し、`ThreadKey` ごとの `sync.Mutex` を実行全体に適用する。mutex待機のFIFOやworker占有は保証・回避せず、map entryのcleanupも初版では行わない。
+- sync mode のreplyは listener が `ThreadInputRegistry` へ先にrouteするため、lock付きExecutor経路でも新規commandにせず実行中processへstdinとして渡されることを統合テストで確認した。
+
 ## stdin session と idle EOF（2026-09-21）
 - exec の finite / interactive は private な `stdinSession` の Start / Close を共有し、EOF のアプリケーション側所有者を session に統一する。finite は入力を改変せず転送後に閉じ、interactive のみ LF 補完・追加入力を扱う。
 - idle timer は interactive session が所有する。writer 接続時に開始し、TrySend の受付成功時に reset する。Busy / Closed は activity に含めず、受付と期限切れを同じロックで順序付ける。process timeout とは独立し、idle EOF 自体は kill しない。

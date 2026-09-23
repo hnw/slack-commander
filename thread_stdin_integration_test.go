@@ -19,6 +19,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var registry cmd.ThreadInputRegistry
+	var locks cmd.ThreadLocks
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	configs := []*cmd.CommandConfig{cmd.NewCommandConfig(&cmd.Definition{
@@ -29,7 +30,15 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			cmd.ExecutorWithThreadInput(ctx, requests, outputs, configs, nil, &registry)
+			cmd.ExecutorWithThreadInputAndLocks(
+				ctx,
+				requests,
+				outputs,
+				configs,
+				nil,
+				&registry,
+				&locks,
+			)
 		}()
 	}
 	listenerDone := make(chan struct{})
@@ -51,18 +60,9 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	}
 	key := cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	send("", "agent\nold")
-	old := awaitInteractiveStdinEndpoint(t, &registry, key, nil)
-	send("", "agent\nnew")
-	latest := awaitInteractiveStdinEndpoint(t, &registry, key, old)
-	if err := old.TrySend("finish-old"); err != nil {
-		t.Fatal(err)
-	}
-	awaitThreadStdinOutput(t, outputs, "old|finish-old\n")
-	if registry.Lookup(key) != latest {
-		t.Fatal("old exit removed latest endpoint")
-	}
+	_ = awaitInteractiveStdinEndpoint(t, &registry, key, nil)
 	send("1", "<@BOT> “raw” &amp;")
-	awaitThreadStdinOutput(t, outputs, "new|<@BOT> “raw” &amp;\n")
+	awaitThreadStdinOutput(t, outputs, "old|<@BOT> “raw” &amp;\n")
 	if registry.Lookup(key) != nil {
 		t.Fatal("endpoint survived process exit")
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -64,6 +65,14 @@ func (c *execCmd) SetStdout(w io.Writer) {
 func (c *execCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 	c.cmd.Stderr = w
+}
+
+func (c *execCmd) SetEnv(environment []string) {
+	base := c.cmd.Env
+	if base == nil {
+		base = os.Environ()
+	}
+	c.cmd.Env = mergeEnvironment(base, environment)
 }
 
 func (c *execCmd) SetTTY() {
