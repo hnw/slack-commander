@@ -3,7 +3,6 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -64,9 +63,8 @@ func SlackListener(
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	commandConfigs []*cmd.CommandConfig,
 ) {
-	SlackListenerWithThreadInput(ctx, smc, commandQueue, cfg, commandConfigs, nil)
+	SlackListenerWithThreadInput(ctx, smc, commandQueue, cfg, nil)
 }
 
 // SlackListenerWithThreadInput は実行中の返信を通常 command queue から分離する。
@@ -75,7 +73,6 @@ func SlackListenerWithThreadInput(
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	commandConfigs []*cmd.CommandConfig,
 	registry *cmd.ThreadInputRegistry,
 ) {
 	for {
@@ -116,7 +113,7 @@ func SlackListenerWithThreadInput(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg, commandConfigs, registry)
+						onMessageEvent(smc, ev, commandQueue, cfg, registry)
 					case *slackevents.AppMentionEvent:
 						onAppMentionEvent(smc, ev, commandQueue, cfg, registry)
 					default:
@@ -263,7 +260,6 @@ func onMessageEvent(
 	ev *slackevents.MessageEvent,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	commandConfigs []*cmd.CommandConfig,
 	registry *cmd.ThreadInputRegistry,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
@@ -275,17 +271,6 @@ func onMessageEvent(
 	}
 	if ev.ThreadTimeStamp != "" {
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
-			return
-		}
-		input, matched, err := newThreadContinuationInput(smc, ev, cfg, commandConfigs)
-		if err != nil {
-			smc.Debugf("[WARN] thread continuation unavailable: %v", err)
-			return
-		}
-		if matched {
-			if !enqueueCommand(commandQueue, input) {
-				smc.Debugf("[WARN] command queue is full; dropping thread continuation")
-			}
 			return
 		}
 		if !cfg.AcceptThreadMessage {
@@ -350,48 +335,6 @@ func routeThreadInput(registry *cmd.ThreadInputRegistry, channel, thread, text s
 		)
 	}
 	return true
-}
-
-func newThreadContinuationInput(
-	smc *socketmode.Client,
-	ev *slackevents.MessageEvent,
-	cfg Config,
-	commandConfigs []*cmd.CommandConfig,
-) (*cmd.CommandInput, bool, error) {
-	history, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
-		ChannelID: ev.Channel,
-		Timestamp: ev.ThreadTimeStamp,
-	})
-	if err != nil || len(history) == 0 {
-		if err != nil {
-			return nil, false, err
-		}
-		return nil, false, fmt.Errorf("thread history is empty")
-	}
-	return buildThreadContinuationInput(ev, history, cfg, commandConfigs, userID)
-}
-
-func buildThreadContinuationInput(
-	ev *slackevents.MessageEvent,
-	history []slack.Message,
-	cfg Config,
-	commandConfigs []*cmd.CommandConfig,
-	commanderUserID string,
-) (*cmd.CommandInput, bool, error) {
-	history, err := historyThroughTrigger(history, ev.TimeStamp)
-	if err != nil {
-		return nil, false, err
-	}
-	rootText := slackMessageText(history[0].Text, history[0].Attachments)
-	history = filterThreadContinuationHistory(history, cfg, commanderUserID)
-	stdin := serializeThreadConversation(rootText, ev.ThreadTimeStamp, history, commanderUserID)
-	text := buildThreadContinuationCommandText(rootText, stdin)
-	if !cmd.IsThreadContinuation(text, commandConfigs) {
-		return nil, false, nil
-	}
-	input := NewSlackInput(ev, text)
-	input.ThreadContinuation = true
-	return input, true, nil
 }
 
 func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput) bool {

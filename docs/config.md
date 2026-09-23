@@ -140,18 +140,6 @@ botがSlackにポストする時のユーザー名を指定します。
 
 `false` にすると、出力はthread内だけに投稿されます。
 
-### continuation `string`
-
-プロセス終了後にSlack threadへの返信を受け取った場合の継続方法を指定します。省略時は継続しません。
-
-* `thread`: root投稿のthread replyを受け取るたびに新しいプロセスを起動し、それまでのconversationをstdinへ渡します。
-
-`thread`では、root投稿の1行目をcommandとargvの決定にだけ使用し、stdinには含めません。root投稿の2行目以降と、その後のthread conversationをstdinへ渡します。
-
-command outputはroot threadへのreplyとして投稿されるため、その出力も次回のconversationに含まれます。
-
-実行中のプロセスに対するthread replyのstdin転送は、`continuation` とは別の機能です。詳細は後述の[Interactive stdin](#interactive-stdin)を参照してください。
-
 ### Interactive stdin
 
 `exec` と `compose` runnerでは、コマンドの実行中に同じSlack threadへ返信すると、その本文を実行中プロセスのstdinへ渡します。HTTP runnerは対象外です。
@@ -162,11 +150,11 @@ command outputはroot threadへのreplyとして投稿されるため、その�
 
 thread replyはSlackの本文をそのまま渡し、末尾にLFがなければ補います。メンション、URL、引用符などの変換は行いません。
 
-初期入力と返信は順番に転送します。転送中の入力とは別に、未処理の返信を最大1件保持します。すでに1件保持している場合、新しい返信はdropしてログに記録します。dropした返信は再試行せず、`continuation` にも回しません。
+初期入力と返信は順番に転送します。転送中の入力とは別に、未処理の返信を最大1件保持します。すでに1件保持している場合、新しい返信はdropしてログに記録します。dropした返信は再試行しません。
 
 stdinへの書き込みでエラーが発生した場合はexecutor側でログに記録します。
 
-同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。送信先がない場合は、通常の `continuation` / thread routingへ進みます。command chainでプロセスが切り替わる途中も同様です。
+同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。送信先がない場合は、`accept_thread_message` の設定に従う通常のthread routingへ進みます。command chainでプロセスが切り替わる途中も同様です。
 
 初期入力を送信した後もstdinは開いたままです。`wc -l` のようにEOFを待つコマンドでは、必要に応じて `stdin_idle_timeout` を設定してください。
 
@@ -184,7 +172,7 @@ thread replyを受け付けるたびに期限を延長します。stdinへの書
 
 期限が来るとstdinを閉じ、通常のEOFを渡します。プロセスやcompose containerを強制終了する設定ではありません。
 
-入力先の登録も解除されるため、その後の返信は送信先がない場合の通常のroutingへ進みます。すでに入力先を取得した返信が終了処理と競合してClosedになった場合は、`continuation` には回しません。
+入力先の登録も解除されるため、その後の返信は送信先がない場合の通常のroutingへ進みます。すでに入力先を取得した返信が終了処理と競合してClosedになった場合は破棄されます。
 
 ```toml
 [[commands]]

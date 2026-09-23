@@ -343,67 +343,65 @@ type singleCmdRunner struct{ command Cmd }
 func (r singleCmdRunner) CommandContext(context.Context, string, ...string) Cmd { return r.command }
 
 func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
-	for _, continuation := range []bool{false, true} {
-		c := &stdinTestCmd{
-			started: make(chan struct{}),
-			read:    make(chan struct{}),
-			lines:   make(chan string, 2),
-		}
-		var registry ThreadInputRegistry
-		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		rq := make(chan *CommandInput, 1)
-		wq := make(chan *CommandOutput, 10)
-		cfg := NewCommandConfig(
-			&Definition{Keyword: "agent", Command: "agent", Continuation: ContinuationThread},
-			nil,
+	c := &stdinTestCmd{
+		started: make(chan struct{}),
+		read:    make(chan struct{}),
+		lines:   make(chan string, 2),
+	}
+	var registry ThreadInputRegistry
+	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 10)
+	cfg := NewCommandConfig(
+		&Definition{Keyword: "agent", Command: "agent"},
+		nil,
+	)
+	rq <- &CommandInput{
+		Text:                "agent\ninitial",
+		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
+	}
+	close(rq)
+	done := make(chan struct{})
+	go func() {
+		ExecutorWithThreadInput(
+			ctx,
+			rq,
+			wq,
+			[]*CommandConfig{cfg},
+			func(*CommandConfig) CommandRunner {
+				return singleCmdRunner{c}
+			},
+			&registry,
 		)
-		rq <- &CommandInput{
-			Text: "agent\ninitial", ThreadContinuation: continuation,
-			ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
-		}
-		close(rq)
-		done := make(chan struct{})
-		go func() {
-			ExecutorWithThreadInput(
-				ctx,
-				rq,
-				wq,
-				[]*CommandConfig{cfg},
-				func(*CommandConfig) CommandRunner {
-					return singleCmdRunner{c}
-				},
-				&registry,
-			)
-			close(done)
-		}()
-		select {
-		case <-c.started:
-		case <-ctx.Done():
-			t.Fatal("not started")
-		}
-		endpoint := registry.Lookup(key)
-		if endpoint == nil {
-			t.Fatal("not registered")
-		}
-		if err := endpoint.TrySend("reply"); err != nil {
-			t.Fatal(err)
-		}
-		close(c.read)
-		select {
-		case <-done:
-		case <-ctx.Done():
-			t.Fatal("did not finish")
-		}
-		cancel()
-		if got := <-c.lines; got != "initial\n" {
-			t.Fatal(got)
-		}
-		if got := <-c.lines; got != "reply\n" {
-			t.Fatal(got)
-		}
-		if registry.Lookup(key) != nil {
-			t.Fatal("registration survived exit")
-		}
+		close(done)
+	}()
+	select {
+	case <-c.started:
+	case <-ctx.Done():
+		t.Fatal("not started")
+	}
+	endpoint := registry.Lookup(key)
+	if endpoint == nil {
+		t.Fatal("not registered")
+	}
+	if err := endpoint.TrySend("reply"); err != nil {
+		t.Fatal(err)
+	}
+	close(c.read)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("did not finish")
+	}
+	cancel()
+	if got := <-c.lines; got != "initial\n" {
+		t.Fatal(got)
+	}
+	if got := <-c.lines; got != "reply\n" {
+		t.Fatal(got)
+	}
+	if registry.Lookup(key) != nil {
+		t.Fatal("registration survived exit")
 	}
 }

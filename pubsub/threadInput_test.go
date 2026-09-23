@@ -3,8 +3,6 @@ package pubsub
 import (
 	"bufio"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/hnw/slack-commander/cmd"
@@ -48,7 +46,6 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 					},
 					queue,
 					cfg,
-					nil,
 					&registry,
 				)
 			}
@@ -73,30 +70,14 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 }
 
 func TestAbsentThreadInputUsesExistingThreadRouting(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/conversations.replies" {
-			t.Errorf("unexpected API %s", r.URL.Path)
-		}
-		_, _ = io.WriteString(
-			w,
-			`{"ok":true,"messages":[{"ts":"1","text":"agent"},{"ts":"2","user":"U","text":"reply"}]}`,
-		)
-	}))
-	defer server.Close()
-	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
+	smc := socketmode.New(slack.New("test"))
+	cfg := Config{
+		AllowedUserIDs:      []string{"U"},
+		AllowedChannelIDs:   []string{"C"},
+		AcceptThreadMessage: true,
+	}
 	var registry cmd.ThreadInputRegistry
 	queue := make(chan *cmd.CommandInput, 1)
-	configs := []*cmd.CommandConfig{
-		cmd.NewCommandConfig(
-			&cmd.Definition{
-				Keyword:      "agent",
-				Command:      "agent",
-				Continuation: cmd.ContinuationThread,
-			},
-			nil,
-		),
-	}
 	event := &slackevents.MessageEvent{
 		Channel:         "C",
 		User:            "U",
@@ -104,23 +85,20 @@ func TestAbsentThreadInputUsesExistingThreadRouting(t *testing.T) {
 		ThreadTimeStamp: "1",
 		Text:            "reply",
 	}
-	onMessageEvent(smc, event, queue, cfg, configs, &registry)
+	onMessageEvent(smc, event, queue, cfg, &registry)
 	select {
 	case input := <-queue:
-		if !input.ThreadContinuation {
-			t.Fatal("not continuation")
-		}
-	default:
-		t.Fatal("missing continuation")
-	}
-	cfg.AcceptThreadMessage = true
-	onMessageEvent(smc, event, queue, cfg, nil, &registry)
-	select {
-	case input := <-queue:
-		if input.ThreadContinuation || input.Text != "reply" {
+		if input.Text != "reply" {
 			t.Fatalf("input=%+v", input)
 		}
 	default:
 		t.Fatal("missing ordinary thread command")
+	}
+	cfg.AcceptThreadMessage = false
+	onMessageEvent(smc, event, queue, cfg, &registry)
+	select {
+	case input := <-queue:
+		t.Fatalf("unexpected input=%+v", input)
+	default:
 	}
 }

@@ -9,7 +9,7 @@ import (
 var (
 	// ErrInteractiveStdinBusy により、listener は入力を溜めずに drop を記録できる。
 	ErrInteractiveStdinBusy = errors.New("interactive stdin buffer is full")
-	// ErrInteractiveStdinClosed は、終了と競合した入力を continuation に回さないために使う。
+	// ErrInteractiveStdinClosed は、終了と競合した入力を破棄するために使う。
 	ErrInteractiveStdinClosed = errors.New("interactive stdin is closed")
 )
 

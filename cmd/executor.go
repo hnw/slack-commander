@@ -12,16 +12,11 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
-// ContinuationThread resumes a command after its process exits when a Slack
-// thread reply arrives.
-const ContinuationThread = "thread"
-
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
 type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
 	ConversationContext ConversationContext
-	ThreadContinuation  bool
 }
 
 // ConversationContext identifies the Slack thread that receives command output.
@@ -55,12 +50,6 @@ type Definition struct {
 	URL              string
 	Headers          map[string]string
 	Body             string
-	Continuation     string
-}
-
-// IsThreadContinuation reports whether this definition resumes from thread replies.
-func (d Definition) IsThreadContinuation() bool {
-	return d.Continuation == ContinuationThread
 }
 
 // CommandConfig holds a Definition with reply configuration.
@@ -121,34 +110,9 @@ func ExecutorWithThreadInput(
 			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
-			if input.ThreadContinuation && !isThreadContinuationEligible(cmds, matchers) {
-				continue
-			}
 			_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
 		}
 	}
-}
-
-func isThreadContinuationEligible(cmds []*parsedCommand, matchers []*Matcher) bool {
-	if len(cmds) == 0 {
-		return false
-	}
-	matcher, _ := findMatchedMatcher(cmds[0], matchers)
-	return matcher != nil && matcher.cfg.IsThreadContinuation()
-}
-
-// IsThreadContinuation reports whether the first command in text currently
-// matches a thread continuation definition. It uses the same parser and matcher as Executor.
-func IsThreadContinuation(text string, cfgs []*CommandConfig) bool {
-	commandLine, _ := splitCommandInput(text)
-	cmds, _ := parseCommands(commandLine)
-	matchers := make([]*Matcher, 0, len(cfgs))
-	for _, cfg := range cfgs {
-		if matcher := newMatcher(cfg); matcher != nil {
-			matchers = append(matchers, matcher)
-		}
-	}
-	return isThreadContinuationEligible(cmds, matchers)
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
