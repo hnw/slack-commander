@@ -4,15 +4,6 @@ import (
 	"testing"
 )
 
-func TestDefinitionIsThreadContinuation(t *testing.T) {
-	if !(Definition{Continuation: ContinuationThread}).IsThreadContinuation() {
-		t.Fatal("thread definition should enable continuation")
-	}
-	if (Definition{}).IsThreadContinuation() {
-		t.Fatal("unset continuation should be disabled")
-	}
-}
-
 func TestParse(t *testing.T) {
 	failurePatterns := []string{
 		"",

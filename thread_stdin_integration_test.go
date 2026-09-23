@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -18,14 +15,7 @@ import (
 )
 
 func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(
-			w,
-			`{"ok":true,"messages":[{"ts":"1","text":"agent"},{"ts":"2","user":"U","text":"resume"}]}`,
-		)
-	}))
-	defer server.Close()
-	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	smc := socketmode.New(slack.New("test"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var registry cmd.ThreadInputRegistry
@@ -48,7 +38,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			AllowedUserIDs: []string{
 				"U",
 			}, AllowedChannelIDs: []string{"C"}, AcceptThreadMessage: true,
-		}, configs, &registry)
+		}, &registry)
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })

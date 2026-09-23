@@ -153,7 +153,6 @@ func main() {
 			smc,
 			commandQueue,
 			cfg.PubSubConfig,
-			cmdConfig,
 			&threadInputs,
 		)
 	}()
@@ -185,17 +184,6 @@ func validateConfig(cfg *Config) error {
 	for _, c := range cfg.Commands {
 		if c.StdinIdleTimeout < 0 {
 			return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
-		}
-		continuation := strings.ToLower(strings.TrimSpace(c.Continuation))
-		switch continuation {
-		case "":
-			c.Continuation = ""
-		case cmd.ContinuationThread:
-			c.Continuation = continuation
-		default:
-			return fmt.Errorf(
-				"unknown continuation '%s' for keyword '%s'", c.Continuation, c.Keyword,
-			)
 		}
 		runner, err := normalizeRunner(c)
 		if err != nil {
