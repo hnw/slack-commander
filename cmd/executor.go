@@ -16,6 +16,7 @@ import (
 type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
+	CommandConfigs      []*CommandConfig
 	ConversationContext ConversationContext
 }
 
@@ -23,6 +24,11 @@ type CommandInput struct {
 type ConversationContext struct {
 	ChannelID           string
 	RootThreadTimestamp string
+}
+
+// ThreadKey returns the stable key shared by thread input and route state.
+func (c ConversationContext) ThreadKey() ThreadKey {
+	return ThreadKey{ChannelID: c.ChannelID, RootThreadTimestamp: c.RootThreadTimestamp}
 }
 
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
@@ -56,6 +62,7 @@ type Definition struct {
 type CommandConfig struct {
 	*Definition
 	ReplyConfig interface{} //*pubsub.ReplyConfig
+	Replies     []*CommandConfig
 }
 
 // NewCommandConfig builds a CommandConfig from a definition and reply config.
@@ -121,6 +128,10 @@ func ExecutorWithThreadInputAndLocks(
 			if !ok {
 				return
 			}
+			inputMatchers := matchers
+			if input.CommandConfigs != nil {
+				inputMatchers = buildMatchers(input.CommandConfigs, runnerFactory)
+			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
 
@@ -130,7 +141,7 @@ func ExecutorWithThreadInputAndLocks(
 				parseErr,
 				stdinText,
 				input,
-				matchers,
+				inputMatchers,
 				wq,
 				registry,
 				threadLocks,
@@ -138,6 +149,26 @@ func ExecutorWithThreadInputAndLocks(
 
 		}
 	}
+}
+
+// MatchSingleCommand returns the configured command matching one complete input command.
+// Chained or malformed inputs have no owner for thread reply routing.
+func MatchSingleCommand(text string, cfgs []*CommandConfig) *CommandConfig {
+	cmdMsg, _ := splitCommandInput(text)
+	cmds, err := parseCommands(cmdMsg)
+	if err != nil || len(cmds) != 1 {
+		return nil
+	}
+	for _, cfg := range cfgs {
+		matcher := newMatcher(cfg)
+		if matcher == nil {
+			continue
+		}
+		if args := matcher.build(cmds[0].args); len(args) > 0 {
+			return cfg
+		}
+	}
+	return nil
 }
 
 func executeCommandsWithThreadLock(

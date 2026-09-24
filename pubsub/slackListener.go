@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -57,23 +58,15 @@ func newConversationContext(channelID, timestamp, threadTimestamp string) cmd.Co
 	}
 }
 
-// SlackListener はSocket Modeでメッセージ監視し、コマンドをcommandQueueに投げます。
+// SlackListener watches Socket Mode events and routes new messages to commands.
 func SlackListener(
 	ctx context.Context,
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-) {
-	SlackListenerWithThreadInput(ctx, smc, commandQueue, cfg, nil)
-}
-
-// SlackListenerWithThreadInput は実行中の返信を通常 command queue から分離する。
-func SlackListenerWithThreadInput(
-	ctx context.Context,
-	smc *socketmode.Client,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
 	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	for {
 		select {
@@ -113,9 +106,9 @@ func SlackListenerWithThreadInput(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg, registry)
+						onMessageEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, commandQueue, cfg, registry)
+						onAppMentionEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -166,6 +159,10 @@ func extractEnvelopeID(raw json.RawMessage) (string, bool) {
 }
 
 func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
+	switch ev.SubType {
+	case slack.MsgSubTypeMessageChanged, slack.MsgSubTypeMessageDeleted:
+		return true
+	}
 	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
 		return true
 	}
@@ -230,6 +227,14 @@ func slackMessageText(text string, attachments []slack.Attachment) string {
 	return attachmentTextValue(attachments)
 }
 
+func rootMessageText(root *slack.Message) string {
+	text := slackMessageText(root.Text, root.Attachments)
+	if text, ok := extractReminderText(root.User, text); ok {
+		return text
+	}
+	return text
+}
+
 func attachmentTextValue(attachments []slack.Attachment) string {
 	if len(attachments) == 0 {
 		return ""
@@ -261,6 +266,8 @@ func onMessageEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -273,18 +280,19 @@ func onMessageEvent(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
-		if !cfg.AcceptThreadMessage {
-			return
-		}
+		routeThreadMessage(smc, NewSlackInput(ev, normalizeCommandText(extractMessageText(ev))), commandQueue, commands, routeCache)
+		return
 	}
 	text := normalizeCommandText(extractMessageText(ev))
 	if text == "" {
 		return
 	}
-	if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
+	input := NewSlackInput(ev, text)
+	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping message event command")
 		return
 	}
+	registerRootRoute(routeCache, input, commands)
 	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
@@ -294,6 +302,8 @@ func onAppMentionEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -306,19 +316,73 @@ func onAppMentionEvent(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
-		if !cfg.AcceptThreadMessage {
-			return
-		}
+		routeThreadMessage(smc, NewSlackInputFromAppMention(ev, normalizeCommandText(extractAppMentionText(ev))), commandQueue, commands, routeCache)
+		return
 	}
 	text := normalizeCommandText(extractAppMentionText(ev))
 	if text == "" {
 		return
 	}
-	if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
+	input := NewSlackInputFromAppMention(ev, text)
+	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
 		return
 	}
+	registerRootRoute(routeCache, input, commands)
 	smc.Debugf("[DEBUG]: command = '%s'", text)
+}
+
+func routeThreadMessage(
+	smc *socketmode.Client,
+	input *cmd.CommandInput,
+	commandQueue chan *cmd.CommandInput,
+	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
+) {
+	if input.Text == "" || smc == nil {
+		return
+	}
+	rootConfig, found := routeCache.Lookup(input.ConversationContext.ThreadKey())
+	if !found {
+		root, err := getThreadRoot(smc, input.ConversationContext)
+		if err != nil {
+			log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
+			return
+		}
+		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(rootMessageText(root)), commands)
+		routeCache.Store(input.ConversationContext.ThreadKey(), rootConfig)
+	}
+	if rootConfig == nil || len(rootConfig.Replies) == 0 {
+		return
+	}
+	input.CommandConfigs = rootConfig.Replies
+	if !enqueueCommand(commandQueue, input) {
+		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
+	}
+}
+
+func registerRootRoute(routeCache *cmd.ThreadRouteCache, input *cmd.CommandInput, commands []*cmd.CommandConfig) {
+	if root := cmd.MatchSingleCommand(input.Text, commands); root != nil {
+		routeCache.Store(input.ConversationContext.ThreadKey(), root)
+	}
+}
+
+func getThreadRoot(smc *socketmode.Client, context cmd.ConversationContext) (*slack.Message, error) {
+	messages, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		ChannelID: context.ChannelID,
+		Timestamp: context.RootThreadTimestamp,
+		Inclusive: true,
+		Limit:     1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range messages {
+		if messages[i].Timestamp == context.RootThreadTimestamp {
+			return &messages[i], nil
+		}
+	}
+	return nil, fmt.Errorf("thread root not found")
 }
 
 func routeThreadInput(registry *cmd.ThreadInputRegistry, channel, thread, text string) bool {

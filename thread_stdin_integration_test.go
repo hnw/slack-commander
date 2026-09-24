@@ -43,11 +43,11 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	}
 	listenerDone := make(chan struct{})
 	go func() {
-		pubsub.SlackListenerWithThreadInput(ctx, smc, requests, pubsub.Config{
+		pubsub.SlackListener(ctx, smc, requests, pubsub.Config{
 			AllowedUserIDs: []string{
 				"U",
-			}, AllowedChannelIDs: []string{"C"}, AcceptThreadMessage: true,
-		}, &registry)
+			}, AllowedChannelIDs: []string{"C"},
+		}, &registry, configs, nil)
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })
@@ -66,8 +66,6 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	if registry.Lookup(key) != nil {
 		t.Fatal("endpoint survived process exit")
 	}
-	send("1", "agent\nafter\nexit")
-	awaitThreadStdinOutput(t, outputs, "after|exit\n")
 }
 
 func awaitInteractiveStdinEndpoint(

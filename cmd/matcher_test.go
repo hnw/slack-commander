@@ -115,3 +115,15 @@ func TestMatcher(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchSingleCommandRejectsChains(t *testing.T) {
+	configs := []*CommandConfig{NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)}
+	if got := MatchSingleCommand("todo first", configs); got != configs[0] {
+		t.Fatalf("MatchSingleCommand() = %v, want configured command", got)
+	}
+	for _, text := range []string{"todo first && todo second", "todo first || todo second", "todo first ; todo second"} {
+		if got := MatchSingleCommand(text, configs); got != nil {
+			t.Fatalf("MatchSingleCommand(%q) = %v, want nil", text, got)
+		}
+	}
+}
