@@ -69,12 +69,11 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 	}
 }
 
-func TestAbsentThreadInputUsesExistingThreadRouting(t *testing.T) {
+func TestAbsentThreadInputUsesGlobalThreadRouting(t *testing.T) {
 	smc := socketmode.New(slack.New("test"))
 	cfg := Config{
-		AllowedUserIDs:      []string{"U"},
-		AllowedChannelIDs:   []string{"C"},
-		AcceptThreadMessage: true,
+		AllowedUserIDs:    []string{"U"},
+		AllowedChannelIDs: []string{"C"},
 	}
 	var registry cmd.ThreadInputRegistry
 	queue := make(chan *cmd.CommandInput, 1)
@@ -93,12 +92,5 @@ func TestAbsentThreadInputUsesExistingThreadRouting(t *testing.T) {
 		}
 	default:
 		t.Fatal("missing ordinary thread command")
-	}
-	cfg.AcceptThreadMessage = false
-	onMessageEvent(smc, event, queue, cfg, &registry)
-	select {
-	case input := <-queue:
-		t.Fatalf("unexpected input=%+v", input)
-	default:
 	}
 }

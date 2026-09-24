@@ -56,6 +56,7 @@ type Definition struct {
 type CommandConfig struct {
 	*Definition
 	ReplyConfig interface{} //*pubsub.ReplyConfig
+	Replies     []*CommandConfig
 }
 
 // NewCommandConfig builds a CommandConfig from a definition and reply config.

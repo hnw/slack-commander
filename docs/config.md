@@ -24,10 +24,6 @@ Reminderの発言もキーワードマッチの対象にするか指定します
 
 Botの発言もキーワードマッチの対象にするか指定します。
 
-### accept_thread_message `bool`
-
-返信（スレッド内）の発言もキーワードマッチの対象にするか指定します。
-
 ### allowed_user_ids `[]string`
 
 コマンドを実行できるユーザーIDの許可リストを指定します。空の場合はユーザー制限なしです。
@@ -53,6 +49,26 @@ Botの発言もキーワードマッチの対象にするか指定します。
 ワイルドカードは1つのキーワード指定につき1個だけ使用できます。また、単体のトークンになっている必要があります。たとえば `ssh*` はワイルドカードとして扱われませんが、`ssh *` はワイルドカードとして扱われます。
 
 複数のキーワードにマッチする場合は、先に定義したものが採用されます。
+
+### replies
+
+root messageでこのcommandにマッチしたSlack thread内の返信だけに適用するcommandを、`[[commands.replies]]`として定義します。reply commandはグローバルな`[[commands]]`には含まれません。
+
+reply commandは通常のcommandと同じ`keyword`、`command`、`runner`、`timeout`、`tty`、`stdin_idle_timeout`、HTTP runner用設定、およびreply表示関連設定を指定できます。ただし、`[[commands.replies.replies]]`のような入れ子は指定できません。
+
+```toml
+[[commands]]
+keyword = "todo *"
+command = "todo-wrapper *"
+
+[[commands.replies]]
+keyword = "cancel"
+command = "todo-wrapper --cancel"
+
+[[commands.replies]]
+keyword = "*"
+command = "todo-wrapper *"
+```
 
 ### runner `string`
 
@@ -165,7 +181,7 @@ thread replyはSlackの本文をそのまま渡し、末尾にLFがなければ�
 
 stdinへの書き込みでエラーが発生した場合はexecutor側でログに記録します。
 
-同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。送信先がない場合は、`accept_thread_message` の設定に従う通常のthread routingへ進みます。command chainでプロセスが切り替わる途中も同様です。
+同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。command chainでプロセスが切り替わる途中も同様です。
 
 初期入力を送信した後もstdinは開いたままです。`wc -l` のようにEOFを待つコマンドでは、必要に応じて `stdin_idle_timeout` を設定してください。
 

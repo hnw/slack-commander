@@ -46,7 +46,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		pubsub.SlackListenerWithThreadInput(ctx, smc, requests, pubsub.Config{
 			AllowedUserIDs: []string{
 				"U",
-			}, AllowedChannelIDs: []string{"C"}, AcceptThreadMessage: true,
+			}, AllowedChannelIDs: []string{"C"},
 		}, &registry)
 		close(listenerDone)
 	}()

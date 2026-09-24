@@ -34,6 +34,14 @@ type Config struct {
 type CommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
+	Replies []*ReplyCommandConfig
+}
+
+// ReplyCommandConfig is a thread-reply command definition.
+// It deliberately has no Replies field: nested reply routing is unsupported.
+type ReplyCommandConfig struct {
+	cmd.Definition
+	pubsub.ReplyConfig
 }
 
 func main() {
@@ -75,9 +83,13 @@ func main() {
 		return
 	}
 	cfg := Config{NumWorkers: 1}
-	if _, err := toml.DecodeFile(*configFile, &cfg); err != nil {
+	metadata, err := toml.DecodeFile(*configFile, &cfg)
+	if err != nil {
 		sugar.Errorf("%v", err)
 		return
+	}
+	if err := validateTOMLMetadata(metadata); err != nil {
+		sugar.Fatalf("Fatal: %v", err)
 	}
 	if err := validateConfig(&cfg); err != nil {
 		sugar.Fatalf("Fatal: %v", err)
@@ -87,6 +99,10 @@ func main() {
 	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
 	for i, c := range cfg.Commands {
 		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
+		cmdConfig[i].Replies = make([]*cmd.CommandConfig, len(c.Replies))
+		for j, reply := range c.Replies {
+			cmdConfig[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
+		}
 	}
 
 	api := slack.New(
@@ -184,34 +200,46 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
-		if c.StdinIdleTimeout < 0 {
-			return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
-		}
-		runner, err := normalizeRunner(c)
-		if err != nil {
+		if err := validateCommandDefinition(&c.Definition); err != nil {
 			return err
 		}
-		if err := validateTTY(c); err != nil {
-			return err
-		}
-		if runner != "http" {
-			if strings.HasPrefix(c.Command, "*") {
-				return fmt.Errorf("command field must not start with '*': %s", c.Command)
-			}
-		} else {
-			c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
-			if c.Method == "" {
-				c.Method = "POST"
-			}
-			if strings.TrimSpace(c.URL) == "" {
-				return fmt.Errorf("url is required for http runner (keyword '%s')", c.Keyword)
+		for _, reply := range c.Replies {
+			if err := validateCommandDefinition(&reply.Definition); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func validateTTY(c *CommandConfig) error {
+func validateCommandDefinition(c *cmd.Definition) error {
+	if c.StdinIdleTimeout < 0 {
+		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
+	}
+	runner, err := normalizeRunner(c)
+	if err != nil {
+		return err
+	}
+	if err := validateTTY(c); err != nil {
+		return err
+	}
+	if runner != "http" {
+		if strings.HasPrefix(c.Command, "*") {
+			return fmt.Errorf("command field must not start with '*': %s", c.Command)
+		}
+		return nil
+	}
+	c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
+	if c.Method == "" {
+		c.Method = "POST"
+	}
+	if strings.TrimSpace(c.URL) == "" {
+		return fmt.Errorf("url is required for http runner (keyword '%s')", c.Keyword)
+	}
+	return nil
+}
+
+func validateTTY(c *cmd.Definition) error {
 	if c.TTY && c.StdinIdleTimeout > 0 {
 		return fmt.Errorf(
 			"tty cannot be used with stdin_idle_timeout for keyword '%s'",
@@ -221,7 +249,7 @@ func validateTTY(c *CommandConfig) error {
 	return nil
 }
 
-func normalizeRunner(c *CommandConfig) (string, error) {
+func normalizeRunner(c *cmd.Definition) (string, error) {
 	runner := strings.ToLower(strings.TrimSpace(c.Runner))
 	if runner == "" {
 		runner = "exec"
@@ -236,4 +264,13 @@ func normalizeRunner(c *CommandConfig) (string, error) {
 		return "", fmt.Errorf("tty is not supported for http runner (keyword '%s')", c.Keyword)
 	}
 	return runner, nil
+}
+
+func validateTOMLMetadata(metadata toml.MetaData) error {
+	for _, key := range metadata.Undecoded() {
+		if len(key) >= 3 && key[0] == "commands" && key[1] == "replies" && key[2] == "replies" {
+			return errors.New("commands.replies.replies is not supported")
+		}
+	}
+	return nil
 }

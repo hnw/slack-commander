@@ -184,6 +184,90 @@ reply_broadcast = false
 	}
 }
 
+func TestConfigDecodesCommandReplies(t *testing.T) {
+	var cfg Config
+	_, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "todo *"
+command = "todo-wrapper *"
+
+[[commands.replies]]
+keyword = "cancel"
+command = "todo-wrapper --cancel"
+runner = "http"
+timeout = 30
+tty = false
+stdin_idle_timeout = 10
+method = "POST"
+url = "https://example.com/todo"
+headers = { Authorization = "Bearer token" }
+body = '{"text":"*"}'
+username = "todo bot"
+icon_emoji = ":memo:"
+icon_url = "https://example.com/icon.png"
+reply_broadcast = true
+`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Commands) != 1 || len(cfg.Commands[0].Replies) != 1 {
+		t.Fatalf("commands = %+v", cfg.Commands)
+	}
+	reply := cfg.Commands[0].Replies[0]
+	if reply.Keyword != "cancel" || reply.Command != "todo-wrapper --cancel" ||
+		reply.Runner != "http" || reply.Timeout != 30 || reply.TTY ||
+		reply.StdinIdleTimeout != 10 || reply.Method != "POST" ||
+		reply.URL != "https://example.com/todo" || reply.Headers["Authorization"] != "Bearer token" ||
+		reply.Body != `{"text":"*"}` || reply.Username != "todo bot" ||
+		reply.IconEmoji != ":memo:" || reply.IconURL != "https://example.com/icon.png" ||
+		reply.ReplyBroadcast == nil || !*reply.ReplyBroadcast {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestConfigRejectsNestedCommandReplies(t *testing.T) {
+	var cfg Config
+	metadata, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "todo"
+command = "todo-wrapper"
+
+[[commands.replies]]
+keyword = "cancel"
+command = "todo-wrapper --cancel"
+
+[[commands.replies.replies]]
+keyword = "again"
+command = "todo-wrapper"
+`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTOMLMetadata(metadata); err == nil {
+		t.Fatal("nested replies were accepted")
+	}
+}
+
+func TestValidateConfigValidatesCommandReplies(t *testing.T) {
+	cfg := &Config{
+		PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+		NumWorkers:   1,
+		Commands: []*CommandConfig{{
+			Definition: cmd.Definition{Keyword: "todo", Command: "todo-wrapper"},
+			Replies: []*ReplyCommandConfig{{
+				Definition: cmd.Definition{Keyword: "cancel", Runner: "http"},
+			}},
+		}},
+	}
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "url is required") {
+		t.Fatalf("validateConfig() error = %v, want missing reply URL", err)
+	}
+}
+
 func TestValidateConfigAllowsRestrictedConfig(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{

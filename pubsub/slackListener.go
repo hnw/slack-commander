@@ -273,9 +273,6 @@ func onMessageEvent(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
-		if !cfg.AcceptThreadMessage {
-			return
-		}
 	}
 	text := normalizeCommandText(extractMessageText(ev))
 	if text == "" {
@@ -304,9 +301,6 @@ func onAppMentionEvent(
 	}
 	if ev.ThreadTimeStamp != "" {
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
-			return
-		}
-		if !cfg.AcceptThreadMessage {
 			return
 		}
 	}
