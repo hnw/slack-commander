@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -75,6 +76,18 @@ func SlackListenerWithThreadInput(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 ) {
+	SlackListenerWithThreadInputAndCommands(ctx, smc, commandQueue, cfg, registry, nil)
+}
+
+// SlackListenerWithThreadInputAndCommands resolves thread replies using the root command's reply rules.
+func SlackListenerWithThreadInputAndCommands(
+	ctx context.Context,
+	smc *socketmode.Client,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -113,9 +126,9 @@ func SlackListenerWithThreadInput(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg, registry)
+						onMessageEventWithCommands(smc, ev, commandQueue, cfg, registry, commands)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, commandQueue, cfg, registry)
+						onAppMentionEventWithCommands(smc, ev, commandQueue, cfg, registry, commands)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -166,6 +179,9 @@ func extractEnvelopeID(raw json.RawMessage) (string, bool) {
 }
 
 func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
+	if ev.SubType != "" {
+		return true
+	}
 	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
 		return true
 	}
@@ -262,6 +278,17 @@ func onMessageEvent(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 ) {
+	onMessageEventWithCommands(smc, ev, commandQueue, cfg, registry, nil)
+}
+
+func onMessageEventWithCommands(
+	smc *socketmode.Client,
+	ev *slackevents.MessageEvent,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
 	}
@@ -273,6 +300,8 @@ func onMessageEvent(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
+		routeThreadMessage(smc, NewSlackInput(ev, normalizeCommandText(extractMessageText(ev))), commandQueue, commands)
+		return
 	}
 	text := normalizeCommandText(extractMessageText(ev))
 	if text == "" {
@@ -292,6 +321,17 @@ func onAppMentionEvent(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 ) {
+	onAppMentionEventWithCommands(smc, ev, commandQueue, cfg, registry, nil)
+}
+
+func onAppMentionEventWithCommands(
+	smc *socketmode.Client,
+	ev *slackevents.AppMentionEvent,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
 	}
@@ -303,6 +343,8 @@ func onAppMentionEvent(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
+		routeThreadMessage(smc, NewSlackInputFromAppMention(ev, normalizeCommandText(extractAppMentionText(ev))), commandQueue, commands)
+		return
 	}
 	text := normalizeCommandText(extractAppMentionText(ev))
 	if text == "" {
@@ -313,6 +355,48 @@ func onAppMentionEvent(
 		return
 	}
 	smc.Debugf("[DEBUG]: command = '%s'", text)
+}
+
+func routeThreadMessage(
+	smc *socketmode.Client,
+	input *cmd.CommandInput,
+	commandQueue chan *cmd.CommandInput,
+	commands []*cmd.CommandConfig,
+) {
+	if input.Text == "" || smc == nil {
+		return
+	}
+	root, err := getThreadRoot(smc, input.ConversationContext)
+	if err != nil {
+		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
+		return
+	}
+	rootConfig := cmd.MatchSingleCommand(normalizeCommandText(slackMessageText(root.Text, root.Attachments)), commands)
+	if rootConfig == nil || len(rootConfig.Replies) == 0 {
+		return
+	}
+	input.CommandConfigs = rootConfig.Replies
+	if !enqueueCommand(commandQueue, input) {
+		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
+	}
+}
+
+func getThreadRoot(smc *socketmode.Client, context cmd.ConversationContext) (*slack.Message, error) {
+	messages, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		ChannelID: context.ChannelID,
+		Timestamp: context.RootThreadTimestamp,
+		Inclusive: true,
+		Limit:     1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range messages {
+		if messages[i].Timestamp == context.RootThreadTimestamp {
+			return &messages[i], nil
+		}
+	}
+	return nil, fmt.Errorf("thread root not found")
 }
 
 func routeThreadInput(registry *cmd.ThreadInputRegistry, channel, thread, text string) bool {

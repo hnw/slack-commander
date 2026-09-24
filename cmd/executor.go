@@ -16,6 +16,7 @@ import (
 type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
+	CommandConfigs      []*CommandConfig
 	ConversationContext ConversationContext
 }
 
@@ -122,6 +123,10 @@ func ExecutorWithThreadInputAndLocks(
 			if !ok {
 				return
 			}
+			inputMatchers := matchers
+			if input.CommandConfigs != nil {
+				inputMatchers = buildMatchers(input.CommandConfigs, runnerFactory)
+			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
 
@@ -131,7 +136,7 @@ func ExecutorWithThreadInputAndLocks(
 				parseErr,
 				stdinText,
 				input,
-				matchers,
+				inputMatchers,
 				wq,
 				registry,
 				threadLocks,
@@ -139,6 +144,26 @@ func ExecutorWithThreadInputAndLocks(
 
 		}
 	}
+}
+
+// MatchSingleCommand returns the configured command matching one complete input command.
+// Chained or malformed inputs have no owner for thread reply routing.
+func MatchSingleCommand(text string, cfgs []*CommandConfig) *CommandConfig {
+	cmdMsg, _ := splitCommandInput(text)
+	cmds, err := parseCommands(cmdMsg)
+	if err != nil || len(cmds) != 1 {
+		return nil
+	}
+	for _, cfg := range cfgs {
+		matcher := newMatcher(cfg)
+		if matcher == nil {
+			continue
+		}
+		if args := matcher.build(cmds[0].args); len(args) > 0 {
+			return cfg
+		}
+	}
+	return nil
 }
 
 func executeCommandsWithThreadLock(

@@ -66,8 +66,6 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	if registry.Lookup(key) != nil {
 		t.Fatal("endpoint survived process exit")
 	}
-	send("1", "agent\nafter\nexit")
-	awaitThreadStdinOutput(t, outputs, "after|exit\n")
 }
 
 func awaitInteractiveStdinEndpoint(

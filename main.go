@@ -166,12 +166,13 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListenerWithThreadInput(
+		pubsub.SlackListenerWithThreadInputAndCommands(
 			ctx,
 			smc,
 			commandQueue,
 			cfg.PubSubConfig,
 			&threadInputs,
+			cmdConfig,
 		)
 	}()
 
