@@ -103,6 +103,40 @@ func TestThreadReplyUsesOnlyRootCommandReplyRules(t *testing.T) {
 	}
 }
 
+func TestThreadReplyReconstructsReminderRootWithNormalTextRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"ts":"1","user":"USLACKBOT","text":"Reminder: todo <https://example.com|item>."}]}`))
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo *", Command: "todo-wrapper *"}, nil)
+	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
+	root.Replies = []*cmd.CommandConfig{reply}
+	configs := []*cmd.CommandConfig{root}
+	normalText := normalizeCommandText(extractMessageText(&slackevents.MessageEvent{
+		User: "USLACKBOT", Text: "Reminder: todo <https://example.com|item>.",
+	}))
+	reconstructedText := normalizeCommandText(rootMessageText(&slack.Message{Msg: slack.Msg{
+		User: "USLACKBOT", Text: "Reminder: todo <https://example.com|item>.",
+	}}))
+	if got := cmd.MatchSingleCommand(normalText, configs); got != root {
+		t.Fatalf("normal route = %v, want root", got)
+	}
+	if got := cmd.MatchSingleCommand(reconstructedText, configs); got != root {
+		t.Fatalf("reconstructed route = %v, want root", got)
+	}
+	queue := make(chan *cmd.CommandInput, 1)
+	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}, queue, configs, cmd.NewThreadRouteCache(1))
+	select {
+	case input := <-queue:
+		if len(input.CommandConfigs) != 1 || input.CommandConfigs[0] != reply {
+			t.Fatalf("input = %+v", input)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reply command was not queued")
+	}
+}
+
 func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"ts":"1","text":"todo one && todo two"}]}`))

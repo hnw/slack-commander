@@ -56,6 +56,8 @@ root messageでこのcommandにマッチしたSlack thread内の返信だけに�
 
 reply commandは通常のcommandと同じ`keyword`、`command`、`runner`、`timeout`、`tty`、`stdin_idle_timeout`、HTTP runner用設定、およびreply表示関連設定を指定できます。ただし、`[[commands.replies.replies]]`のような入れ子は指定できません。
 
+thread routeのcache miss時はSlack history APIでroot messageを取得するため、古いthreadのreply routingを復元するにはbot tokenに対応する履歴取得権限が必要です。
+
 ```toml
 [[commands]]
 keyword = "todo *"

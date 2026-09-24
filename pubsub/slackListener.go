@@ -227,6 +227,14 @@ func slackMessageText(text string, attachments []slack.Attachment) string {
 	return attachmentTextValue(attachments)
 }
 
+func rootMessageText(root *slack.Message) string {
+	text := slackMessageText(root.Text, root.Attachments)
+	if text, ok := extractReminderText(root.User, text); ok {
+		return text
+	}
+	return text
+}
+
 func attachmentTextValue(attachments []slack.Attachment) string {
 	if len(attachments) == 0 {
 		return ""
@@ -341,7 +349,7 @@ func routeThreadMessage(
 			log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
 			return
 		}
-		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(slackMessageText(root.Text, root.Attachments)), commands)
+		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(rootMessageText(root)), commands)
 		routeCache.Store(input.ConversationContext.ThreadKey(), rootConfig)
 	}
 	if rootConfig == nil || len(rootConfig.Replies) == 0 {
