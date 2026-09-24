@@ -23,6 +23,10 @@ keyword = 'echo *'
 command = '/bin/echo *'
 monospaced = true
 
+# thread replyを実行中プロセスのstdinへ渡す場合は interaction = 'stdin' を指定します。
+# replyを[[commands.replies]]のcommandとして処理する場合は interaction = 'command' を指定します。
+# 省略時の interaction = 'oneshot' では thread reply を処理しません。
+
 [[commands]]
 keyword = 'notify *'
 runner = 'http'

@@ -50,11 +50,23 @@ Botの発言もキーワードマッチの対象にするか指定します。
 
 複数のキーワードにマッチする場合は、先に定義したものが採用されます。
 
+### interaction `string`
+
+root commandがSlack thread上の追加入力をどう扱うかを指定します。省略時は`oneshot`です。
+
+* `oneshot`: root messageの2行目以降をstdinへ渡します。thread replyは無視します。`;`、`&&`、`||`によるcommand chainを使用できます。
+* `stdin`: root messageの2行目以降を初期stdinへ渡します。実行中のprocessが同じthreadのreplyを受け取ると、その本文をstdinへ渡します。送信先がないreplyは無視します。
+* `command`: root messageおよびreplyの1行目だけでkeyword matchingを行います。2行目以降は加工せず、1個のargvとして末尾へ追加します。replyは`[[commands.replies]]`だけで評価します。
+
+`stdin`と`command`ではcommand chainを使用できません。`runner = "http"`では`oneshot`だけを使用できます。
+
+`interaction`はroot commandの属性です。`[[commands.replies]]`には指定できません。
+
 ### replies
 
 root messageでこのcommandにマッチしたSlack thread内の返信だけに適用するcommandを、`[[commands.replies]]`として定義します。reply commandはグローバルな`[[commands]]`には含まれません。
 
-reply commandは通常のcommandと同じ`keyword`、`command`、`runner`、`timeout`、`tty`、`stdin_idle_timeout`、HTTP runner用設定、およびreply表示関連設定を指定できます。ただし、`[[commands.replies.replies]]`のような入れ子は指定できません。
+reply commandは通常のcommandと同じ`keyword`、`command`、`runner`、`timeout`、`tty`、`stdin_idle_timeout`、HTTP runner用設定、およびreply表示関連設定を指定できます。ただし、`interaction`と`[[commands.replies.replies]]`のような入れ子は指定できません。
 
 thread routeのcache miss時はSlack history APIでroot messageを取得するため、古いthreadのreply routingを復元するにはbot tokenに対応する履歴取得権限が必要です。
 
@@ -171,7 +183,7 @@ botがSlackにポストする時のユーザー名を指定します。
 
 ### Interactive stdin
 
-`exec` と `compose` runnerでは、コマンドの実行中に同じSlack threadへ返信すると、その本文を実行中プロセスのstdinへ渡します。HTTP runnerは対象外です。
+`interaction = "stdin"` を指定した`exec`と`compose` runnerでは、コマンドの実行中に同じSlack threadへ返信すると、その本文を実行中プロセスのstdinへ渡します。HTTP runnerは対象外です。
 
 投稿者とチャンネルには通常の許可判定が適用されます。
 
@@ -203,7 +215,7 @@ thread replyを受け付けるたびに期限を延長します。stdinへの書
 
 期限が来るとstdinを閉じ、通常のEOFを渡します。プロセスやcompose containerを強制終了する設定ではありません。
 
-入力先の登録も解除されるため、その後の返信は送信先がない場合の通常のroutingへ進みます。すでに入力先を取得した返信が終了処理と競合してClosedになった場合は破棄されます。
+入力先の登録も解除されるため、その後の返信は無視されます。すでに入力先を取得した返信が終了処理と競合してClosedになった場合は破棄されます。
 
 ```toml
 [[commands]]

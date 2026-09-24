@@ -22,9 +22,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	var locks cmd.ThreadLocks
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	configs := []*cmd.CommandConfig{cmd.NewCommandConfig(&cmd.Definition{
+	routeCache := cmd.NewThreadRouteCache(1)
+	root := cmd.NewCommandConfig(&cmd.Definition{
 		Keyword: "agent", Command: `/bin/sh -c 'IFS= read -r first; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`, Timeout: 10,
-	}, nil)}
+	}, nil)
+	root.Interaction = cmd.InteractionStdin
+	configs := []*cmd.CommandConfig{root}
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Add(1)
@@ -47,7 +50,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			AllowedUserIDs: []string{
 				"U",
 			}, AllowedChannelIDs: []string{"C"},
-		}, &registry, configs, nil)
+		}, &registry, configs, routeCache)
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })

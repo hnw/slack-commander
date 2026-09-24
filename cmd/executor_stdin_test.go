@@ -357,6 +357,7 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 		&Definition{Keyword: "agent", Command: "agent"},
 		nil,
 	)
+	cfg.Interaction = InteractionStdin
 	rq <- &CommandInput{
 		Text:                "agent\ninitial",
 		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
@@ -403,5 +404,53 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	}
 	if registry.Lookup(key) != nil {
 		t.Fatal("registration survived exit")
+	}
+}
+
+type endpointProbeCmd struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (*endpointProbeCmd) SetStdin(io.Reader)  {}
+func (*endpointProbeCmd) SetStdout(io.Writer) {}
+func (*endpointProbeCmd) SetStderr(io.Writer) {}
+func (*endpointProbeCmd) Run(int) int         { return 0 }
+func (c *endpointProbeCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	started(writer)
+	close(c.started)
+	<-c.finish
+	_ = writer.Close()
+	return 0
+}
+
+func TestExecutorPublishesLiveStdinOnlyForStdinInteraction(t *testing.T) {
+	for _, interaction := range []Interaction{InteractionOneshot, InteractionCommand} {
+		t.Run(string(interaction), func(t *testing.T) {
+			probe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
+			var registry ThreadInputRegistry
+			key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+			rq := make(chan *CommandInput, 1)
+			wq := make(chan *CommandOutput, 10)
+			cfg := NewCommandConfig(&Definition{Keyword: "agent", Command: "agent"}, nil)
+			cfg.Interaction = interaction
+			rq <- &CommandInput{Text: "agent\ninitial", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
+			close(rq)
+			done := make(chan struct{})
+			go func() {
+				ExecutorWithThreadInput(context.Background(), rq, wq, []*CommandConfig{cfg}, func(*CommandConfig) CommandRunner {
+					return singleCmdRunner{probe}
+				}, &registry)
+				close(done)
+			}()
+			<-probe.started
+			if endpoint := registry.Lookup(key); endpoint != nil {
+				t.Fatalf("unexpected endpoint = %v", endpoint)
+			}
+			close(probe.finish)
+			<-done
+		})
 	}
 }

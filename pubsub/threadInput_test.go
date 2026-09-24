@@ -84,6 +84,7 @@ func TestThreadReplyUsesOnlyRootCommandReplyRules(t *testing.T) {
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo *", Command: "todo-wrapper *"}, nil)
+	root.Interaction = cmd.InteractionCommand
 	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
 	root.Replies = []*cmd.CommandConfig{reply}
 	queue := make(chan *cmd.CommandInput, 1)
@@ -110,6 +111,7 @@ func TestThreadReplyReconstructsReminderRootWithNormalTextRules(t *testing.T) {
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo *", Command: "todo-wrapper *"}, nil)
+	root.Interaction = cmd.InteractionCommand
 	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
 	root.Replies = []*cmd.CommandConfig{reply}
 	configs := []*cmd.CommandConfig{root}
@@ -126,7 +128,7 @@ func TestThreadReplyReconstructsReminderRootWithNormalTextRules(t *testing.T) {
 		t.Fatalf("reconstructed route = %v, want root", got)
 	}
 	queue := make(chan *cmd.CommandInput, 1)
-	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}, queue, configs, cmd.NewThreadRouteCache(1))
+	routeThreadReply(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}, queue, nil, configs, cmd.NewThreadRouteCache(1))
 	select {
 	case input := <-queue:
 		if len(input.CommandConfigs) != 1 || input.CommandConfigs[0] != reply {
@@ -144,6 +146,7 @@ func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo *", Command: "todo-wrapper *"}, nil)
+	root.Interaction = cmd.InteractionCommand
 	root.Replies = []*cmd.CommandConfig{cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)}
 	queue := make(chan *cmd.CommandInput, 1)
 	cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
@@ -167,6 +170,7 @@ func TestThreadReplyRouteCacheAvoidsLookupForPositiveAndNegativeResults(t *testi
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
+	root.Interaction = cmd.InteractionCommand
 	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
 	root.Replies = []*cmd.CommandConfig{reply}
 	cache := cmd.NewThreadRouteCache(2)
@@ -175,8 +179,8 @@ func TestThreadReplyRouteCacheAvoidsLookupForPositiveAndNegativeResults(t *testi
 	cache.Store(positive.ThreadKey(), root)
 	cache.Store(negative.ThreadKey(), nil)
 	queue := make(chan *cmd.CommandInput, 1)
-	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: positive}, queue, []*cmd.CommandConfig{root}, cache)
-	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: negative}, queue, []*cmd.CommandConfig{root}, cache)
+	routeThreadReply(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: positive}, queue, nil, []*cmd.CommandConfig{root}, cache)
+	routeThreadReply(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: negative}, queue, nil, []*cmd.CommandConfig{root}, cache)
 	if input := <-queue; len(input.CommandConfigs) != 1 || input.CommandConfigs[0] != reply {
 		t.Fatalf("input = %+v", input)
 	}
@@ -195,7 +199,7 @@ func TestThreadReplyLookupErrorIsNotCached(t *testing.T) {
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	cache := cmd.NewThreadRouteCache(1)
 	context := cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
-	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: context}, make(chan *cmd.CommandInput, 1), nil, cache)
+	routeThreadReply(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: context}, make(chan *cmd.CommandInput, 1), nil, nil, cache)
 	if _, ok := cache.Lookup(context.ThreadKey()); ok {
 		t.Fatal("Slack lookup error was cached")
 	}
@@ -209,12 +213,18 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 		key := cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 		registry.Register(key, endpoint)
 		queue := make(chan *cmd.CommandInput, 10)
+		root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "agent", Command: "cat"}, nil)
+		root.Interaction = cmd.InteractionStdin
+		commands := []*cmd.CommandConfig{root}
+		routeCache := cmd.NewThreadRouteCache(1)
+		routeCache.Store(key, root)
+		smc := socketmode.New(slack.New("test"))
 		cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
 		text := "<@BOT> “hello” &amp; <https://example.com|label>"
 		send := func(text, user string) {
 			if mention {
 				onAppMentionEvent(
-					nil,
+					smc,
 					&slackevents.AppMentionEvent{
 						Channel:         "C",
 						User:            user,
@@ -223,11 +233,11 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 					},
 					queue,
 					cfg,
-					&registry, nil, nil,
+					&registry, commands, routeCache,
 				)
 			} else {
 				onMessageEvent(
-					nil,
+					smc,
 					&slackevents.MessageEvent{
 						Channel:         "C",
 						User:            user,
@@ -236,7 +246,7 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 					},
 					queue,
 					cfg,
-					&registry, nil, nil,
+					&registry, commands, routeCache,
 				)
 			}
 		}
@@ -256,6 +266,73 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 		if len(queue) != 0 {
 			t.Fatal("live reply entered command queue")
 		}
+	}
+}
+
+func TestThreadReplyInteractionRouting(t *testing.T) {
+	newRoot := func(interaction cmd.Interaction) (*cmd.CommandConfig, *cmd.CommandConfig) {
+		root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
+		root.Interaction = interaction
+		reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
+		root.Replies = []*cmd.CommandConfig{reply}
+		return root, reply
+	}
+	context := cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
+	smc := socketmode.New(slack.New("test"))
+
+	t.Run("oneshot drops replies", func(t *testing.T) {
+		root, _ := newRoot(cmd.InteractionOneshot)
+		queue := make(chan *cmd.CommandInput, 1)
+		cache := cmd.NewThreadRouteCache(1)
+		cache.Store(context.ThreadKey(), root)
+		onMessageEvent(smc, &slackevents.MessageEvent{Channel: "C", User: "U", ThreadTimeStamp: "1", Text: "cancel"}, queue, cfg, nil, []*cmd.CommandConfig{root}, cache)
+		if len(queue) != 0 {
+			t.Fatal("oneshot reply entered command queue")
+		}
+	})
+
+	t.Run("stdin drops replies without endpoint", func(t *testing.T) {
+		root, _ := newRoot(cmd.InteractionStdin)
+		queue := make(chan *cmd.CommandInput, 1)
+		cache := cmd.NewThreadRouteCache(1)
+		cache.Store(context.ThreadKey(), root)
+		onMessageEvent(smc, &slackevents.MessageEvent{Channel: "C", User: "U", ThreadTimeStamp: "1", Text: "cancel"}, queue, cfg, nil, []*cmd.CommandConfig{root}, cache)
+		if len(queue) != 0 {
+			t.Fatal("stdin reply without endpoint entered command queue")
+		}
+	})
+
+	t.Run("command queues reply despite live stdin endpoint", func(t *testing.T) {
+		root, reply := newRoot(cmd.InteractionCommand)
+		queue := make(chan *cmd.CommandInput, 1)
+		cache := cmd.NewThreadRouteCache(1)
+		cache.Store(context.ThreadKey(), root)
+		var registry cmd.ThreadInputRegistry
+		_, writer := io.Pipe()
+		endpoint := cmd.NewInteractiveStdin(writer, "", func(error) {})
+		registry.Register(context.ThreadKey(), endpoint)
+		t.Cleanup(endpoint.Close)
+		t.Cleanup(func() { _ = writer.Close() })
+		onMessageEvent(smc, &slackevents.MessageEvent{Channel: "C", User: "U", ThreadTimeStamp: "1", Text: "cancel\n“raw”\n"}, queue, cfg, &registry, []*cmd.CommandConfig{root}, cache)
+		select {
+		case input := <-queue:
+			if input.CommandConfigs[0] != reply || input.Interaction != cmd.InteractionCommand || input.Text != "cancel\n“raw”\n" {
+				t.Fatalf("input = %#v", input)
+			}
+		default:
+			t.Fatal("command reply was not queued")
+		}
+	})
+}
+
+func TestRootCommandInteractionPreservesRawBody(t *testing.T) {
+	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
+	root.Interaction = cmd.InteractionCommand
+	queue := make(chan *cmd.CommandInput, 1)
+	onMessageEvent(socketmode.New(slack.New("test")), &slackevents.MessageEvent{Channel: "C", User: "U", TimeStamp: "1", Text: "todo\n“raw”\n"}, queue, Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}, nil, []*cmd.CommandConfig{root}, nil)
+	if input := <-queue; input.Text != "todo\n“raw”\n" {
+		t.Fatalf("input text = %q", input.Text)
 	}
 }
 

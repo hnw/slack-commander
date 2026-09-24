@@ -34,7 +34,8 @@ type Config struct {
 type CommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
-	Replies []*ReplyCommandConfig
+	Interaction cmd.Interaction `toml:"interaction"`
+	Replies     []*ReplyCommandConfig
 }
 
 // ReplyCommandConfig is a thread-reply command definition.
@@ -99,6 +100,7 @@ func main() {
 	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
 	for i, c := range cfg.Commands {
 		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
+		cmdConfig[i].Interaction = c.Interaction
 		cmdConfig[i].Replies = make([]*cmd.CommandConfig, len(c.Replies))
 		for j, reply := range c.Replies {
 			cmdConfig[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
@@ -203,8 +205,16 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for _, c := range cfg.Commands {
+		interaction, err := c.Interaction.Normalize()
+		if err != nil {
+			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
+		}
+		c.Interaction = interaction
 		if err := validateCommandDefinition(&c.Definition); err != nil {
 			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(c.Runner), "http") && c.Interaction != cmd.InteractionOneshot {
+			return fmt.Errorf("http runner only supports oneshot interaction for keyword '%s'", c.Keyword)
 		}
 		for _, reply := range c.Replies {
 			if err := validateCommandDefinition(&reply.Definition); err != nil {
@@ -273,6 +283,9 @@ func validateTOMLMetadata(metadata toml.MetaData) error {
 	for _, key := range metadata.Undecoded() {
 		if len(key) >= 3 && key[0] == "commands" && key[1] == "replies" && key[2] == "replies" {
 			return errors.New("commands.replies.replies is not supported")
+		}
+		if len(key) == 3 && key[0] == "commands" && key[1] == "replies" && key[2] == "interaction" {
+			return errors.New("commands.replies.interaction is not supported")
 		}
 	}
 	return nil
