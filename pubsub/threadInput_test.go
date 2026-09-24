@@ -14,6 +14,64 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
+func TestShouldIgnoreMessageEventPreservesBotAndReminderHandling(t *testing.T) {
+	previousUserID := userID
+	userID = "U-self"
+	t.Cleanup(func() { userID = previousUserID })
+
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{AcceptBotMessage: true}) {
+		t.Fatal("accepted bot message was ignored")
+	}
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{}) {
+		t.Fatal("bot message ignored accept_bot_message=false was accepted")
+	}
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageChanged}, Config{}) {
+		t.Fatal("message_changed was accepted")
+	}
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageDeleted}, Config{}) {
+		t.Fatal("message_deleted was accepted")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMeMessage}, Config{}) {
+		t.Fatal("non-edit subtype was newly ignored")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{User: "USLACKBOT", Text: "Reminder: todo"}, Config{AcceptReminder: true}) {
+		t.Fatal("accepted reminder was ignored")
+	}
+}
+
+func TestRootQueueFullDoesNotRegisterRoute(t *testing.T) {
+	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
+	tests := []struct {
+		name   string
+		handle func(*socketmode.Client, chan *cmd.CommandInput, *cmd.ThreadRouteCache, []*cmd.CommandConfig)
+		key    cmd.ThreadKey
+	}{
+		{
+			name: "message", key: cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"},
+			handle: func(smc *socketmode.Client, queue chan *cmd.CommandInput, cache *cmd.ThreadRouteCache, commands []*cmd.CommandConfig) {
+				onMessageEvent(smc, &slackevents.MessageEvent{Channel: "C", User: "U", TimeStamp: "1", Text: "todo"}, queue, Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}, nil, commands, cache)
+			},
+		},
+		{
+			name: "app mention", key: cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "2"},
+			handle: func(smc *socketmode.Client, queue chan *cmd.CommandInput, cache *cmd.ThreadRouteCache, commands []*cmd.CommandConfig) {
+				onAppMentionEvent(smc, &slackevents.AppMentionEvent{Channel: "C", User: "U", TimeStamp: "2", Text: "todo"}, queue, Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}, nil, commands, cache)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queue := make(chan *cmd.CommandInput, 1)
+			queue <- &cmd.CommandInput{}
+			cache := cmd.NewThreadRouteCache(1)
+			tt.handle(socketmode.New(slack.New("test")), queue, cache, []*cmd.CommandConfig{root})
+			if _, ok := cache.Lookup(tt.key); ok {
+				t.Fatal("queue-dropped root route was cached")
+			}
+		})
+	}
+}
+
 func TestThreadReplyUsesOnlyRootCommandReplyRules(t *testing.T) {
 	lookups := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,9 +87,9 @@ func TestThreadReplyUsesOnlyRootCommandReplyRules(t *testing.T) {
 	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
 	root.Replies = []*cmd.CommandConfig{reply}
 	queue := make(chan *cmd.CommandInput, 1)
-	onMessageEventWithCommands(smc, &slackevents.MessageEvent{
+	onMessageEvent(smc, &slackevents.MessageEvent{
 		Channel: "C", User: "U", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> “cancel”",
-	}, queue, Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}, nil, []*cmd.CommandConfig{root})
+	}, queue, Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}, nil, []*cmd.CommandConfig{root}, nil)
 	select {
 	case input := <-queue:
 		if input.Text != ` "cancel"` || len(input.CommandConfigs) != 1 || input.CommandConfigs[0] != reply {
@@ -55,12 +113,12 @@ func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
 	root.Replies = []*cmd.CommandConfig{cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)}
 	queue := make(chan *cmd.CommandInput, 1)
 	cfg := Config{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}
-	onMessageEventWithCommands(smc, &slackevents.MessageEvent{
+	onMessageEvent(smc, &slackevents.MessageEvent{
 		Channel: "C", User: "U", TimeStamp: "2", ThreadTimeStamp: "1", Text: "cancel",
-	}, queue, cfg, nil, []*cmd.CommandConfig{root})
-	onMessageEventWithCommands(smc, &slackevents.MessageEvent{
+	}, queue, cfg, nil, []*cmd.CommandConfig{root}, nil)
+	onMessageEvent(smc, &slackevents.MessageEvent{
 		Channel: "C", User: "U", TimeStamp: "3", Text: "todo item", SubType: slack.MsgSubTypeMessageChanged,
-	}, queue, cfg, nil, []*cmd.CommandConfig{root})
+	}, queue, cfg, nil, []*cmd.CommandConfig{root}, nil)
 	select {
 	case input := <-queue:
 		t.Fatalf("unexpected input = %+v", input)
@@ -131,7 +189,7 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 					},
 					queue,
 					cfg,
-					&registry,
+					&registry, nil, nil,
 				)
 			} else {
 				onMessageEvent(
@@ -144,7 +202,7 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 					},
 					queue,
 					cfg,
-					&registry,
+					&registry, nil, nil,
 				)
 			}
 		}
@@ -182,7 +240,7 @@ func TestAbsentThreadInputDoesNotUseGlobalThreadRouting(t *testing.T) {
 		ThreadTimeStamp: "1",
 		Text:            "reply",
 	}
-	onMessageEvent(smc, event, queue, cfg, &registry)
+	onMessageEvent(smc, event, queue, cfg, &registry, nil, nil)
 	select {
 	case input := <-queue:
 		t.Fatalf("unexpected global input=%+v", input)

@@ -167,7 +167,7 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListenerWithThreadInputAndCommandsAndRouteCache(
+		pubsub.SlackListener(
 			ctx,
 			smc,
 			commandQueue,

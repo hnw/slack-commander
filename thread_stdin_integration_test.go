@@ -43,11 +43,11 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	}
 	listenerDone := make(chan struct{})
 	go func() {
-		pubsub.SlackListenerWithThreadInput(ctx, smc, requests, pubsub.Config{
+		pubsub.SlackListener(ctx, smc, requests, pubsub.Config{
 			AllowedUserIDs: []string{
 				"U",
 			}, AllowedChannelIDs: []string{"C"},
-		}, &registry)
+		}, &registry, configs, nil)
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })

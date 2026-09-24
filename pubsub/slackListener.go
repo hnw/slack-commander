@@ -58,41 +58,8 @@ func newConversationContext(channelID, timestamp, threadTimestamp string) cmd.Co
 	}
 }
 
-// SlackListener はSocket Modeでメッセージ監視し、コマンドをcommandQueueに投げます。
+// SlackListener watches Socket Mode events and routes new messages to commands.
 func SlackListener(
-	ctx context.Context,
-	smc *socketmode.Client,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
-) {
-	SlackListenerWithThreadInput(ctx, smc, commandQueue, cfg, nil)
-}
-
-// SlackListenerWithThreadInput は実行中の返信を通常 command queue から分離する。
-func SlackListenerWithThreadInput(
-	ctx context.Context,
-	smc *socketmode.Client,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
-	registry *cmd.ThreadInputRegistry,
-) {
-	SlackListenerWithThreadInputAndCommands(ctx, smc, commandQueue, cfg, registry, nil)
-}
-
-// SlackListenerWithThreadInputAndCommands resolves thread replies using the root command's reply rules.
-func SlackListenerWithThreadInputAndCommands(
-	ctx context.Context,
-	smc *socketmode.Client,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
-	registry *cmd.ThreadInputRegistry,
-	commands []*cmd.CommandConfig,
-) {
-	SlackListenerWithThreadInputAndCommandsAndRouteCache(ctx, smc, commandQueue, cfg, registry, commands, nil)
-}
-
-// SlackListenerWithThreadInputAndCommandsAndRouteCache adds a bounded root-route cache.
-func SlackListenerWithThreadInputAndCommandsAndRouteCache(
 	ctx context.Context,
 	smc *socketmode.Client,
 	commandQueue chan *cmd.CommandInput,
@@ -139,9 +106,9 @@ func SlackListenerWithThreadInputAndCommandsAndRouteCache(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, routeCache)
+						onMessageEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, routeCache)
+						onAppMentionEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -192,7 +159,8 @@ func extractEnvelopeID(raw json.RawMessage) (string, bool) {
 }
 
 func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
-	if ev.SubType != "" {
+	switch ev.SubType {
+	case slack.MsgSubTypeMessageChanged, slack.MsgSubTypeMessageDeleted:
 		return true
 	}
 	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
@@ -290,24 +258,8 @@ func onMessageEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
-) {
-	onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, nil, nil)
-}
-
-func onMessageEventWithCommands(
-	smc *socketmode.Client,
-	ev *slackevents.MessageEvent,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
-	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
-) {
-	onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, nil)
-}
-
-func onMessageEventWithCommandsAndRouteCache(
-	smc *socketmode.Client, ev *slackevents.MessageEvent, commandQueue chan *cmd.CommandInput,
-	cfg Config, registry *cmd.ThreadInputRegistry, commands []*cmd.CommandConfig, routeCache *cmd.ThreadRouteCache,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -328,11 +280,11 @@ func onMessageEventWithCommandsAndRouteCache(
 		return
 	}
 	input := NewSlackInput(ev, text)
-	registerRootRoute(routeCache, input, commands)
 	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping message event command")
 		return
 	}
+	registerRootRoute(routeCache, input, commands)
 	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
@@ -342,24 +294,8 @@ func onAppMentionEvent(
 	commandQueue chan *cmd.CommandInput,
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
-) {
-	onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, nil, nil)
-}
-
-func onAppMentionEventWithCommands(
-	smc *socketmode.Client,
-	ev *slackevents.AppMentionEvent,
-	commandQueue chan *cmd.CommandInput,
-	cfg Config,
-	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
-) {
-	onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, nil)
-}
-
-func onAppMentionEventWithCommandsAndRouteCache(
-	smc *socketmode.Client, ev *slackevents.AppMentionEvent, commandQueue chan *cmd.CommandInput,
-	cfg Config, registry *cmd.ThreadInputRegistry, commands []*cmd.CommandConfig, routeCache *cmd.ThreadRouteCache,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -380,11 +316,11 @@ func onAppMentionEventWithCommandsAndRouteCache(
 		return
 	}
 	input := NewSlackInputFromAppMention(ev, text)
-	registerRootRoute(routeCache, input, commands)
 	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
 		return
 	}
+	registerRootRoute(routeCache, input, commands)
 	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
