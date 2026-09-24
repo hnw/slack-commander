@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,15 +16,21 @@ type fakeCall struct {
 }
 
 type fakeRunner struct {
-	mu    sync.Mutex
-	calls []fakeCall
+	mu     sync.Mutex
+	calls  []fakeCall
+	inputs []string
 }
 
 func (r *fakeRunner) CommandContext(_ context.Context, name string, arg ...string) Cmd {
 	r.mu.Lock()
 	r.calls = append(r.calls, fakeCall{name: name, args: append([]string(nil), arg...)})
 	r.mu.Unlock()
-	return &fakeCmd{exitCode: 0}
+	return &fakeCmd{exitCode: 0, onRun: func(stdin io.Reader) {
+		input, _ := io.ReadAll(stdin)
+		r.mu.Lock()
+		r.inputs = append(r.inputs, string(input))
+		r.mu.Unlock()
+	}}
 }
 
 func (r *fakeRunner) Calls() []fakeCall {
@@ -34,6 +41,12 @@ func (r *fakeRunner) Calls() []fakeCall {
 	return out
 }
 
+func (r *fakeRunner) Inputs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.inputs...)
+}
+
 type fakeCmd struct {
 	stdin      io.Reader
 	stdout     io.Writer
@@ -41,6 +54,7 @@ type fakeCmd struct {
 	exitCode   int
 	stdoutText string
 	stderrText string
+	onRun      func(io.Reader)
 }
 
 func (c *fakeCmd) SetStdin(r io.Reader) {
@@ -56,6 +70,9 @@ func (c *fakeCmd) SetStderr(w io.Writer) {
 }
 
 func (c *fakeCmd) Run(_ int) int {
+	if c.onRun != nil && c.stdin != nil {
+		c.onRun(c.stdin)
+	}
 	if c.stdoutText != "" {
 		_, _ = io.WriteString(c.stdout, c.stdoutText)
 	}
@@ -63,6 +80,77 @@ func (c *fakeCmd) Run(_ int) int {
 		_, _ = io.WriteString(c.stderr, c.stderrText)
 	}
 	return c.exitCode
+}
+
+func TestExecutorCommandInteractionSendsBodyOnlyToArgv(t *testing.T) {
+	config := NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)
+	config.Interaction = InteractionCommand
+	runner := &fakeRunner{}
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 10)
+	rq <- &CommandInput{Text: "todo foo\nbar\n"}
+	close(rq)
+	ExecutorWithRunner(context.Background(), rq, wq, []*CommandConfig{config}, func(*CommandConfig) CommandRunner {
+		return runner
+	})
+	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "bar\n"}) {
+		t.Fatalf("calls = %#v", got)
+	}
+	if got := runner.Inputs(); !slices.Equal(got, []string{""}) {
+		t.Fatalf("stdin = %#v, want empty", got)
+	}
+}
+
+func TestExecutorRejectsChainsContainingNonOneshotCommand(t *testing.T) {
+	newConfig := func(keyword string, interaction Interaction) *CommandConfig {
+		config := NewCommandConfig(&Definition{Keyword: keyword, Command: keyword}, nil)
+		config.Interaction = interaction
+		return config
+	}
+	tests := []struct {
+		name      string
+		input     string
+		configs   []*CommandConfig
+		wantCalls int
+	}{
+		{
+			name: "oneshot chain executes", input: "first ; second", wantCalls: 2,
+			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("second", InteractionOneshot)},
+		},
+		{
+			name: "stdin chain rejects", input: "stdin-first ; stdin-second",
+			configs: []*CommandConfig{newConfig("stdin-first", InteractionStdin), newConfig("stdin-second", InteractionStdin)},
+		},
+		{
+			name: "command chain rejects", input: "command-first ; command-second",
+			configs: []*CommandConfig{newConfig("command-first", InteractionCommand), newConfig("command-second", InteractionCommand)},
+		},
+		{
+			name: "oneshot then stdin rejects", input: "first ; stdin-second",
+			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("stdin-second", InteractionStdin)},
+		},
+		{
+			name: "oneshot then command rejects", input: "first ; command-second",
+			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("command-second", InteractionCommand)},
+		},
+		{
+			name: "stdin then oneshot rejects", input: "stdin-first ; second",
+			configs: []*CommandConfig{newConfig("stdin-first", InteractionStdin), newConfig("second", InteractionOneshot)},
+		},
+		{
+			name: "command then oneshot rejects", input: "command-first ; second",
+			configs: []*CommandConfig{newConfig("command-first", InteractionCommand), newConfig("second", InteractionOneshot)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, _ := runExecutorOnce(t, tt.input, tt.configs)
+			if len(calls) != tt.wantCalls {
+				t.Fatalf("calls = %#v, want %d", calls, tt.wantCalls)
+			}
+		})
+	}
 }
 
 type contextRunner struct{}
@@ -134,6 +222,40 @@ func TestExecutorIntentDetection(t *testing.T) {
 		"execute valid command and show error for invalid subsequent command",
 		testExecutorExecuteValidThenInvalidCommand,
 	)
+}
+
+func TestExecutorInteractionInput(t *testing.T) {
+	tests := []struct {
+		name        string
+		interaction Interaction
+		input       string
+		wantArgs    []string
+		wantCalls   int
+	}{
+		{name: "oneshot passes body to stdin", input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
+		{name: "stdin passes initial body to stdin", interaction: InteractionStdin, input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
+		{name: "command appends raw body", interaction: InteractionCommand, input: "todo foo\nbar\n", wantArgs: []string{"foo", "bar\n"}, wantCalls: 1},
+		{name: "command appends raw body after quoted first line", interaction: InteractionCommand, input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "baz\n"}, wantCalls: 1},
+		{name: "command preserves blank body", interaction: InteractionCommand, input: "todo\n\n", wantArgs: []string{"\n"}, wantCalls: 1},
+		{name: "command does not append empty body", interaction: InteractionCommand, input: "todo\n", wantArgs: nil, wantCalls: 1},
+		{name: "command rejects chains", interaction: InteractionCommand, input: "todo one && todo two", wantCalls: 0},
+		{name: "stdin rejects chains", interaction: InteractionStdin, input: "todo one && todo two", wantCalls: 0},
+		{name: "oneshot allows chains", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)
+			config.Interaction = tt.interaction
+			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			if len(calls) != tt.wantCalls {
+				t.Fatalf("calls = %#v, want %d calls", calls, tt.wantCalls)
+			}
+			if tt.wantCalls > 0 && !slices.Equal(calls[0].args, tt.wantArgs) {
+				t.Fatalf("first args = %#v, want %#v", calls[0].args, tt.wantArgs)
+			}
+		})
+	}
 }
 
 func TestExecutorPropagatesConversationContext(t *testing.T) {

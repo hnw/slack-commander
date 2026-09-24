@@ -277,13 +277,10 @@ func onMessageEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
-		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
-			return
-		}
-		routeThreadMessage(smc, NewSlackInput(ev, normalizeCommandText(extractMessageText(ev))), commandQueue, commands, routeCache)
+		routeThreadReply(smc, NewSlackInput(ev, extractMessageText(ev)), commandQueue, registry, commands, routeCache)
 		return
 	}
-	text := normalizeCommandText(extractMessageText(ev))
+	text := normalizeRootCommandText(extractMessageText(ev), commands)
 	if text == "" {
 		return
 	}
@@ -313,13 +310,10 @@ func onAppMentionEvent(
 		return
 	}
 	if ev.ThreadTimeStamp != "" {
-		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
-			return
-		}
-		routeThreadMessage(smc, NewSlackInputFromAppMention(ev, normalizeCommandText(extractAppMentionText(ev))), commandQueue, commands, routeCache)
+		routeThreadReply(smc, NewSlackInputFromAppMention(ev, extractAppMentionText(ev)), commandQueue, registry, commands, routeCache)
 		return
 	}
-	text := normalizeCommandText(extractAppMentionText(ev))
+	text := normalizeRootCommandText(extractAppMentionText(ev), commands)
 	if text == "" {
 		return
 	}
@@ -332,10 +326,11 @@ func onAppMentionEvent(
 	smc.Debugf("[DEBUG]: command = '%s'", text)
 }
 
-func routeThreadMessage(
+func routeThreadReply(
 	smc *socketmode.Client,
 	input *cmd.CommandInput,
 	commandQueue chan *cmd.CommandInput,
+	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
 	routeCache *cmd.ThreadRouteCache,
 ) {
@@ -352,13 +347,48 @@ func routeThreadMessage(
 		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(rootMessageText(root)), commands)
 		routeCache.Store(input.ConversationContext.ThreadKey(), rootConfig)
 	}
-	if rootConfig == nil || len(rootConfig.Replies) == 0 {
+	if rootConfig == nil {
 		return
 	}
+	interaction, err := rootConfig.Interaction.Normalize()
+	if err != nil {
+		return
+	}
+	switch interaction {
+	case cmd.InteractionOneshot:
+		return
+	case cmd.InteractionStdin:
+		routeThreadInput(registry, input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, input.Text)
+		return
+	case cmd.InteractionCommand:
+		if len(rootConfig.Replies) == 0 {
+			return
+		}
+	}
+	input.Text = normalizeCommandFirstLine(input.Text)
 	input.CommandConfigs = rootConfig.Replies
+	input.Interaction = cmd.InteractionCommand
 	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
 	}
+}
+
+func normalizeRootCommandText(text string, commands []*cmd.CommandConfig) string {
+	normalized := normalizeCommandText(text)
+	root := cmd.MatchSingleCommand(normalized, commands)
+	if root == nil || root.Interaction != cmd.InteractionCommand {
+		return normalized
+	}
+	return normalizeCommandFirstLine(text)
+}
+
+func normalizeCommandFirstLine(text string) string {
+	parts := strings.SplitN(text, "\n", 2)
+	first := normalizeCommandText(parts[0])
+	if len(parts) == 1 {
+		return first
+	}
+	return first + "\n" + parts[1]
 }
 
 func registerRootRoute(routeCache *cmd.ThreadRouteCache, input *cmd.CommandInput, commands []*cmd.CommandConfig) {

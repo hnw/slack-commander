@@ -17,6 +17,7 @@ type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
 	CommandConfigs      []*CommandConfig
+	Interaction         Interaction
 	ConversationContext ConversationContext
 }
 
@@ -63,6 +64,7 @@ type CommandConfig struct {
 	*Definition
 	ReplyConfig interface{} //*pubsub.ReplyConfig
 	Replies     []*CommandConfig
+	Interaction Interaction
 }
 
 // NewCommandConfig builds a CommandConfig from a definition and reply config.
@@ -70,6 +72,7 @@ func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
 	return &CommandConfig{
 		Definition:  def,
 		ReplyConfig: replyConfig,
+		Interaction: InteractionOneshot,
 	}
 }
 
@@ -134,21 +137,62 @@ func ExecutorWithThreadInputAndLocks(
 			}
 			cmdMsg, stdinText := splitCommandInput(input.Text)
 			cmds, parseErr := parseCommands(cmdMsg)
+			interaction := input.Interaction
+			if interaction == "" && len(cmds) > 0 {
+				if matcher, _ := findMatchedMatcher(cmds[0], inputMatchers); matcher != nil {
+					interaction = matcher.cfg.Interaction
+				}
+			}
+			interaction, err := interaction.Normalize()
+			if err != nil {
+				continue
+			}
+			if len(cmds) > 1 && !chainUsesOnlyOneshot(cmds, inputMatchers) {
+				continue
+			}
+			if interaction != InteractionOneshot && len(cmds) != 1 {
+				continue
+			}
+			rawBody := ""
+			initialStdin := stdinText
+			inputRegistry := registry
+			if interaction == InteractionCommand {
+				rawBody = stdinText
+				initialStdin = ""
+			}
+			if interaction != InteractionStdin {
+				inputRegistry = nil
+			}
 
 			executeCommandsWithThreadLock(
 				ctx,
 				cmds,
 				parseErr,
-				stdinText,
+				initialStdin,
+				rawBody,
 				input,
 				inputMatchers,
 				wq,
-				registry,
+				inputRegistry,
 				threadLocks,
 			)
 
 		}
 	}
+}
+
+func chainUsesOnlyOneshot(cmds []*parsedCommand, matchers []*Matcher) bool {
+	for _, command := range cmds {
+		matcher, _ := findMatchedMatcher(command, matchers)
+		if matcher == nil {
+			continue
+		}
+		interaction, err := matcher.cfg.Interaction.Normalize()
+		if err != nil || interaction != InteractionOneshot {
+			return false
+		}
+	}
+	return true
 }
 
 // MatchSingleCommand returns the configured command matching one complete input command.
@@ -176,6 +220,7 @@ func executeCommandsWithThreadLock(
 	cmds []*parsedCommand,
 	parseErr error,
 	stdinText string,
+	rawBody string,
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
@@ -184,7 +229,7 @@ func executeCommandsWithThreadLock(
 ) {
 	unlock := threadLocks.Lock(input.ConversationContext)
 	defer unlock()
-	_ = executeCommands(ctx, cmds, parseErr, stdinText, input, matchers, wq, registry)
+	_ = executeCommands(ctx, cmds, parseErr, stdinText, rawBody, input, matchers, wq, registry)
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
@@ -241,6 +286,7 @@ func executeCommands(
 	cmds []*parsedCommand,
 	parseErr error,
 	stdinText string,
+	rawBody string,
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
@@ -283,6 +329,9 @@ func executeCommands(
 			// エラー表示して処理全体を終了
 			ret = writeParseError(wq, input, parseErr)
 			return ret
+		}
+		if rawBody != "" {
+			args = append(args, rawBody)
 		}
 		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, registry)
 	}

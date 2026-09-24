@@ -29,6 +29,42 @@ func TestConfigStdinIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestConfigInteraction(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		setting     string
+		want        cmd.Interaction
+		wantErrText string
+	}{
+		{name: "defaults to oneshot", want: cmd.InteractionOneshot},
+		{name: "stdin", setting: "interaction = 'stdin'", want: cmd.InteractionStdin},
+		{name: "command", setting: "interaction = 'command'", want: cmd.InteractionCommand},
+		{name: "rejects unknown", setting: "interaction = 'session'", wantErrText: "unknown interaction"},
+		{name: "http only supports oneshot", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "only supports oneshot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg Config
+			_, err := toml.Decode("allowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = validateConfig(&cfg)
+			if tc.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrText) {
+					t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Commands[0].Interaction; got != tc.want {
+				t.Fatalf("interaction = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfigTTYDefaultsToFalse(t *testing.T) {
 	var cfg Config
 	if _, err := toml.Decode("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {
@@ -224,6 +260,28 @@ reply_broadcast = true
 		reply.IconEmoji != ":memo:" || reply.IconURL != "https://example.com/icon.png" ||
 		reply.ReplyBroadcast == nil || !*reply.ReplyBroadcast {
 		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestConfigRejectsInteractionOnReplyCommand(t *testing.T) {
+	var cfg Config
+	metadata, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "todo"
+command = "todo-wrapper"
+
+[[commands.replies]]
+keyword = "cancel"
+command = "todo-wrapper --cancel"
+interaction = "command"
+`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTOMLMetadata(metadata); err == nil {
+		t.Fatal("reply command interaction was accepted")
 	}
 }
 
