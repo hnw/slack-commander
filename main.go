@@ -125,6 +125,7 @@ func main() {
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	var threadInputs cmd.ThreadInputRegistry
+	threadRoutes := cmd.NewThreadRouteCache(4096)
 	var threadLocks cmd.ThreadLocks
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
@@ -166,13 +167,14 @@ func main() {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListenerWithThreadInputAndCommands(
+		pubsub.SlackListenerWithThreadInputAndCommandsAndRouteCache(
 			ctx,
 			smc,
 			commandQueue,
 			cfg.PubSubConfig,
 			&threadInputs,
 			cmdConfig,
+			threadRoutes,
 		)
 	}()
 

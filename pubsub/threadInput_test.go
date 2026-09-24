@@ -68,6 +68,47 @@ func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
 	}
 }
 
+func TestThreadReplyRouteCacheAvoidsLookupForPositiveAndNegativeResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("cached route unexpectedly called Slack")
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
+	reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)
+	root.Replies = []*cmd.CommandConfig{reply}
+	cache := cmd.NewThreadRouteCache(2)
+	positive := cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	negative := cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "2"}
+	cache.Store(positive.ThreadKey(), root)
+	cache.Store(negative.ThreadKey(), nil)
+	queue := make(chan *cmd.CommandInput, 1)
+	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: positive}, queue, []*cmd.CommandConfig{root}, cache)
+	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: negative}, queue, []*cmd.CommandConfig{root}, cache)
+	if input := <-queue; len(input.CommandConfigs) != 1 || input.CommandConfigs[0] != reply {
+		t.Fatalf("input = %+v", input)
+	}
+	select {
+	case input := <-queue:
+		t.Fatalf("negative route queued input = %+v", input)
+	default:
+	}
+}
+
+func TestThreadReplyLookupErrorIsNotCached(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	cache := cmd.NewThreadRouteCache(1)
+	context := cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	routeThreadMessage(smc, &cmd.CommandInput{Text: "cancel", ConversationContext: context}, make(chan *cmd.CommandInput, 1), nil, cache)
+	if _, ok := cache.Lookup(context.ThreadKey()); ok {
+		t.Fatal("Slack lookup error was cached")
+	}
+}
+
 func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 	for _, mention := range []bool{false, true} {
 		var registry cmd.ThreadInputRegistry

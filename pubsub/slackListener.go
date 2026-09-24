@@ -88,6 +88,19 @@ func SlackListenerWithThreadInputAndCommands(
 	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
 ) {
+	SlackListenerWithThreadInputAndCommandsAndRouteCache(ctx, smc, commandQueue, cfg, registry, commands, nil)
+}
+
+// SlackListenerWithThreadInputAndCommandsAndRouteCache adds a bounded root-route cache.
+func SlackListenerWithThreadInputAndCommandsAndRouteCache(
+	ctx context.Context,
+	smc *socketmode.Client,
+	commandQueue chan *cmd.CommandInput,
+	cfg Config,
+	registry *cmd.ThreadInputRegistry,
+	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
+) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -126,9 +139,9 @@ func SlackListenerWithThreadInputAndCommands(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEventWithCommands(smc, ev, commandQueue, cfg, registry, commands)
+						onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEventWithCommands(smc, ev, commandQueue, cfg, registry, commands)
+						onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, routeCache)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -278,7 +291,7 @@ func onMessageEvent(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 ) {
-	onMessageEventWithCommands(smc, ev, commandQueue, cfg, registry, nil)
+	onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, nil, nil)
 }
 
 func onMessageEventWithCommands(
@@ -288,6 +301,13 @@ func onMessageEventWithCommands(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
+) {
+	onMessageEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, nil)
+}
+
+func onMessageEventWithCommandsAndRouteCache(
+	smc *socketmode.Client, ev *slackevents.MessageEvent, commandQueue chan *cmd.CommandInput,
+	cfg Config, registry *cmd.ThreadInputRegistry, commands []*cmd.CommandConfig, routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -300,14 +320,16 @@ func onMessageEventWithCommands(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
-		routeThreadMessage(smc, NewSlackInput(ev, normalizeCommandText(extractMessageText(ev))), commandQueue, commands)
+		routeThreadMessage(smc, NewSlackInput(ev, normalizeCommandText(extractMessageText(ev))), commandQueue, commands, routeCache)
 		return
 	}
 	text := normalizeCommandText(extractMessageText(ev))
 	if text == "" {
 		return
 	}
-	if !enqueueCommand(commandQueue, NewSlackInput(ev, text)) {
+	input := NewSlackInput(ev, text)
+	registerRootRoute(routeCache, input, commands)
+	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping message event command")
 		return
 	}
@@ -321,7 +343,7 @@ func onAppMentionEvent(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 ) {
-	onAppMentionEventWithCommands(smc, ev, commandQueue, cfg, registry, nil)
+	onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, nil, nil)
 }
 
 func onAppMentionEventWithCommands(
@@ -331,6 +353,13 @@ func onAppMentionEventWithCommands(
 	cfg Config,
 	registry *cmd.ThreadInputRegistry,
 	commands []*cmd.CommandConfig,
+) {
+	onAppMentionEventWithCommandsAndRouteCache(smc, ev, commandQueue, cfg, registry, commands, nil)
+}
+
+func onAppMentionEventWithCommandsAndRouteCache(
+	smc *socketmode.Client, ev *slackevents.AppMentionEvent, commandQueue chan *cmd.CommandInput,
+	cfg Config, registry *cmd.ThreadInputRegistry, commands []*cmd.CommandConfig, routeCache *cmd.ThreadRouteCache,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -343,14 +372,16 @@ func onAppMentionEventWithCommands(
 		if routeThreadInput(registry, ev.Channel, ev.ThreadTimeStamp, ev.Text) {
 			return
 		}
-		routeThreadMessage(smc, NewSlackInputFromAppMention(ev, normalizeCommandText(extractAppMentionText(ev))), commandQueue, commands)
+		routeThreadMessage(smc, NewSlackInputFromAppMention(ev, normalizeCommandText(extractAppMentionText(ev))), commandQueue, commands, routeCache)
 		return
 	}
 	text := normalizeCommandText(extractAppMentionText(ev))
 	if text == "" {
 		return
 	}
-	if !enqueueCommand(commandQueue, NewSlackInputFromAppMention(ev, text)) {
+	input := NewSlackInputFromAppMention(ev, text)
+	registerRootRoute(routeCache, input, commands)
+	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
 		return
 	}
@@ -362,22 +393,33 @@ func routeThreadMessage(
 	input *cmd.CommandInput,
 	commandQueue chan *cmd.CommandInput,
 	commands []*cmd.CommandConfig,
+	routeCache *cmd.ThreadRouteCache,
 ) {
 	if input.Text == "" || smc == nil {
 		return
 	}
-	root, err := getThreadRoot(smc, input.ConversationContext)
-	if err != nil {
-		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
-		return
+	rootConfig, found := routeCache.Lookup(input.ConversationContext.ThreadKey())
+	if !found {
+		root, err := getThreadRoot(smc, input.ConversationContext)
+		if err != nil {
+			log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
+			return
+		}
+		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(slackMessageText(root.Text, root.Attachments)), commands)
+		routeCache.Store(input.ConversationContext.ThreadKey(), rootConfig)
 	}
-	rootConfig := cmd.MatchSingleCommand(normalizeCommandText(slackMessageText(root.Text, root.Attachments)), commands)
 	if rootConfig == nil || len(rootConfig.Replies) == 0 {
 		return
 	}
 	input.CommandConfigs = rootConfig.Replies
 	if !enqueueCommand(commandQueue, input) {
 		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
+	}
+}
+
+func registerRootRoute(routeCache *cmd.ThreadRouteCache, input *cmd.CommandInput, commands []*cmd.CommandConfig) {
+	if root := cmd.MatchSingleCommand(input.Text, commands); root != nil {
+		routeCache.Store(input.ConversationContext.ThreadKey(), root)
 	}
 }
 

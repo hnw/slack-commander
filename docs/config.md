@@ -183,6 +183,8 @@ stdinへの書き込みでエラーが発生した場合はexecutor側でログ�
 
 同じthreadに複数のプロセスが登録されている場合は、最後に登録されたプロセスへ入力を渡します。command chainでプロセスが切り替わる途中も同様です。
 
+stdinの送信先がない返信は、root messageが単一の`[[commands]]`にマッチした場合だけ、そのcommandの`[[commands.replies]]`で評価します。root messageがcommand chainの場合やreply ruleにマッチしない場合は無視し、グローバルな`[[commands]]`には流しません。
+
 初期入力を送信した後もstdinは開いたままです。`wc -l` のようにEOFを待つコマンドでは、必要に応じて `stdin_idle_timeout` を設定してください。
 
 TTYモードでは入力終端が異なり、`stdin_idle_timeout` は使用できません。詳細は [`tty`](#tty-bool) を参照してください。

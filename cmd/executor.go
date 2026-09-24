@@ -26,6 +26,11 @@ type ConversationContext struct {
 	RootThreadTimestamp string
 }
 
+// ThreadKey returns the stable key shared by thread input and route state.
+func (c ConversationContext) ThreadKey() ThreadKey {
+	return ThreadKey{ChannelID: c.ChannelID, RootThreadTimestamp: c.RootThreadTimestamp}
+}
+
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
 type CommandOutput struct {
 	ReplyInfo           interface{}
