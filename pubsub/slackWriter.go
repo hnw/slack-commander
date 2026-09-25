@@ -93,10 +93,7 @@ func postMessage(smc *socketmode.Client, output *cmd.CommandOutput) error {
 		ThreadTimestamp: getThreadTimestamp(output),
 		ReplyBroadcast:  getReplyBroadcast(output),
 	}
-	attachment := slack.Attachment{
-		Text:  getText(output),
-		Color: getColor(output),
-	}
+	attachment := buildTextAttachment(output)
 	msgOptParams := slack.MsgOptionPostMessageParameters(params)
 	msgOptAttachment := slack.MsgOptionAttachments(attachment)
 	ch := getOutputChannel(output)
@@ -124,8 +121,7 @@ func postMessageWithImageBlock(
 
 	blocks := []slack.Block{}
 	if hasMeaningfulText(output) {
-		textObj := slack.NewTextBlockObject("mrkdwn", getText(output), false, false)
-		blocks = append(blocks, slack.NewSectionBlock(textObj, nil, nil))
+		blocks = append(blocks, buildTextBlock(output))
 	}
 	altText := "image output"
 	blocks = append(
@@ -135,7 +131,7 @@ func postMessageWithImageBlock(
 	msgOpts = append(msgOpts, slack.MsgOptionBlocks(blocks...))
 
 	if hasMeaningfulText(output) {
-		msgOpts = append(msgOpts, slack.MsgOptionText(getText(output), false))
+		msgOpts = append(msgOpts, slack.MsgOptionText(output.Text, false))
 	}
 
 	ch := getOutputChannel(output)
@@ -213,13 +209,32 @@ func getReactionTimestamp(output *cmd.CommandOutput) string {
 	return getTimeStamp(output)
 }
 
-func getText(output *cmd.CommandOutput) string {
-	cfg := getConfig(output)
-	text := output.Text
-	if cfg.Monospaced {
-		text = fmt.Sprintf("```%s```", text)
+func buildTextAttachment(output *cmd.CommandOutput) slack.Attachment {
+	attachment := slack.Attachment{Color: getColor(output)}
+	switch getConfig(output).OutputFormat {
+	case "monospaced":
+		attachment.Text = fmt.Sprintf("```%s```", output.Text)
+	case "markdown":
+		attachment.Blocks = slack.Blocks{
+			BlockSet: []slack.Block{slack.NewMarkdownBlock("", output.Text)},
+		}
+	default:
+		attachment.Text = output.Text
 	}
-	return text
+	return attachment
+}
+
+func buildTextBlock(output *cmd.CommandOutput) slack.Block {
+	switch getConfig(output).OutputFormat {
+	case "markdown":
+		return slack.NewMarkdownBlock("", output.Text)
+	case "monospaced":
+		textObj := slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("```%s```", output.Text), false, false)
+		return slack.NewSectionBlock(textObj, nil, nil)
+	default:
+		textObj := slack.NewTextBlockObject("mrkdwn", output.Text, false, false)
+		return slack.NewSectionBlock(textObj, nil, nil)
+	}
 }
 
 func getReplyBroadcast(output *cmd.CommandOutput) bool {
@@ -230,11 +245,16 @@ func getReplyBroadcast(output *cmd.CommandOutput) bool {
 	return *cfg.ReplyBroadcast
 }
 
+const (
+	stdoutColor = "#2EB67D"
+	stderrColor = "#E01E5A"
+)
+
 func getColor(output *cmd.CommandOutput) string {
 	if output.IsErrOut {
-		return "danger"
+		return stderrColor
 	}
-	return "good"
+	return stdoutColor
 }
 
 func getOutputChannel(output *cmd.CommandOutput) string {

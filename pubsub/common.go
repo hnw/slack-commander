@@ -18,5 +18,5 @@ type ReplyConfig struct {
 	IconEmoji      string `toml:"icon_emoji"`
 	IconURL        string `toml:"icon_url"`
 	ReplyBroadcast *bool  `toml:"reply_broadcast"`
-	Monospaced     bool
+	OutputFormat   string `toml:"output_format"`
 }

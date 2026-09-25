@@ -169,9 +169,13 @@ botがSlackにポストする時のアイコンをURLで指定します。
 
 botがSlackにポストする時のユーザー名を指定します。
 
-### monospaced `bool`
+### output_format `string`
 
-コマンドの出力を等幅フォントで表示します。
+コマンド出力の表示形式を指定します。省略時または `plain` は従来どおり通常のattachment本文として表示します。
+
+`monospaced` を指定すると、出力全体をcode blockとして表示します。
+
+`markdown` を指定すると、出力文字列を変換せずそのままSlackのMarkdown Blockへ渡します。slack-commanderはMarkdownの変換を行いません。
 
 ### reply_broadcast `bool`
 
