@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -273,8 +274,8 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 			if tc.reply {
 				cfg.Commands[0].OutputFormat = ""
 				cfg.Commands[0].Replies = []*ReplyCommandConfig{{
-					Definition:  cmd.Definition{Keyword: "reply", Command: "date"},
-					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
+					Definition:   cmd.Definition{Keyword: "reply", Command: "date"},
+					OutputFormat: tc.outputFormat,
 				}}
 			}
 
@@ -325,14 +326,90 @@ reply_broadcast = true
 	}
 	reply := cfg.Commands[0].Replies[0]
 	if reply.Keyword != "cancel" || reply.Command != "todo-wrapper --cancel" ||
-		reply.Runner != "http" || reply.Timeout != 30 || reply.TTY ||
-		reply.StdinIdleTimeout != 10 || reply.Method != "POST" ||
+		reply.Runner != "http" || reply.Timeout == nil || *reply.Timeout != 30 ||
+		reply.TTY == nil || *reply.TTY ||
+		reply.StdinIdleTimeout == nil || *reply.StdinIdleTimeout != 10 || reply.Method != "POST" ||
 		reply.URL != "https://example.com/todo" || reply.Headers["Authorization"] != "Bearer token" ||
 		reply.Body != `{"text":"*"}` || reply.Username != "todo bot" ||
 		reply.IconEmoji != ":memo:" || reply.IconURL != "https://example.com/icon.png" ||
 		reply.ReplyBroadcast == nil || !*reply.ReplyBroadcast {
 		t.Fatalf("reply = %+v", reply)
 	}
+}
+
+func TestResolveReplyCommand(t *testing.T) {
+	var cfg Config
+	_, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "todo *"
+command = "todo-wrapper *"
+runner = "compose"
+timeout = 3600
+stdin_idle_timeout = 300
+tty = true
+username = "todo bot"
+icon_emoji = ":memo:"
+icon_url = "https://example.com/icon.png"
+reply_broadcast = true
+output_format = "markdown"
+
+[[commands.replies]]
+keyword = "cancel"
+command = "todo-wrapper --cancel"
+
+[[commands.replies]]
+keyword = "stop"
+command = "todo-wrapper --stop"
+runner = "exec"
+timeout = 0
+stdin_idle_timeout = 0
+tty = false
+username = "stop bot"
+icon_emoji = ":octagonal_sign:"
+icon_url = "https://example.com/stop.png"
+reply_broadcast = false
+output_format = "plain"
+`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("inherits parent settings", func(t *testing.T) {
+		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[0])
+		wantDefinition := &cmd.Definition{
+			Keyword: "cancel", Command: "todo-wrapper --cancel", Runner: "compose",
+			Timeout: 3600, StdinIdleTimeout: 300, TTY: true,
+		}
+		if !reflect.DeepEqual(definition, wantDefinition) {
+			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
+		}
+		broadcast := true
+		wantReplyConfig := &pubsub.ReplyConfig{
+			Username: "todo bot", IconEmoji: ":memo:", IconURL: "https://example.com/icon.png",
+			ReplyBroadcast: &broadcast, OutputFormat: "markdown",
+		}
+		if !reflect.DeepEqual(replyConfig, wantReplyConfig) {
+			t.Fatalf("reply config = %+v, want %+v", replyConfig, wantReplyConfig)
+		}
+	})
+
+	t.Run("overrides parent including explicit zero values", func(t *testing.T) {
+		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[1])
+		wantDefinition := &cmd.Definition{Keyword: "stop", Command: "todo-wrapper --stop", Runner: "exec"}
+		if !reflect.DeepEqual(definition, wantDefinition) {
+			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
+		}
+		broadcast := false
+		wantReplyConfig := &pubsub.ReplyConfig{
+			Username: "stop bot", IconEmoji: ":octagonal_sign:", IconURL: "https://example.com/stop.png",
+			ReplyBroadcast: &broadcast, OutputFormat: "plain",
+		}
+		if !reflect.DeepEqual(replyConfig, wantReplyConfig) {
+			t.Fatalf("reply config = %+v, want %+v", replyConfig, wantReplyConfig)
+		}
+	})
 }
 
 func TestConfigRejectsInteractionOnReplyCommand(t *testing.T) {
@@ -389,7 +466,8 @@ func TestValidateConfigValidatesCommandReplies(t *testing.T) {
 		Commands: []*CommandConfig{{
 			Definition: cmd.Definition{Keyword: "todo", Command: "todo-wrapper"},
 			Replies: []*ReplyCommandConfig{{
-				Definition: cmd.Definition{Keyword: "cancel", Runner: "http"},
+				Definition: cmd.Definition{Keyword: "cancel"},
+				Runner:     "http",
 			}},
 		}},
 	}

@@ -16,6 +16,30 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func TestNewSystemReplyConfig(t *testing.T) {
+	t.Run("uses system identity with default broadcast", func(t *testing.T) {
+		cfg := NewSystemReplyConfig(nil)
+		if cfg.Username != "Slack commander" || cfg.IconEmoji != ":ghost:" || cfg.ReplyBroadcast != nil {
+			t.Fatalf("config = %+v", cfg)
+		}
+	})
+
+	t.Run("preserves explicit broadcast setting", func(t *testing.T) {
+		cfg := NewSystemReplyConfig(boolPtr(false))
+		if cfg.Username != "Slack commander" || cfg.IconEmoji != ":ghost:" ||
+			cfg.ReplyBroadcast == nil || *cfg.ReplyBroadcast {
+			t.Fatalf("config = %+v", cfg)
+		}
+	})
+}
+
+func TestGetConfigUsesSystemDefault(t *testing.T) {
+	cfg := getConfig(&cmd.CommandOutput{})
+	if cfg.Username != "Slack commander" || cfg.IconEmoji != ":ghost:" || cfg.ReplyBroadcast != nil {
+		t.Fatalf("config = %+v", cfg)
+	}
+}
+
 func TestGetThreadTimestampUsesConversationRoot(t *testing.T) {
 	output := &cmd.CommandOutput{
 		ReplyInfo: &slackevents.MessageEvent{
