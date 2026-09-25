@@ -43,6 +43,66 @@ type CommandConfig struct {
 type ReplyCommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
+	Runner           string `toml:"runner"`
+	Timeout          *int   `toml:"timeout"`
+	StdinIdleTimeout *int   `toml:"stdin_idle_timeout"`
+	TTY              *bool  `toml:"tty"`
+	Username         string `toml:"username"`
+	IconEmoji        string `toml:"icon_emoji"`
+	IconURL          string `toml:"icon_url"`
+	ReplyBroadcast   *bool  `toml:"reply_broadcast"`
+	OutputFormat     string `toml:"output_format"`
+}
+
+func resolveReplyCommand(
+	parent *CommandConfig,
+	reply *ReplyCommandConfig,
+) (*cmd.Definition, *pubsub.ReplyConfig) {
+	definition := reply.Definition
+	if reply.Runner == "" {
+		definition.Runner = parent.Runner
+	} else {
+		definition.Runner = reply.Runner
+	}
+	if reply.Timeout == nil {
+		definition.Timeout = parent.Timeout
+	} else {
+		definition.Timeout = *reply.Timeout
+	}
+	if reply.StdinIdleTimeout == nil {
+		definition.StdinIdleTimeout = parent.StdinIdleTimeout
+	} else {
+		definition.StdinIdleTimeout = *reply.StdinIdleTimeout
+	}
+	if reply.TTY == nil {
+		definition.TTY = parent.TTY
+	} else {
+		definition.TTY = *reply.TTY
+	}
+
+	replyConfig := &pubsub.ReplyConfig{
+		Username:       parent.Username,
+		IconEmoji:      parent.IconEmoji,
+		IconURL:        parent.IconURL,
+		ReplyBroadcast: parent.ReplyBroadcast,
+		OutputFormat:   parent.OutputFormat,
+	}
+	if reply.Username != "" {
+		replyConfig.Username = reply.Username
+	}
+	if reply.IconEmoji != "" {
+		replyConfig.IconEmoji = reply.IconEmoji
+	}
+	if reply.IconURL != "" {
+		replyConfig.IconURL = reply.IconURL
+	}
+	if reply.ReplyBroadcast != nil {
+		replyConfig.ReplyBroadcast = reply.ReplyBroadcast
+	}
+	if reply.OutputFormat != "" {
+		replyConfig.OutputFormat = reply.OutputFormat
+	}
+	return &definition, replyConfig
 }
 
 func main() {
@@ -100,10 +160,12 @@ func main() {
 	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
 	for i, c := range cfg.Commands {
 		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
+		cmdConfig[i].SystemReplyConfig = pubsub.NewSystemReplyConfig(c.ReplyBroadcast)
 		cmdConfig[i].Interaction = c.Interaction
 		cmdConfig[i].Replies = make([]*cmd.CommandConfig, len(c.Replies))
 		for j, reply := range c.Replies {
 			cmdConfig[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
+			cmdConfig[i].Replies[j].SystemReplyConfig = pubsub.NewSystemReplyConfig(reply.ReplyConfig.ReplyBroadcast)
 		}
 	}
 
@@ -223,12 +285,15 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("http runner only supports oneshot interaction for keyword '%s'", c.Keyword)
 		}
 		for _, reply := range c.Replies {
-			if err := validateReplyConfig(&reply.ReplyConfig); err != nil {
+			definition, replyConfig := resolveReplyCommand(c, reply)
+			if err := validateReplyConfig(replyConfig); err != nil {
 				return fmt.Errorf("keyword '%s': %w", reply.Keyword, err)
 			}
-			if err := validateCommandDefinition(&reply.Definition); err != nil {
+			if err := validateCommandDefinition(definition); err != nil {
 				return err
 			}
+			reply.Definition = *definition
+			reply.ReplyConfig = *replyConfig
 		}
 	}
 	return nil

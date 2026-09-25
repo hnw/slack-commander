@@ -343,6 +343,39 @@ func testExecutorParseErrorWhenIntentMatches(t *testing.T) {
 	}
 }
 
+func TestExecutorSystemMessageReplyConfig(t *testing.T) {
+	t.Run("parse error uses matched command setting", func(t *testing.T) {
+		systemConfig := &struct{ replyBroadcast bool }{replyBroadcast: false}
+		config := NewCommandConfig(&Definition{Keyword: "echo *", Command: "echo *"}, nil)
+		config.SystemReplyConfig = systemConfig
+
+		_, outputs := runExecutorOnce(t, "echo \"hello", []*CommandConfig{config})
+		for _, output := range outputs {
+			if output.IsErrOut {
+				if output.ReplyConfig != systemConfig {
+					t.Fatalf("system ReplyConfig = %#v, want %#v", output.ReplyConfig, systemConfig)
+				}
+				return
+			}
+		}
+		t.Fatal("expected parse error output")
+	})
+
+	t.Run("unmatched command keeps default setting", func(t *testing.T) {
+		config := NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil)
+		_, outputs := runExecutorOnce(t, "date && missing", []*CommandConfig{config})
+		for _, output := range outputs {
+			if output.IsErrOut {
+				if output.ReplyConfig != nil {
+					t.Fatalf("system ReplyConfig = %#v, want nil", output.ReplyConfig)
+				}
+				return
+			}
+		}
+		t.Fatal("expected command not found output")
+	})
+}
+
 func testExecutorIgnoreCasualMessageWithURL(t *testing.T) {
 	t.Helper()
 	calls, outputs := runExecutorOnce(

@@ -189,11 +189,7 @@ func hasMeaningfulText(output *cmd.CommandOutput) bool {
 
 func getConfig(output *cmd.CommandOutput) *ReplyConfig {
 	if output.ReplyConfig == nil {
-		// TODO: 設定できるようにする
-		return &ReplyConfig{
-			Username:  "Slack commander",
-			IconEmoji: ":ghost:",
-		}
+		return NewSystemReplyConfig(nil)
 	}
 	return output.ReplyConfig.(*ReplyConfig)
 }

@@ -62,9 +62,10 @@ type Definition struct {
 // CommandConfig holds a Definition with reply configuration.
 type CommandConfig struct {
 	*Definition
-	ReplyConfig interface{} //*pubsub.ReplyConfig
-	Replies     []*CommandConfig
-	Interaction Interaction
+	ReplyConfig       interface{} //*pubsub.ReplyConfig
+	SystemReplyConfig interface{} //*pubsub.ReplyConfig
+	Replies           []*CommandConfig
+	Interaction       Interaction
 }
 
 // NewCommandConfig builds a CommandConfig from a definition and reply config.
@@ -327,7 +328,7 @@ func executeCommands(
 		if parseErr != nil {
 			// parse errorありで1つ目のコマンドがキーワードマッチした場合
 			// エラー表示して処理全体を終了
-			ret = writeParseError(wq, input, parseErr)
+			ret = writeParseError(wq, input, parseErr, m)
 			return ret
 		}
 		if rawBody != "" {
@@ -345,8 +346,8 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 	return ret != 0 && cmd.skipIfFailed
 }
 
-func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext)
+func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, m *Matcher) int {
+	syserr := newErrWriter(wq, input.ReplyInfo, m.cfg.SystemReplyConfig, input.ConversationContext)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2

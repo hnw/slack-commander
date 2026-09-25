@@ -20,3 +20,12 @@ type ReplyConfig struct {
 	ReplyBroadcast *bool  `toml:"reply_broadcast"`
 	OutputFormat   string `toml:"output_format"`
 }
+
+// NewSystemReplyConfig creates the reply settings used by system messages.
+func NewSystemReplyConfig(replyBroadcast *bool) *ReplyConfig {
+	return &ReplyConfig{
+		Username:       "Slack commander",
+		IconEmoji:      ":ghost:",
+		ReplyBroadcast: replyBroadcast,
+	}
+}
