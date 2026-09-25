@@ -107,6 +107,104 @@ func TestPostMessagePostsOneRootThreadReply(t *testing.T) {
 	}
 }
 
+func TestPostMessageFormatsAttachments(t *testing.T) {
+	tests := []struct {
+		name             string
+		outputFormat     string
+		isErrOut         bool
+		wantText         string
+		wantMarkdownText string
+		wantColor        string
+	}{
+		{
+			name:      "unspecified defaults to plain",
+			wantText:  "*output*",
+			wantColor: stdoutColor,
+		},
+		{
+			name:         "plain",
+			outputFormat: "plain",
+			wantText:     "*output*",
+			wantColor:    stdoutColor,
+		},
+		{
+			name:         "monospaced",
+			outputFormat: "monospaced",
+			wantText:     "```*output*```",
+			wantColor:    stdoutColor,
+		},
+		{
+			name:             "markdown",
+			outputFormat:     "markdown",
+			wantMarkdownText: "*output*",
+			wantColor:        stdoutColor,
+		},
+		{
+			name:      "stderr uses error color",
+			isErrOut:  true,
+			wantText:  "*output*",
+			wantColor: stderrColor,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attachments []struct {
+				Text   string `json:"text"`
+				Color  string `json:"color"`
+				Blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"blocks"`
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					t.Fatalf("ParseForm() error = %v", err)
+				}
+				if err := json.Unmarshal([]byte(r.Form.Get("attachments")), &attachments); err != nil {
+					t.Fatalf("attachments = %q: %v", r.Form.Get("attachments"), err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C123", "ts": "1700000000.000300"})
+			}))
+			defer server.Close()
+
+			smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
+			output := &cmd.CommandOutput{
+				ReplyInfo:   &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000200"},
+				ReplyConfig: &ReplyConfig{OutputFormat: tt.outputFormat},
+				Text:        "*output*",
+				IsErrOut:    tt.isErrOut,
+			}
+
+			if err := postMessage(smc, output); err != nil {
+				t.Fatalf("postMessage() error = %v", err)
+			}
+			if len(attachments) != 1 {
+				t.Fatalf("attachment count = %d, want 1", len(attachments))
+			}
+			attachment := attachments[0]
+			if attachment.Color != tt.wantColor {
+				t.Fatalf("attachment color = %q, want %q", attachment.Color, tt.wantColor)
+			}
+			if attachment.Text != tt.wantText {
+				t.Fatalf("attachment text = %q, want %q", attachment.Text, tt.wantText)
+			}
+			if tt.wantMarkdownText == "" {
+				if len(attachment.Blocks) != 0 {
+					t.Fatalf("attachment blocks = %+v, want none", attachment.Blocks)
+				}
+				return
+			}
+			if len(attachment.Blocks) != 1 {
+				t.Fatalf("markdown block count = %d, want 1", len(attachment.Blocks))
+			}
+			if block := attachment.Blocks[0]; block.Type != "markdown" || block.Text != tt.wantMarkdownText {
+				t.Fatalf("markdown block = %+v, want type markdown with text %q", block, tt.wantMarkdownText)
+			}
+		})
+	}
+}
+
 func TestPostMessageDisablesBroadcastWhenExplicitlyFalse(t *testing.T) {
 	var requestCount int
 	var gotThreadTimestamp, gotBroadcast string

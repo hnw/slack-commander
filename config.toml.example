@@ -21,7 +21,9 @@ icon_emoji = ':computer:'
 [[commands]]
 keyword = 'echo *'
 command = '/bin/echo *'
-monospaced = true
+output_format = 'monospaced'
+# SlackのMarkdown Blockへ出力をそのまま渡す場合は、次を指定します。
+# output_format = 'markdown'
 
 # thread replyを実行中プロセスのstdinへ渡す場合は interaction = 'stdin' を指定します。
 # replyを[[commands.replies]]のcommandとして処理する場合は interaction = 'command' を指定します。

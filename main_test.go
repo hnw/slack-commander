@@ -6,6 +6,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/hnw/slack-commander/cmd"
+	"github.com/hnw/slack-commander/pubsub"
 )
 
 func TestConfigStdinIdleTimeout(t *testing.T) {
@@ -217,6 +218,77 @@ reply_broadcast = false
 	}
 	if cfg.Commands[2].ReplyBroadcast == nil || *cfg.Commands[2].ReplyBroadcast {
 		t.Fatal("reply_broadcast = false was not decoded")
+	}
+}
+
+func TestConfigDecodesOutputFormat(t *testing.T) {
+	var cfg Config
+	_, err := toml.Decode(`
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "markdown"
+command = "date"
+output_format = "markdown"
+
+[[commands.replies]]
+keyword = "monospaced"
+command = "date"
+output_format = "monospaced"
+`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands[0].OutputFormat != "markdown" {
+		t.Fatalf("command output_format = %q, want markdown", cfg.Commands[0].OutputFormat)
+	}
+	if cfg.Commands[0].Replies[0].OutputFormat != "monospaced" {
+		t.Fatalf("reply output_format = %q, want monospaced", cfg.Commands[0].Replies[0].OutputFormat)
+	}
+}
+
+func TestValidateConfigOutputFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		outputFormat string
+		reply        bool
+		wantErr      string
+	}{
+		{name: "unspecified"},
+		{name: "plain", outputFormat: "plain"},
+		{name: "monospaced", outputFormat: "monospaced"},
+		{name: "markdown", outputFormat: "markdown"},
+		{name: "rejects unknown command format", outputFormat: "html", wantErr: `keyword 'date': unknown output_format "html"`},
+		{name: "rejects unknown reply format", outputFormat: "html", reply: true, wantErr: `keyword 'reply': unknown output_format "html"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				NumWorkers:   1,
+				Commands: []*CommandConfig{{
+					Definition:  cmd.Definition{Keyword: "date", Command: "date"},
+					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
+				}},
+			}
+			if tc.reply {
+				cfg.Commands[0].OutputFormat = ""
+				cfg.Commands[0].Replies = []*ReplyCommandConfig{{
+					Definition:  cmd.Definition{Keyword: "reply", Command: "date"},
+					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
+				}}
+			}
+
+			err := validateConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 

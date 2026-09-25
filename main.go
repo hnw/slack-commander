@@ -203,8 +203,14 @@ func validateConfig(cfg *Config) error {
 				"or set allow_unsafe_open_access=true to keep old behavior",
 		)
 	}
+	if err := validateReplyConfig(&cfg.PubSubConfig.ReplyConfig); err != nil {
+		return err
+	}
 
 	for _, c := range cfg.Commands {
+		if err := validateReplyConfig(&c.ReplyConfig); err != nil {
+			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
+		}
 		interaction, err := c.Interaction.Normalize()
 		if err != nil {
 			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
@@ -217,12 +223,24 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("http runner only supports oneshot interaction for keyword '%s'", c.Keyword)
 		}
 		for _, reply := range c.Replies {
+			if err := validateReplyConfig(&reply.ReplyConfig); err != nil {
+				return fmt.Errorf("keyword '%s': %w", reply.Keyword, err)
+			}
 			if err := validateCommandDefinition(&reply.Definition); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
+	switch cfg.OutputFormat {
+	case "", "plain", "monospaced", "markdown":
+		return nil
+	default:
+		return fmt.Errorf("unknown output_format %q", cfg.OutputFormat)
+	}
 }
 
 func validateCommandDefinition(c *cmd.Definition) error {
