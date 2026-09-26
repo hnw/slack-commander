@@ -6,8 +6,11 @@ import "fmt"
 type Interaction string
 
 const (
+	// InteractionOneshot runs a command without accepting subsequent thread input.
 	InteractionOneshot Interaction = "oneshot"
-	InteractionStdin   Interaction = "stdin"
+	// InteractionStdin forwards subsequent thread messages to the command's standard input.
+	InteractionStdin Interaction = "stdin"
+	// InteractionCommand routes thread messages to configured reply commands.
 	InteractionCommand Interaction = "command"
 )
 

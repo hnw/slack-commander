@@ -156,18 +156,7 @@ func main() {
 		sugar.Fatalf("Fatal: %v", err)
 	}
 
-	// 構造体の詰め替え（TOMLライブラリの都合とパッケージ分割の都合）
-	cmdConfig := make([]*cmd.CommandConfig, len(cfg.Commands))
-	for i, c := range cfg.Commands {
-		cmdConfig[i] = cmd.NewCommandConfig(&c.Definition, &c.ReplyConfig)
-		cmdConfig[i].SystemReplyConfig = pubsub.NewSystemReplyConfig(c.ReplyBroadcast)
-		cmdConfig[i].Interaction = c.Interaction
-		cmdConfig[i].Replies = make([]*cmd.CommandConfig, len(c.Replies))
-		for j, reply := range c.Replies {
-			cmdConfig[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
-			cmdConfig[i].Replies[j].SystemReplyConfig = pubsub.NewSystemReplyConfig(reply.ReplyConfig.ReplyBroadcast)
-		}
-	}
+	cmdConfig := commandConfigs(cfg.Commands)
 
 	api := slack.New(
 		cfg.SlackBotToken,
@@ -253,6 +242,23 @@ func main() {
 	writerWG.Wait()
 }
 
+func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
+	converted := make([]*cmd.CommandConfig, len(configs))
+	for i, config := range configs {
+		converted[i] = cmd.NewCommandConfig(&config.Definition, &config.ReplyConfig)
+		converted[i].SystemReplyConfig = pubsub.NewSystemReplyConfig(config.ReplyBroadcast)
+		converted[i].Interaction = config.Interaction
+		converted[i].Replies = make([]*cmd.CommandConfig, len(config.Replies))
+		for j, reply := range config.Replies {
+			converted[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
+			converted[i].Replies[j].SystemReplyConfig = pubsub.NewSystemReplyConfig(
+				reply.ReplyConfig.ReplyBroadcast,
+			)
+		}
+	}
+	return converted
+}
+
 func validateConfig(cfg *Config) error {
 	if cfg.NumWorkers < 1 {
 		return fmt.Errorf("num_workers must be >= 1 (got %d)", cfg.NumWorkers)
@@ -265,7 +271,7 @@ func validateConfig(cfg *Config) error {
 				"or set allow_unsafe_open_access=true to keep old behavior",
 		)
 	}
-	if err := validateReplyConfig(&cfg.PubSubConfig.ReplyConfig); err != nil {
+	if err := validateReplyConfig(&cfg.ReplyConfig); err != nil {
 		return err
 	}
 

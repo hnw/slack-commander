@@ -293,6 +293,7 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo // This test keeps every decoded reply field visible in one configuration fixture.
 func TestConfigDecodesCommandReplies(t *testing.T) {
 	var cfg Config
 	_, err := toml.Decode(`

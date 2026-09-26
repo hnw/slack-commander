@@ -140,7 +140,7 @@ func TestThreadReplyReconstructsReminderRootWithNormalTextRules(t *testing.T) {
 }
 
 func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"ts":"1","text":"todo one && todo two"}]}`))
 	}))
 	defer server.Close()
@@ -164,7 +164,7 @@ func TestThreadReplyIgnoresCommandChainAndMessageEdits(t *testing.T) {
 }
 
 func TestThreadReplyRouteCacheAvoidsLookupForPositiveAndNegativeResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Fatal("cached route unexpectedly called Slack")
 	}))
 	defer server.Close()
@@ -192,7 +192,7 @@ func TestThreadReplyRouteCacheAvoidsLookupForPositiveAndNegativeResults(t *testi
 }
 
 func TestThreadReplyLookupErrorIsNotCached(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()

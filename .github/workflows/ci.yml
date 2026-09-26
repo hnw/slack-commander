@@ -20,6 +20,10 @@ jobs:
           cache: true
       - name: Run Tests
         run: go test -v ./...
+      - name: Run Linter
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.8.0
 
   build-push:
     needs: test
