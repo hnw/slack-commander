@@ -127,3 +127,43 @@ func TestMatchSingleCommandRejectsChains(t *testing.T) {
 		}
 	}
 }
+
+func TestMatcherExpandsAllWildcards(t *testing.T) {
+	m := newMatcher(&CommandConfig{Definition: &Definition{
+		Keyword: "echo *",
+		Command: "echo * *",
+	}})
+	if got, want := m.build([]string{"echo", "foo bar"}), []string{"echo", "foo bar", "foo bar"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("build() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMatcherLeavesCommandWildcardsWithoutKeywordWildcard(t *testing.T) {
+	m := newMatcher(&CommandConfig{Definition: &Definition{
+		Keyword: "echo",
+		Command: "echo *",
+	}})
+	if got, want := m.build([]string{"echo"}), []string{"echo", "*"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("build() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMatcherDoesNotParseKeywordQuotes(t *testing.T) {
+	m := newMatcher(&CommandConfig{Definition: &Definition{
+		Keyword: `foo "bar baz"`,
+		Command: "echo",
+	}})
+	if got := m.build([]string{"foo", "bar baz"}); got != nil {
+		t.Fatalf("build() = %#v, want nil", got)
+	}
+}
+
+func TestMatcherDoesNotParseKeywordBackslashes(t *testing.T) {
+	m := newMatcher(&CommandConfig{Definition: &Definition{
+		Keyword: `foo\ bar`,
+		Command: "echo",
+	}})
+	if got := m.build([]string{"foo bar"}); got != nil {
+		t.Fatalf("build() = %#v, want nil", got)
+	}
+}

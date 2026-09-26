@@ -29,16 +29,10 @@ type Matcher struct {
 	runner   CommandRunner
 }
 
-// 　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す
 func newMatcher(cfg *CommandConfig) *Matcher {
-	parser := shellwords.NewParser()
-	keywords, err := parser.Parse(cfg.Keyword)
-	if err != nil || parser.Position >= 0 {
-		return nil
-	}
 	return &Matcher{
 		cfg:      cfg,
-		keywords: keywords,
+		keywords: strings.Fields(cfg.Keyword),
 	}
 }
 
@@ -55,6 +49,10 @@ func (m *Matcher) build(keywords []string) []string {
 		return buildHTTPArgs(hasWildcard, wildcard)
 	}
 	return buildCommandArgs(m.cfg.Command, hasWildcard, wildcard)
+}
+
+func (m *Matcher) hasTrailingWildcard() bool {
+	return len(m.keywords) > 0 && m.keywords[len(m.keywords)-1] == "*"
 }
 
 func containsWildcard(keywords []string) bool {
@@ -120,5 +118,5 @@ func expandWildcard(line string, wildcard []string) string {
 	for i, v := range wildcard {
 		replaced[i] = wildcardReplacer.Replace(v)
 	}
-	return strings.Replace(line, "*", strings.Join(replaced, " "), 1)
+	return strings.ReplaceAll(line, "*", strings.Join(replaced, " "))
 }

@@ -42,7 +42,8 @@ func TestConfigInteraction(t *testing.T) {
 		{name: "stdin", setting: "interaction = 'stdin'", want: cmd.InteractionStdin},
 		{name: "command", setting: "interaction = 'command'", want: cmd.InteractionCommand},
 		{name: "rejects unknown", setting: "interaction = 'session'", wantErrText: "unknown interaction"},
-		{name: "http only supports oneshot", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "only supports oneshot"},
+		{name: "http supports command", setting: "interaction = 'command'\nrunner = 'http'\nurl = 'https://example.com'", want: cmd.InteractionCommand},
+		{name: "http rejects stdin", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "does not support stdin"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
@@ -64,6 +65,53 @@ func TestConfigInteraction(t *testing.T) {
 				t.Fatalf("interaction = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateConfigKeywordWildcardCount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		keyword string
+		wantErr bool
+	}{
+		{name: "without wildcard", keyword: "foo"},
+		{name: "with one wildcard", keyword: "foo *"},
+		{name: "literal asterisk", keyword: "foo*"},
+		{name: "unclosed quote", keyword: `foo "bar`},
+		{name: "with two wildcards", keyword: "foo * bar *", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				NumWorkers:   1,
+				Commands: []*CommandConfig{{
+					Definition: cmd.Definition{Keyword: tc.keyword, Command: "echo"},
+				}},
+			}
+			err := validateConfig(cfg)
+			if tc.wantErr && err == nil {
+				t.Fatal("validateConfig() accepted multiple wildcards")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateConfig() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
+	cfg := &Config{
+		PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+		NumWorkers:   1,
+		Commands: []*CommandConfig{{
+			Definition: cmd.Definition{Keyword: "todo", Command: "todo"},
+			Replies: []*ReplyCommandConfig{{
+				Definition: cmd.Definition{Keyword: "update * again *", Command: "todo"},
+			}},
+		}},
+	}
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() accepted multiple wildcards in a reply keyword")
 	}
 }
 

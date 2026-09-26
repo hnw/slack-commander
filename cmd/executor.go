@@ -179,7 +179,9 @@ func executeCommandInput(
 	inputRegistry := registry
 
 	if interaction == InteractionCommand {
-		rawBody = stdinText
+		if stdinText != "" {
+			rawBody = "\n" + stdinText
+		}
 		initialStdin = ""
 	}
 
@@ -350,7 +352,7 @@ func executeCommands(
 			ret = writeParseError(wq, input, parseErr, m)
 			return ret
 		}
-		if rawBody != "" {
+		if rawBody != "" && m.hasTrailingWildcard() {
 			args = append(args, rawBody)
 		}
 		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, registry)

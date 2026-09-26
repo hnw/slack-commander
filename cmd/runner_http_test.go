@@ -75,3 +75,112 @@ func TestHTTPRunnerPostWithWildcard(t *testing.T) {
 		t.Fatalf("unexpected body: %q", result.body)
 	}
 }
+
+func TestHTTPRunnerJoinsWildcardArgs(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		bodyCh <- string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := NewCommandConfig(&Definition{
+		Runner: "http",
+		URL:    srv.URL,
+		Body:   "*",
+	}, nil)
+
+	cmd := NewHTTPRunner(cfg).CommandContext(
+		context.Background(),
+		"http",
+		"hello world",
+		"\nsecond line",
+	)
+	if exitCode := cmd.Run(0); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if body := <-bodyCh; body != "hello world\nsecond line" {
+		t.Fatalf("body = %q, want %q", body, "hello world\nsecond line")
+	}
+}
+
+func TestHTTPRunnerExpandsAllWildcards(t *testing.T) {
+	type requestResult struct {
+		path   string
+		header string
+		body   string
+	}
+	resultCh := make(chan requestResult, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		resultCh <- requestResult{
+			path:   r.URL.Path,
+			header: r.Header.Get("X-Value"),
+			body:   string(body),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := NewCommandConfig(&Definition{
+		Runner:  "http",
+		URL:     srv.URL + "/users/*/messages/*",
+		Headers: map[string]string{"X-Value": "*:*"},
+		Body:    "*:*",
+	}, nil)
+
+	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http", "hello")
+	if exitCode := cmd.Run(0); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if got, want := <-resultCh, (requestResult{path: "/users/hello/messages/hello", header: "hello:hello", body: "hello:hello"}); got != want {
+		t.Fatalf("request = %#v, want %#v", got, want)
+	}
+}
+
+func TestHTTPRunnerLeavesWildcardsWithoutArgs(t *testing.T) {
+	type requestResult struct {
+		path   string
+		header string
+		body   string
+	}
+	resultCh := make(chan requestResult, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		resultCh <- requestResult{
+			path:   r.URL.Path,
+			header: r.Header.Get("X-Value"),
+			body:   string(body),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := NewCommandConfig(&Definition{
+		Runner:  "http",
+		URL:     srv.URL + "/*",
+		Headers: map[string]string{"X-Value": "*"},
+		Body:    "*",
+	}, nil)
+
+	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http")
+	if exitCode := cmd.Run(0); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if got, want := <-resultCh, (requestResult{path: "/*", header: "*", body: "*"}); got != want {
+		t.Fatalf("request = %#v, want %#v", got, want)
+	}
+}

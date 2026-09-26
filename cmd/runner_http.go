@@ -26,7 +26,7 @@ func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string
 	hasWildcard := false
 	if len(arg) > 0 {
 		hasWildcard = true
-		wildcard = arg[0]
+		wildcard = strings.Join(arg, "")
 	}
 	return &httpCmd{
 		ctx:         ctx,
@@ -121,7 +121,7 @@ func (c *httpCmd) expandWildcard(value string) string {
 	if !c.hasWildcard {
 		return value
 	}
-	return strings.Replace(value, "*", c.wildcard, 1)
+	return strings.ReplaceAll(value, "*", c.wildcard)
 }
 
 func (c *httpCmd) handleRequestError(err error, timeout int) int {

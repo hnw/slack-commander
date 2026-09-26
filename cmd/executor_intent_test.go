@@ -93,11 +93,86 @@ func TestExecutorCommandInteractionSendsBodyOnlyToArgv(t *testing.T) {
 	ExecutorWithRunner(context.Background(), rq, wq, []*CommandConfig{config}, func(*CommandConfig) CommandRunner {
 		return runner
 	})
-	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "bar\n"}) {
+	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
 	}
 	if got := runner.Inputs(); !slices.Equal(got, []string{""}) {
 		t.Fatalf("stdin = %#v, want empty", got)
+	}
+}
+
+func TestExecutorCommandInteractionAppendsBodyOnlyForTrailingWildcard(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyword string
+		command string
+		input   string
+		want    []string
+	}{
+		{
+			name:    "wildcard in the middle",
+			keyword: "todo * done",
+			command: "todo *",
+			input:   "todo foo done\nbar\n",
+			want:    []string{"foo"},
+		},
+		{
+			name:    "without wildcard",
+			keyword: "todo",
+			command: "todo",
+			input:   "todo\nbar\n",
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := NewCommandConfig(&Definition{Keyword: tt.keyword, Command: tt.command}, nil)
+			config.Interaction = InteractionCommand
+			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			if len(calls) != 1 || !slices.Equal(calls[0].args, tt.want) {
+				t.Fatalf("calls = %#v, want args %#v", calls, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecutorCommandInteractionPassesBodyToHTTPOnlyForTrailingWildcard(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyword string
+		input   string
+		want    []string
+	}{
+		{
+			name:    "trailing wildcard",
+			keyword: "hello *",
+			input:   "hello foo bar\nbaz\n",
+			want:    []string{"foo bar", "\nbaz\n"},
+		},
+		{
+			name:    "wildcard in the middle",
+			keyword: "hello * bar",
+			input:   "hello foo bar\nbaz\n",
+			want:    []string{"foo"},
+		},
+		{
+			name:    "without wildcard",
+			keyword: "hello",
+			input:   "hello\nbaz\n",
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := NewCommandConfig(&Definition{Keyword: tt.keyword, Runner: "http"}, nil)
+			config.Interaction = InteractionCommand
+			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			if len(calls) != 1 || calls[0].name != "http" || !slices.Equal(calls[0].args, tt.want) {
+				t.Fatalf("calls = %#v, want HTTP args %#v", calls, tt.want)
+			}
+		})
 	}
 }
 
@@ -234,9 +309,9 @@ func TestExecutorInteractionInput(t *testing.T) {
 	}{
 		{name: "oneshot passes body to stdin", input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
 		{name: "stdin passes initial body to stdin", interaction: InteractionStdin, input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
-		{name: "command appends raw body", interaction: InteractionCommand, input: "todo foo\nbar\n", wantArgs: []string{"foo", "bar\n"}, wantCalls: 1},
-		{name: "command appends raw body after quoted first line", interaction: InteractionCommand, input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "baz\n"}, wantCalls: 1},
-		{name: "command preserves blank body", interaction: InteractionCommand, input: "todo\n\n", wantArgs: []string{"\n"}, wantCalls: 1},
+		{name: "command appends raw body with leading newline", interaction: InteractionCommand, input: "todo foo\nbar\n", wantArgs: []string{"foo", "\nbar\n"}, wantCalls: 1},
+		{name: "command appends raw body with leading newline after quoted first line", interaction: InteractionCommand, input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "\nbaz\n"}, wantCalls: 1},
+		{name: "command preserves blank body newlines", interaction: InteractionCommand, input: "todo\n\n", wantArgs: []string{"\n\n"}, wantCalls: 1},
 		{name: "command does not append empty body", interaction: InteractionCommand, input: "todo\n", wantArgs: nil, wantCalls: 1},
 		{name: "command rejects chains", interaction: InteractionCommand, input: "todo one && todo two", wantCalls: 0},
 		{name: "stdin rejects chains", interaction: InteractionStdin, input: "todo one && todo two", wantCalls: 0},
