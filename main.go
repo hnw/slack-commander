@@ -107,13 +107,24 @@ func resolveReplyCommand(
 }
 
 func main() {
-	var (
-		quiet      = flag.Bool("q", false, "Quiet mode")
-		configFile = flag.String("config-file", "config.toml", "Specify configuration file")
-		verbose    = flag.Bool("v", false, "Verbose mode")
-		debug      = flag.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
-	)
-	flag.Parse()
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	flags := flag.NewFlagSet("slack-commander", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	quiet := flags.Bool("q", false, "Quiet mode")
+	configFile := flags.String("config-file", "config.toml", "Specify configuration file")
+	verbose := flags.Bool("v", false, "Verbose mode")
+	debug := flags.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
+	checkConfig := flags.Bool("check-config", false, "Validate the configuration file and exit")
+	err := flags.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	if err != nil {
+		return 2
+	}
 
 	zapCfg := zap.NewDevelopmentConfig()
 	zapCfg.DisableStacktrace = true
@@ -133,7 +144,7 @@ func main() {
 	logger, err := zapCfg.Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
-		return
+		return 1
 	}
 	defer func() {
 		_ = logger.Sync()
@@ -142,23 +153,15 @@ func main() {
 	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
 	if err != nil {
 		sugar.Errorf("%v", err)
-		return
+		return 1
 	}
-	file, err := os.Open(*configFile)
+	cfg, err := loadConfig(*configFile)
 	if err != nil {
 		sugar.Errorf("%v", err)
-		return
+		return 1
 	}
-	defer func() {
-		_ = file.Close()
-	}()
-	cfg := Config{NumWorkers: 1}
-	if err := decodeConfig(file, &cfg); err != nil {
-		sugar.Errorf("%v", err)
-		return
-	}
-	if err := validateConfig(&cfg); err != nil {
-		sugar.Fatalf("Fatal: %v", err)
+	if *checkConfig {
+		return 0
 	}
 
 	cmdConfig := commandConfigs(cfg.Commands)
@@ -236,8 +239,10 @@ func main() {
 		)
 	}()
 
+	exitCode := 0
 	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		sugar.Errorf("Socket Mode error: %v", err)
+		exitCode = 1
 	}
 	stop()
 	listenerWG.Wait()
@@ -245,6 +250,27 @@ func main() {
 	executorWG.Wait()
 	close(outputQueue)
 	writerWG.Wait()
+	return exitCode
+}
+
+func loadConfig(path string) (*Config, error) {
+	// #nosec G304 -- The local CLI caller explicitly selects the configuration file.
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	cfg := &Config{NumWorkers: 1}
+	if err := decodeConfig(file, cfg); err != nil {
+		return nil, err
+	}
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func decodeConfig(r io.Reader, cfg *Config) error {

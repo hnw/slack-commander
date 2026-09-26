@@ -77,6 +77,12 @@ go build
 
 ビルドにはGo 1.25以降が必要です。
 
+起動前に設定ファイルだけを検証するには、`--check-config`を指定します。Slackへ接続せず、成功時は何も出力せず終了します。
+
+```console
+./slack-commander --check-config --config-file=config.toml
+```
+
 Dockerで運用する場合は [Dockerでの運用](./docs/docker.md) を参照してください。
 
 ## Runner

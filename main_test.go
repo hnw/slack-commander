@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,6 +35,90 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 
 func decodeConfigString(text string, cfg *Config) error {
 	return decodeConfig(strings.NewReader(text), cfg)
+}
+
+func writeConfigFile(t *testing.T, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadConfigResolvesConfiguration(t *testing.T) {
+	path := writeConfigFile(t, `
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "date"
+command = "date"
+
+[[commands]]
+keyword = "notify"
+runner = "http"
+url = "https://example.com/notify"
+output_format = "markdown"
+
+[[commands.replies]]
+keyword = "retry"
+url = "https://example.com/retry"
+`)
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NumWorkers != 1 {
+		t.Fatalf("num_workers = %d, want 1", cfg.NumWorkers)
+	}
+	if cfg.Commands[0].Interaction != cmd.InteractionOneshot || cfg.Commands[0].Runner != cmd.RunnerExec {
+		t.Fatalf("default command = %+v", cfg.Commands[0])
+	}
+	if cfg.Commands[1].Method != "POST" {
+		t.Fatalf("http method = %q, want POST", cfg.Commands[1].Method)
+	}
+	reply := cfg.Commands[1].Replies[0]
+	if reply.Definition.Runner != cmd.RunnerHTTP || reply.ReplyConfig.OutputFormat != pubsub.OutputFormatMarkdown {
+		t.Fatalf("resolved reply = %+v", reply)
+	}
+}
+
+func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "unknown field", text: "unknown = true"},
+		{name: "type mismatch", text: "num_workers = 'one'"},
+		{name: "syntax error", text: "num_workers ="},
+		{name: "unknown runner", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\nrunner = 'remote'"},
+		{name: "unknown interaction", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\ninteraction = 'session'"},
+		{name: "invalid output format", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\noutput_format = 'html'"},
+		{name: "invalid worker count", text: "allowed_user_ids = ['U']\nnum_workers = 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := loadConfig(writeConfigFile(t, tc.text)); err == nil {
+				t.Fatal("loadConfig() accepted invalid configuration")
+			}
+		})
+	}
+}
+
+func TestRunCheckConfig(t *testing.T) {
+	if got := run([]string{"--help"}); got != 0 {
+		t.Fatalf("run(--help) = %d, want 0", got)
+	}
+
+	valid := writeConfigFile(t, "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'")
+	if got := run([]string{"--check-config", "--config-file", valid}); got != 0 {
+		t.Fatalf("run(valid config) = %d, want 0", got)
+	}
+
+	invalid := writeConfigFile(t, "unknown = true")
+	if got := run([]string{"--check-config", "--config-file", invalid}); got == 0 {
+		t.Fatal("run(invalid config) = 0, want non-zero")
+	}
 }
 
 func TestConfigStdinIdleTimeout(t *testing.T) {
