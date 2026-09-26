@@ -3,11 +3,11 @@ module github.com/hnw/slack-commander
 go 1.25.0
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/creack/pty v1.1.24
 	github.com/hnw/compose-exec v0.4.0
 	github.com/mattn/go-shellwords v1.0.12
 	github.com/mattn/go-sixel v0.0.8
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/slack-go/slack v0.23.1
 	go.uber.org/zap v1.27.1
 )

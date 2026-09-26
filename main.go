@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
@@ -143,14 +144,18 @@ func main() {
 		sugar.Errorf("%v", err)
 		return
 	}
-	cfg := Config{NumWorkers: 1}
-	metadata, err := toml.DecodeFile(*configFile, &cfg)
+	file, err := os.Open(*configFile)
 	if err != nil {
 		sugar.Errorf("%v", err)
 		return
 	}
-	if err := validateTOMLMetadata(metadata); err != nil {
-		sugar.Fatalf("Fatal: %v", err)
+	defer func() {
+		_ = file.Close()
+	}()
+	cfg := Config{NumWorkers: 1}
+	if err := decodeConfig(file, &cfg); err != nil {
+		sugar.Errorf("%v", err)
+		return
 	}
 	if err := validateConfig(&cfg); err != nil {
 		sugar.Fatalf("Fatal: %v", err)
@@ -240,6 +245,12 @@ func main() {
 	executorWG.Wait()
 	close(outputQueue)
 	writerWG.Wait()
+}
+
+func decodeConfig(r io.Reader, cfg *Config) error {
+	decoder := toml.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(cfg)
 }
 
 func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
@@ -382,16 +393,4 @@ func normalizeRunner(c *cmd.Definition) (string, error) {
 		return "", fmt.Errorf("tty is not supported for http runner (keyword '%s')", c.Keyword)
 	}
 	return runner, nil
-}
-
-func validateTOMLMetadata(metadata toml.MetaData) error {
-	for _, key := range metadata.Undecoded() {
-		if len(key) >= 3 && key[0] == "commands" && key[1] == "replies" && key[2] == "replies" {
-			return errors.New("commands.replies.replies is not supported")
-		}
-		if len(key) == 3 && key[0] == "commands" && key[1] == "replies" && key[2] == "interaction" {
-			return errors.New("commands.replies.interaction is not supported")
-		}
-	}
-	return nil
 }
