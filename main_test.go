@@ -60,7 +60,7 @@ func TestConfigInteraction(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		setting     string
-		want        cmd.Interaction
+		want        string
 		wantErrText string
 	}{
 		{name: "defaults to oneshot", want: cmd.InteractionOneshot},
@@ -88,6 +88,36 @@ func TestConfigInteraction(t *testing.T) {
 			}
 			if got := cfg.Commands[0].Interaction; got != tc.want {
 				t.Fatalf("interaction = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeInteraction(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    string
+		wantErr string
+	}{
+		{want: cmd.InteractionOneshot},
+		{value: cmd.InteractionOneshot, want: cmd.InteractionOneshot},
+		{value: cmd.InteractionStdin, want: cmd.InteractionStdin},
+		{value: cmd.InteractionCommand, want: cmd.InteractionCommand},
+		{value: "session", wantErr: `unknown interaction "session"`},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			got, err := normalizeInteraction(tc.value)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("normalizeInteraction() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizeInteraction() = %q, want %q", got, tc.want)
 			}
 		})
 	}

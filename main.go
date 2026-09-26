@@ -35,7 +35,7 @@ type Config struct {
 type CommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
-	Interaction cmd.Interaction `toml:"interaction"`
+	Interaction string `toml:"interaction"`
 	Replies     []*ReplyCommandConfig
 }
 
@@ -188,13 +188,13 @@ func main() {
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
 	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
-		if cfg.Runner == "compose" {
+		if cfg.Runner == cmd.RunnerCompose {
 			composeRunnerOnce.Do(func() {
 				composeRunner = cmd.NewComposeRunner("")
 			})
 			return composeRunner
 		}
-		if cfg.Runner == "http" {
+		if cfg.Runner == cmd.RunnerHTTP {
 			return cmd.NewHTTPRunner(cfg)
 		}
 		return cmd.NewExecRunner()
@@ -290,7 +290,7 @@ func validateConfig(cfg *Config) error {
 		if err := validateReplyConfig(&c.ReplyConfig); err != nil {
 			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
 		}
-		interaction, err := c.Interaction.Normalize()
+		interaction, err := normalizeInteraction(c.Interaction)
 		if err != nil {
 			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
 		}
@@ -298,7 +298,7 @@ func validateConfig(cfg *Config) error {
 		if err := validateCommandDefinition(&c.Definition); err != nil {
 			return err
 		}
-		if strings.EqualFold(strings.TrimSpace(c.Runner), "http") && c.Interaction == cmd.InteractionStdin {
+		if strings.EqualFold(strings.TrimSpace(c.Runner), cmd.RunnerHTTP) && c.Interaction == cmd.InteractionStdin {
 			return fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", c.Keyword)
 		}
 		for _, reply := range c.Replies {
@@ -318,7 +318,7 @@ func validateConfig(cfg *Config) error {
 
 func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 	switch cfg.OutputFormat {
-	case "", "plain", "monospaced", "markdown":
+	case "", pubsub.OutputFormatPlain, pubsub.OutputFormatMonospaced, pubsub.OutputFormatMarkdown:
 		return nil
 	default:
 		return fmt.Errorf("unknown output_format %q", cfg.OutputFormat)
@@ -339,7 +339,7 @@ func validateCommandDefinition(c *cmd.Definition) error {
 	if err := validateTTY(c); err != nil {
 		return err
 	}
-	if runner != "http" {
+	if runner != cmd.RunnerHTTP {
 		if strings.HasPrefix(c.Command, "*") {
 			return fmt.Errorf("command field must not start with '*': %s", c.Command)
 		}
@@ -381,16 +381,27 @@ func validateTTY(c *cmd.Definition) error {
 func normalizeRunner(c *cmd.Definition) (string, error) {
 	runner := strings.ToLower(strings.TrimSpace(c.Runner))
 	if runner == "" {
-		runner = "exec"
+		runner = cmd.RunnerExec
 	}
 	switch runner {
-	case "exec", "compose", "http":
+	case cmd.RunnerExec, cmd.RunnerCompose, cmd.RunnerHTTP:
 		c.Runner = runner
 	default:
 		return "", fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
 	}
-	if c.TTY && runner == "http" {
+	if c.TTY && runner == cmd.RunnerHTTP {
 		return "", fmt.Errorf("tty is not supported for http runner (keyword '%s')", c.Keyword)
 	}
 	return runner, nil
+}
+
+func normalizeInteraction(value string) (string, error) {
+	switch value {
+	case "", cmd.InteractionOneshot:
+		return cmd.InteractionOneshot, nil
+	case cmd.InteractionStdin, cmd.InteractionCommand:
+		return value, nil
+	default:
+		return "", fmt.Errorf("unknown interaction %q", value)
+	}
 }

@@ -270,7 +270,7 @@ func TestThreadInputRoutesRawTextWithoutFallback(t *testing.T) {
 }
 
 func TestThreadReplyInteractionRouting(t *testing.T) {
-	newRoot := func(interaction cmd.Interaction) (*cmd.CommandConfig, *cmd.CommandConfig) {
+	newRoot := func(interaction string) (*cmd.CommandConfig, *cmd.CommandConfig) {
 		root := cmd.NewCommandConfig(&cmd.Definition{Keyword: "todo", Command: "todo-wrapper"}, nil)
 		root.Interaction = interaction
 		reply := cmd.NewCommandConfig(&cmd.Definition{Keyword: "cancel", Command: "todo-wrapper --cancel"}, nil)

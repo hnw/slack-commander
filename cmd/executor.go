@@ -17,7 +17,7 @@ type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
 	CommandConfigs      []*CommandConfig
-	Interaction         Interaction
+	Interaction         string
 	ConversationContext ConversationContext
 }
 
@@ -65,7 +65,7 @@ type CommandConfig struct {
 	ReplyConfig       interface{} //*pubsub.ReplyConfig
 	SystemReplyConfig interface{} //*pubsub.ReplyConfig
 	Replies           []*CommandConfig
-	Interaction       Interaction
+	Interaction       string
 }
 
 // NewCommandConfig builds a CommandConfig from a definition and reply config.
@@ -161,11 +161,6 @@ func executeCommandInput(
 		}
 	}
 
-	interaction, err := interaction.Normalize()
-	if err != nil {
-		return
-	}
-
 	if len(cmds) > 1 && !chainUsesOnlyOneshot(cmds, inputMatchers) {
 		return
 	}
@@ -209,8 +204,7 @@ func chainUsesOnlyOneshot(cmds []*parsedCommand, matchers []*Matcher) bool {
 		if matcher == nil {
 			continue
 		}
-		interaction, err := matcher.cfg.Interaction.Normalize()
-		if err != nil || interaction != InteractionOneshot {
+		if matcher.cfg.Interaction != InteractionOneshot {
 			return false
 		}
 	}

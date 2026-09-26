@@ -45,7 +45,7 @@ func (m *Matcher) build(keywords []string) []string {
 		return nil
 	}
 	runner := strings.ToLower(strings.TrimSpace(m.cfg.Runner))
-	if runner == "http" {
+	if runner == RunnerHTTP {
 		return buildHTTPArgs(hasWildcard, wildcard)
 	}
 	return buildCommandArgs(m.cfg.Command, hasWildcard, wildcard)
@@ -95,9 +95,9 @@ func matchKeywords(template []string, keywords []string, hasWildcard bool) ([]st
 
 func buildHTTPArgs(hasWildcard bool, wildcard []string) []string {
 	if hasWildcard {
-		return []string{"http", strings.Join(wildcard, " ")}
+		return []string{RunnerHTTP, strings.Join(wildcard, " ")}
 	}
-	return []string{"http"}
+	return []string{RunnerHTTP}
 }
 
 func buildCommandArgs(line string, hasWildcard bool, wildcard []string) []string {

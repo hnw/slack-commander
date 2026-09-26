@@ -208,9 +208,9 @@ func getReactionTimestamp(output *cmd.CommandOutput) string {
 func buildTextAttachment(output *cmd.CommandOutput) slack.Attachment {
 	attachment := slack.Attachment{Color: getColor(output)}
 	switch getConfig(output).OutputFormat {
-	case "monospaced":
+	case OutputFormatMonospaced:
 		attachment.Text = fmt.Sprintf("```%s```", output.Text)
-	case "markdown":
+	case OutputFormatMarkdown:
 		attachment.Blocks = slack.Blocks{
 			BlockSet: []slack.Block{slack.NewMarkdownBlock("", output.Text)},
 		}
@@ -222,9 +222,9 @@ func buildTextAttachment(output *cmd.CommandOutput) slack.Attachment {
 
 func buildTextBlock(output *cmd.CommandOutput) slack.Block {
 	switch getConfig(output).OutputFormat {
-	case "markdown":
+	case OutputFormatMarkdown:
 		return slack.NewMarkdownBlock("", output.Text)
-	case "monospaced":
+	case OutputFormatMonospaced:
 		textObj := slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("```%s```", output.Text), false, false)
 		return slack.NewSectionBlock(textObj, nil, nil)
 	default:

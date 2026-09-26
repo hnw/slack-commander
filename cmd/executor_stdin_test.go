@@ -427,8 +427,8 @@ func (c *endpointProbeCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int
 }
 
 func TestExecutorPublishesLiveStdinOnlyForStdinInteraction(t *testing.T) {
-	for _, interaction := range []Interaction{InteractionOneshot, InteractionCommand} {
-		t.Run(string(interaction), func(t *testing.T) {
+	for _, interaction := range []string{InteractionOneshot, InteractionCommand} {
+		t.Run(interaction, func(t *testing.T) {
 			probe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
 			var registry ThreadInputRegistry
 			key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
