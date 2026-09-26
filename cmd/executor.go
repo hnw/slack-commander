@@ -29,7 +29,7 @@ type ConversationContext struct {
 
 // ThreadKey returns the stable key shared by thread input and route state.
 func (c ConversationContext) ThreadKey() ThreadKey {
-	return ThreadKey{ChannelID: c.ChannelID, RootThreadTimestamp: c.RootThreadTimestamp}
+	return ThreadKey(c)
 }
 
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
@@ -132,54 +132,73 @@ func ExecutorWithThreadInputAndLocks(
 			if !ok {
 				return
 			}
-			inputMatchers := matchers
-			if input.CommandConfigs != nil {
-				inputMatchers = buildMatchers(input.CommandConfigs, runnerFactory)
-			}
-			cmdMsg, stdinText := splitCommandInput(input.Text)
-			cmds, parseErr := parseCommands(cmdMsg)
-			interaction := input.Interaction
-			if interaction == "" && len(cmds) > 0 {
-				if matcher, _ := findMatchedMatcher(cmds[0], inputMatchers); matcher != nil {
-					interaction = matcher.cfg.Interaction
-				}
-			}
-			interaction, err := interaction.Normalize()
-			if err != nil {
-				continue
-			}
-			if len(cmds) > 1 && !chainUsesOnlyOneshot(cmds, inputMatchers) {
-				continue
-			}
-			if interaction != InteractionOneshot && len(cmds) != 1 {
-				continue
-			}
-			rawBody := ""
-			initialStdin := stdinText
-			inputRegistry := registry
-			if interaction == InteractionCommand {
-				rawBody = stdinText
-				initialStdin = ""
-			}
-			if interaction != InteractionStdin {
-				inputRegistry = nil
-			}
-
-			executeCommandsWithThreadLock(
-				ctx,
-				cmds,
-				parseErr,
-				initialStdin,
-				rawBody,
-				input,
-				inputMatchers,
-				wq,
-				inputRegistry,
-				threadLocks,
-			)
-
+			executeCommandInput(ctx, input, matchers, runnerFactory, wq, registry, threadLocks)
 		}
 	}
+}
+
+func executeCommandInput(
+	ctx context.Context,
+	input *CommandInput,
+	matchers []*Matcher,
+	runnerFactory RunnerFactory,
+	wq chan *CommandOutput,
+	registry *ThreadInputRegistry,
+	threadLocks *ThreadLocks,
+) {
+	inputMatchers := matchers
+	if input.CommandConfigs != nil {
+		inputMatchers = buildMatchers(input.CommandConfigs, runnerFactory)
+	}
+
+	cmdMsg, stdinText := splitCommandInput(input.Text)
+	cmds, parseErr := parseCommands(cmdMsg)
+
+	interaction := input.Interaction
+	if interaction == "" && len(cmds) > 0 {
+		if matcher, _ := findMatchedMatcher(cmds[0], inputMatchers); matcher != nil {
+			interaction = matcher.cfg.Interaction
+		}
+	}
+
+	interaction, err := interaction.Normalize()
+	if err != nil {
+		return
+	}
+
+	if len(cmds) > 1 && !chainUsesOnlyOneshot(cmds, inputMatchers) {
+		return
+	}
+
+	if interaction != InteractionOneshot && len(cmds) != 1 {
+		return
+	}
+
+	rawBody := ""
+	initialStdin := stdinText
+	inputRegistry := registry
+
+	if interaction == InteractionCommand {
+		rawBody = stdinText
+		initialStdin = ""
+	}
+
+	if interaction != InteractionStdin {
+		inputRegistry = nil
+	}
+
+	executeCommandsWithThreadLock(
+		ctx,
+		cmds,
+		parseErr,
+		initialStdin,
+		rawBody,
+		input,
+		inputMatchers,
+		wq,
+		inputRegistry,
+		threadLocks,
+	)
 }
 
 func chainUsesOnlyOneshot(cmds []*parsedCommand, matchers []*Matcher) bool {

@@ -125,7 +125,9 @@ func SlackListener(
 
 func ackSocketModeEvent(smc *socketmode.Client, evt socketmode.Event) {
 	if evt.Request != nil && evt.Request.EnvelopeID != "" {
-		smc.Ack(*evt.Request)
+		if err := smc.Ack(*evt.Request); err != nil {
+			smc.Debugf("[WARN] failed to ack envelope_id=%s: %v", evt.Request.EnvelopeID, err)
+		}
 		return
 	}
 	if evt.Type != socketmode.EventTypeErrorBadMessage {
@@ -140,7 +142,10 @@ func ackSocketModeEvent(smc *socketmode.Client, evt socketmode.Event) {
 		smc.Debugf("[WARN] error_bad_message without envelope_id; cannot ack")
 		return
 	}
-	smc.Ack(socketmode.Request{EnvelopeID: envelopeID})
+	if err := smc.Ack(socketmode.Request{EnvelopeID: envelopeID}); err != nil {
+		smc.Debugf("[WARN] failed to ack envelope_id=%s: %v", envelopeID, err)
+		return
+	}
 	smc.Debugf("[WARN] acked error_bad_message envelope_id=%s", envelopeID)
 }
 
@@ -229,8 +234,8 @@ func slackMessageText(text string, attachments []slack.Attachment) string {
 
 func rootMessageText(root *slack.Message) string {
 	text := slackMessageText(root.Text, root.Attachments)
-	if text, ok := extractReminderText(root.User, text); ok {
-		return text
+	if reminderText, ok := extractReminderText(root.User, text); ok {
+		return reminderText
 	}
 	return text
 }

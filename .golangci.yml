@@ -7,7 +7,6 @@ formatters:
   enable:
     - gofumpt
     - goimports
-    - golines
 
 linters:
   default: none
