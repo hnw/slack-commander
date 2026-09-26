@@ -29,16 +29,10 @@ type Matcher struct {
 	runner   CommandRunner
 }
 
-// 　CommandConfig.Keyword のワイルドカードを正規表現に書き換えてMatcherを返す
 func newMatcher(cfg *CommandConfig) *Matcher {
-	parser := shellwords.NewParser()
-	keywords, err := parser.Parse(cfg.Keyword)
-	if err != nil || parser.Position >= 0 {
-		return nil
-	}
 	return &Matcher{
 		cfg:      cfg,
-		keywords: keywords,
+		keywords: strings.Fields(cfg.Keyword),
 	}
 }
 
@@ -124,5 +118,5 @@ func expandWildcard(line string, wildcard []string) string {
 	for i, v := range wildcard {
 		replaced[i] = wildcardReplacer.Replace(v)
 	}
-	return strings.Replace(line, "*", strings.Join(replaced, " "), 1)
+	return strings.ReplaceAll(line, "*", strings.Join(replaced, " "))
 }

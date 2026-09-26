@@ -68,6 +68,53 @@ func TestConfigInteraction(t *testing.T) {
 	}
 }
 
+func TestValidateConfigKeywordWildcardCount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		keyword string
+		wantErr bool
+	}{
+		{name: "without wildcard", keyword: "foo"},
+		{name: "with one wildcard", keyword: "foo *"},
+		{name: "literal asterisk", keyword: "foo*"},
+		{name: "unclosed quote", keyword: `foo "bar`},
+		{name: "with two wildcards", keyword: "foo * bar *", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				NumWorkers:   1,
+				Commands: []*CommandConfig{{
+					Definition: cmd.Definition{Keyword: tc.keyword, Command: "echo"},
+				}},
+			}
+			err := validateConfig(cfg)
+			if tc.wantErr && err == nil {
+				t.Fatal("validateConfig() accepted multiple wildcards")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateConfig() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
+	cfg := &Config{
+		PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+		NumWorkers:   1,
+		Commands: []*CommandConfig{{
+			Definition: cmd.Definition{Keyword: "todo", Command: "todo"},
+			Replies: []*ReplyCommandConfig{{
+				Definition: cmd.Definition{Keyword: "update * again *", Command: "todo"},
+			}},
+		}},
+	}
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() accepted multiple wildcards in a reply keyword")
+	}
+}
+
 func TestConfigTTYDefaultsToFalse(t *testing.T) {
 	var cfg Config
 	if _, err := toml.Decode("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {

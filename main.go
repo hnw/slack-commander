@@ -315,6 +315,9 @@ func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 }
 
 func validateCommandDefinition(c *cmd.Definition) error {
+	if err := validateKeywordWildcards(c.Keyword); err != nil {
+		return err
+	}
 	if c.StdinIdleTimeout < 0 {
 		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
 	}
@@ -337,6 +340,19 @@ func validateCommandDefinition(c *cmd.Definition) error {
 	}
 	if strings.TrimSpace(c.URL) == "" {
 		return fmt.Errorf("url is required for http runner (keyword '%s')", c.Keyword)
+	}
+	return nil
+}
+
+func validateKeywordWildcards(keyword string) error {
+	wildcards := 0
+	for _, token := range strings.Fields(keyword) {
+		if token == "*" {
+			wildcards++
+		}
+	}
+	if wildcards > 1 {
+		return fmt.Errorf("keyword %q must not contain more than one wildcard", keyword)
 	}
 	return nil
 }

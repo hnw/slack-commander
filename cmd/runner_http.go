@@ -121,7 +121,7 @@ func (c *httpCmd) expandWildcard(value string) string {
 	if !c.hasWildcard {
 		return value
 	}
-	return strings.Replace(value, "*", c.wildcard, 1)
+	return strings.ReplaceAll(value, "*", c.wildcard)
 }
 
 func (c *httpCmd) handleRequestError(err error, timeout int) int {
