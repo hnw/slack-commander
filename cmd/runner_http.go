@@ -26,7 +26,7 @@ func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string
 	hasWildcard := false
 	if len(arg) > 0 {
 		hasWildcard = true
-		wildcard = arg[0]
+		wildcard = strings.Join(arg, "")
 	}
 	return &httpCmd{
 		ctx:         ctx,

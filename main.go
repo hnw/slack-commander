@@ -287,8 +287,8 @@ func validateConfig(cfg *Config) error {
 		if err := validateCommandDefinition(&c.Definition); err != nil {
 			return err
 		}
-		if strings.EqualFold(strings.TrimSpace(c.Runner), "http") && c.Interaction != cmd.InteractionOneshot {
-			return fmt.Errorf("http runner only supports oneshot interaction for keyword '%s'", c.Keyword)
+		if strings.EqualFold(strings.TrimSpace(c.Runner), "http") && c.Interaction == cmd.InteractionStdin {
+			return fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", c.Keyword)
 		}
 		for _, reply := range c.Replies {
 			definition, replyConfig := resolveReplyCommand(c, reply)

@@ -56,9 +56,9 @@ root commandがSlack thread上の追加入力をどう扱うかを指定しま�
 
 * `oneshot`: root messageの2行目以降をstdinへ渡します。thread replyは無視します。`;`、`&&`、`||`によるcommand chainを使用できます。
 * `stdin`: root messageの2行目以降を初期stdinへ渡します。実行中のprocessが同じthreadのreplyを受け取ると、その本文をstdinへ渡します。送信先がないreplyは無視します。
-* `command`: root messageおよびreplyの1行目だけでkeyword matchingを行います。keywordの末尾が`*`の場合は、1行目との境界となる改行を含め、2行目以降を1個のargvとして末尾へ追加します。keywordの末尾が`*`でない場合、2行目以降は使用しません。たとえば`keyword = "echo *"`に対する`echo foo\nbar`では、概念的にargvが`["echo", "foo", "\nbar"]`になります。replyは`[[commands.replies]]`だけで評価します。
+* `command`: root messageおよびreplyの1行目だけでkeyword matchingを行います。1行目との境界となる改行を含め、2行目以降を1個のargvとして末尾へ追加します。たとえば`echo foo\nbar`は概念的に`echo "foo" "\nbar"`として実行されます。replyは`[[commands.replies]]`だけで評価します。
 
-`stdin`と`command`ではcommand chainを使用できません。`runner = "http"`では`oneshot`だけを使用できます。
+`stdin`と`command`ではcommand chainを使用できません。`runner = "http"`では`stdin`を使用できません。
 
 `interaction`はroot commandの属性です。`[[commands.replies]]`には指定できません。
 
@@ -155,7 +155,7 @@ headers = { "Content-Type" = "application/json" }
 
 `runner = "http"` の場合に送信するリクエストボディを指定します。
 
-キーワードの `*` にマッチした文字列があれば、`body` 内の `*` がその文字列で置換されます。同様に、`url` や `headers` の値に `*` が含まれている場合も置換されます。`interaction = "command"`かつkeywordの末尾が`*`の場合は、matcherで得たwildcard引数と2行目以降から追加された引数を連結して、HTTPテンプレートの`*`の展開値に使用します。
+キーワードの `*` にマッチした文字列があれば、`body` 内の `*` がその文字列で置換されます。同様に、`url` や `headers` の値に `*` が含まれている場合も置換されます。`interaction = "command"`では、matcherで得たwildcard引数と2行目以降から追加された引数を連結して、`*` の展開値に使用します。
 
 ### icon_emoji `string`
 

@@ -42,7 +42,8 @@ func TestConfigInteraction(t *testing.T) {
 		{name: "stdin", setting: "interaction = 'stdin'", want: cmd.InteractionStdin},
 		{name: "command", setting: "interaction = 'command'", want: cmd.InteractionCommand},
 		{name: "rejects unknown", setting: "interaction = 'session'", wantErrText: "unknown interaction"},
-		{name: "http only supports oneshot", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "only supports oneshot"},
+		{name: "http supports command", setting: "interaction = 'command'\nrunner = 'http'\nurl = 'https://example.com'", want: cmd.InteractionCommand},
+		{name: "http rejects stdin", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "does not support stdin"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
