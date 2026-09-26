@@ -57,6 +57,10 @@ func (m *Matcher) build(keywords []string) []string {
 	return buildCommandArgs(m.cfg.Command, hasWildcard, wildcard)
 }
 
+func (m *Matcher) hasTrailingWildcard() bool {
+	return len(m.keywords) > 0 && m.keywords[len(m.keywords)-1] == "*"
+}
+
 func containsWildcard(keywords []string) bool {
 	for _, v := range keywords {
 		if v == "*" {
