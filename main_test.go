@@ -5,15 +5,40 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
 	"github.com/hnw/slack-commander/cmd"
 	"github.com/hnw/slack-commander/pubsub"
 )
 
+func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "unknown top-level field", text: "unknown = true"},
+		{name: "unknown command field", text: "[[commands]]\nunknown = true"},
+		{name: "unknown reply field", text: "[[commands]]\n[[commands.replies]]\nunknown = true"},
+		{name: "type mismatch", text: "num_workers = 'one'"},
+		{name: "syntax error", text: "num_workers ="},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			if err := decodeConfig(strings.NewReader(tt.text), &cfg); err == nil {
+				t.Fatal("decodeConfig() accepted invalid configuration")
+			}
+		})
+	}
+}
+
+func decodeConfigString(text string, cfg *Config) error {
+	return decodeConfig(strings.NewReader(text), cfg)
+}
+
 func TestConfigStdinIdleTimeout(t *testing.T) {
 	for _, setting := range []string{"", "stdin_idle_timeout = 0", "stdin_idle_timeout = 300"} {
 		var cfg Config
-		_, err := toml.Decode(
+		err := decodeConfigString(
 			"[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\ntimeout = 3600\n"+setting,
 			&cfg,
 		)
@@ -47,7 +72,7 @@ func TestConfigInteraction(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
-			_, err := toml.Decode("allowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
+			err := decodeConfigString("allowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +142,7 @@ func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
 
 func TestConfigTTYDefaultsToFalse(t *testing.T) {
 	var cfg Config
-	if _, err := toml.Decode("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {
+	if err := decodeConfigString("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Commands[0].TTY {
@@ -127,7 +152,7 @@ func TestConfigTTYDefaultsToFalse(t *testing.T) {
 
 func TestConfigDecodesTTY(t *testing.T) {
 	var cfg Config
-	if _, err := toml.Decode(
+	if err := decodeConfigString(
 		"[[commands]]\nkeyword = 'agent'\ncommand = 'agent'\ntty = true",
 		&cfg,
 	); err != nil {
@@ -239,7 +264,7 @@ func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
 
 func TestConfigDecodesReplyBroadcast(t *testing.T) {
 	var cfg Config
-	if _, err := toml.Decode(`
+	if err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -256,7 +281,7 @@ keyword = "thread-only"
 command = "date"
 reply_broadcast = false
 `, &cfg); err != nil {
-		t.Fatalf("toml.Decode() error = %v", err)
+		t.Fatalf("decodeConfig() error = %v", err)
 	}
 
 	if cfg.Commands[0].ReplyBroadcast != nil {
@@ -272,7 +297,7 @@ reply_broadcast = false
 
 func TestConfigDecodesOutputFormat(t *testing.T) {
 	var cfg Config
-	_, err := toml.Decode(`
+	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -344,7 +369,7 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 //nolint:gocyclo // This test keeps every decoded reply field visible in one configuration fixture.
 func TestConfigDecodesCommandReplies(t *testing.T) {
 	var cfg Config
-	_, err := toml.Decode(`
+	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -388,7 +413,7 @@ reply_broadcast = true
 
 func TestResolveReplyCommand(t *testing.T) {
 	var cfg Config
-	_, err := toml.Decode(`
+	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -463,7 +488,7 @@ output_format = "plain"
 
 func TestConfigRejectsInteractionOnReplyCommand(t *testing.T) {
 	var cfg Config
-	metadata, err := toml.Decode(`
+	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -475,17 +500,14 @@ keyword = "cancel"
 command = "todo-wrapper --cancel"
 interaction = "command"
 `, &cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateTOMLMetadata(metadata); err == nil {
+	if err == nil {
 		t.Fatal("reply command interaction was accepted")
 	}
 }
 
 func TestConfigRejectsNestedCommandReplies(t *testing.T) {
 	var cfg Config
-	metadata, err := toml.Decode(`
+	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -500,10 +522,7 @@ command = "todo-wrapper --cancel"
 keyword = "again"
 command = "todo-wrapper"
 `, &cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateTOMLMetadata(metadata); err == nil {
+	if err == nil {
 		t.Fatal("nested replies were accepted")
 	}
 }
