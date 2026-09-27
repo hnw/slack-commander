@@ -41,6 +41,15 @@ func run(args []string) int {
 		return 2
 	}
 
+	cfg, err := loadConfig(*configFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if *checkConfig {
+		return 0
+	}
+
 	zapCfg := zap.NewDevelopmentConfig()
 	zapCfg.DisableStacktrace = true
 	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
@@ -58,7 +67,7 @@ func run(args []string) int {
 
 	logger, err := zapCfg.Build()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	defer func() {
@@ -67,16 +76,8 @@ func run(args []string) int {
 	sugar := logger.Sugar()
 	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
 	if err != nil {
-		sugar.Errorf("%v", err)
+		fmt.Fprintln(os.Stderr, err)
 		return 1
-	}
-	cfg, err := loadConfig(*configFile)
-	if err != nil {
-		sugar.Errorf("%v", err)
-		return 1
-	}
-	if *checkConfig {
-		return 0
 	}
 
 	cmdConfig := commandConfigs(cfg.Commands)
