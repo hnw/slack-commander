@@ -9,12 +9,17 @@ import (
 	"time"
 )
 
+// DefaultOutputFlushInterval is the maximum delay before buffered output is emitted.
+const DefaultOutputFlushInterval = time.Second
+
 // OutputWriter buffers command output and emits it to the output channel.
 type OutputWriter struct {
-	bufw  *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
-	raw   *rawWriter
-	timer *time.Timer
-	mu    sync.Mutex
+	bufw          *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
+	raw           *rawWriter
+	flushInterval time.Duration
+	timer         *time.Timer
+	timerSequence uint64
+	mu            sync.Mutex
 }
 
 func newStdWriter(
@@ -22,8 +27,9 @@ func newStdWriter(
 	replyInfo interface{},
 	cfg interface{},
 	context ConversationContext,
+	flushInterval time.Duration,
 ) *OutputWriter {
-	return newOutputWriter(ch, replyInfo, cfg, false, context)
+	return newOutputWriter(ch, replyInfo, cfg, false, context, flushInterval)
 }
 
 func newErrWriter(
@@ -31,8 +37,9 @@ func newErrWriter(
 	replyInfo interface{},
 	cfg interface{},
 	context ConversationContext,
+	flushInterval time.Duration,
 ) *OutputWriter {
-	return newOutputWriter(ch, replyInfo, cfg, true, context)
+	return newOutputWriter(ch, replyInfo, cfg, true, context, flushInterval)
 }
 
 func newOutputWriter(
@@ -41,25 +48,32 @@ func newOutputWriter(
 	cfg interface{},
 	isErrOut bool,
 	context ConversationContext,
+	flushInterval time.Duration,
 ) *OutputWriter {
 	raw := newRawWriter(ch, replyInfo, cfg, isErrOut, context)
 	return &OutputWriter{
-		bufw: bufio.NewWriterSize(raw, 2048),
-		raw:  raw,
+		bufw:          bufio.NewWriterSize(raw, 2048),
+		raw:           raw,
+		flushInterval: flushInterval,
 	}
 }
 
 func (w *OutputWriter) Write(data []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.timer != nil {
-		w.timer.Stop()
-	}
 	n, err = w.bufw.Write(data)
+	if err != nil {
+		return n, err
+	}
+	if w.bufw.Buffered() == 0 {
+		w.stopTimerLocked()
+		return n, nil
+	}
+	if w.flushInterval == 0 {
+		return n, w.bufw.Flush()
+	}
 	if w.timer == nil {
-		w.timer = time.AfterFunc(3*time.Second, w.flushLocked)
-	} else {
-		w.timer.Reset(3 * time.Second)
+		w.startTimerLocked()
 	}
 	return
 }
@@ -68,20 +82,37 @@ func (w *OutputWriter) Write(data []byte) (n int, err error) {
 func (w *OutputWriter) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.timer != nil {
-		w.timer.Stop()
-	}
+	w.stopTimerLocked()
 	if err := w.bufw.Flush(); err != nil {
 		return err
 	}
 	return w.raw.Flush()
 }
 
-func (w *OutputWriter) flushLocked() {
+func (w *OutputWriter) startTimerLocked() {
+	w.timerSequence++
+	sequence := w.timerSequence
+	w.timer = time.AfterFunc(w.flushInterval, func() {
+		w.flushBuffered(sequence)
+	})
+}
+
+func (w *OutputWriter) stopTimerLocked() {
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
+	w.timerSequence++
+}
+
+func (w *OutputWriter) flushBuffered(sequence uint64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.timerSequence != sequence {
+		return
+	}
+	w.timer = nil
 	_ = w.bufw.Flush()
-	_ = w.raw.Flush()
 }
 
 type rawWriter struct {

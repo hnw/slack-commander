@@ -9,6 +9,7 @@
 | [`slack_bot_token`](#slack_bot_token-string)                 | `string`   | —       | Slackのボットトークン           |
 | [`slack_app_token`](#slack_app_token-string)                 | `string`   | —       | Slackのアプリレベルトークン        |
 | [`num_workers`](#num_workers-int)                            | `int`      | `1`     | 外部コマンドの最大同時実行数          |
+| [`output_flush_interval`](#output_flush_interval-duration)   | `duration` | `1s`    | コマンド出力を途中送信する最大待ち時間      |
 | [`accept_reminder`](#accept_reminder-bool)                   | `bool`     | `false` | Slackリマインダーの投稿を受け付ける    |
 | [`accept_bot_message`](#accept_bot_message-bool)             | `bool`     | `false` | ボットによる投稿を受け付ける          |
 | [`allowed_user_ids`](#allowed_user_ids-string)               | `[]string` | 空       | 実行を許可するユーザーID           |
@@ -27,6 +28,7 @@
 | [`tty`](#tty-bool)                              | `bool`                 | `false`   | TTYを確保して実行する                        |
 | [`stdin_idle_timeout`](#stdin_idle_timeout-int) | `int`                  | `0`       | 標準入力を自動的に閉じるまでの時間                   |
 | [`timeout`](#timeout-int)                       | `int`                  | `0`       | 実行全体のタイムアウト                         |
+| [`output_flush_interval`](#output_flush_interval-duration)  | `duration`             | 継承      | コマンド出力を途中送信する最大待ち時間               |
 
 ### HTTP runner
 
@@ -66,6 +68,14 @@ Slackの管理画面で「General」→「Basic Information」→「App-Level To
 外部コマンドを同時に実行できる最大数を指定します。省略時は`1`です。
 
 `1`以上を指定してください。
+
+### output_flush_interval `duration`
+
+コマンド出力をSlackへ途中送信する最大待ち時間を指定します。省略時は`1s`です。Goのduration構文で指定でき、たとえば`500ms`、`1s`、`2m`を使用できます。
+
+`0s`を指定すると、待ち時間を設けず逐次送信します。2KBを超える出力は、この値を待たずに送信される場合があります。負の値は指定できません。
+
+`[[commands]]`または`[[commands.replies]]`にも指定でき、トップレベル → command → replyの順に継承します。
 
 ### accept_reminder `bool`
 
@@ -207,6 +217,7 @@ command = "todo-wrapper *"
 * `timeout`
 * `stdin_idle_timeout`
 * `tty`
+* `output_flush_interval`
 * `username`
 * `icon_emoji`
 * `icon_url`
@@ -222,7 +233,7 @@ command = "todo-wrapper *"
 * `headers`
 * `body`
 
-継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = 0`、`stdin_idle_timeout = 0`、`tty = false`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。
+継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = 0`、`stdin_idle_timeout = 0`、`tty = false`、`output_flush_interval = "0s"`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。
 
 `interaction`は`[[commands.replies]]`には指定できません。
 

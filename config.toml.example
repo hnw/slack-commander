@@ -3,6 +3,7 @@ slack_app_token = 'xapp-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 allowed_user_ids = ['U0123456789']
 allowed_channel_ids = ['C0123456789']
 # allow_unsafe_open_access = true # 非推奨: 全ユーザー・全チャンネルからの実行を許可
+# output_flush_interval = '1s' # コマンド出力を途中送信する最大待ち時間
 
 [[commands]]
 keyword = 'date'

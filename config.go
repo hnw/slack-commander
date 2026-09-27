@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -15,17 +16,31 @@ import (
 
 type PubSubConfig = pubsub.Config // TOMLデコード対象のためexportedにする
 
+// Duration decodes Go duration syntax from TOML strings.
+type Duration time.Duration
+
+func (d *Duration) UnmarshalText(text []byte) error {
+	value, err := time.ParseDuration(string(text))
+	if err != nil {
+		return err
+	}
+	*d = Duration(value)
+	return nil
+}
+
 type Config struct {
 	PubSubConfig
-	NumWorkers int `toml:"num_workers"`
-	Commands   []*CommandConfig
+	NumWorkers          int       `toml:"num_workers"`
+	OutputFlushInterval *Duration `toml:"output_flush_interval"`
+	Commands            []*CommandConfig
 }
 
 type CommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
-	Interaction string `toml:"interaction"`
-	Replies     []*ReplyCommandConfig
+	Interaction         string    `toml:"interaction"`
+	OutputFlushInterval *Duration `toml:"output_flush_interval"`
+	Replies             []*ReplyCommandConfig
 }
 
 // ReplyCommandConfig is a thread-reply command definition.
@@ -33,15 +48,16 @@ type CommandConfig struct {
 type ReplyCommandConfig struct {
 	cmd.Definition
 	pubsub.ReplyConfig
-	Runner           string `toml:"runner"`
-	Timeout          *int   `toml:"timeout"`
-	StdinIdleTimeout *int   `toml:"stdin_idle_timeout"`
-	TTY              *bool  `toml:"tty"`
-	Username         string `toml:"username"`
-	IconEmoji        string `toml:"icon_emoji"`
-	IconURL          string `toml:"icon_url"`
-	ReplyBroadcast   *bool  `toml:"reply_broadcast"`
-	OutputFormat     string `toml:"output_format"`
+	Runner              string    `toml:"runner"`
+	Timeout             *int      `toml:"timeout"`
+	StdinIdleTimeout    *int      `toml:"stdin_idle_timeout"`
+	TTY                 *bool     `toml:"tty"`
+	Username            string    `toml:"username"`
+	IconEmoji           string    `toml:"icon_emoji"`
+	IconURL             string    `toml:"icon_url"`
+	ReplyBroadcast      *bool     `toml:"reply_broadcast"`
+	OutputFormat        string    `toml:"output_format"`
+	OutputFlushInterval *Duration `toml:"output_flush_interval"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -107,6 +123,11 @@ func resolveReplyCommand(
 	} else {
 		definition.StdinIdleTimeout = *reply.StdinIdleTimeout
 	}
+	if reply.OutputFlushInterval == nil {
+		definition.OutputFlushInterval = parent.Definition.OutputFlushInterval
+	} else {
+		definition.OutputFlushInterval = time.Duration(*reply.OutputFlushInterval)
+	}
 	if reply.TTY == nil {
 		definition.TTY = parent.TTY
 	} else {
@@ -155,6 +176,47 @@ func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
 	return converted
 }
 
+func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
+	if value != nil {
+		return time.Duration(*value)
+	}
+	return inherited
+}
+
+func validateCommandConfig(c *CommandConfig, inheritedOutputFlushInterval time.Duration) error {
+	outputFlushInterval := resolveOutputFlushInterval(
+		c.OutputFlushInterval,
+		inheritedOutputFlushInterval,
+	)
+	c.Definition.OutputFlushInterval = outputFlushInterval
+	if validationErr := validateReplyConfig(&c.ReplyConfig); validationErr != nil {
+		return fmt.Errorf("keyword '%s': %w", c.Keyword, validationErr)
+	}
+	interaction, interactionErr := normalizeInteraction(c.Interaction)
+	if interactionErr != nil {
+		return fmt.Errorf("keyword '%s': %w", c.Keyword, interactionErr)
+	}
+	c.Interaction = interaction
+	if validationErr := validateCommandDefinition(&c.Definition); validationErr != nil {
+		return validationErr
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Runner), cmd.RunnerHTTP) && c.Interaction == cmd.InteractionStdin {
+		return fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", c.Keyword)
+	}
+	for _, reply := range c.Replies {
+		definition, replyConfig := resolveReplyCommand(c, reply)
+		if validationErr := validateReplyConfig(replyConfig); validationErr != nil {
+			return fmt.Errorf("keyword '%s': %w", reply.Keyword, validationErr)
+		}
+		if validationErr := validateCommandDefinition(definition); validationErr != nil {
+			return validationErr
+		}
+		reply.Definition = *definition
+		reply.ReplyConfig = *replyConfig
+	}
+	return nil
+}
+
 func validateConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.SlackBotToken) == "" {
 		return errors.New("slack_bot_token is required")
@@ -171,32 +233,17 @@ func validateConfig(cfg *Config) error {
 	if err := validateReplyConfig(&cfg.ReplyConfig); err != nil {
 		return err
 	}
+	outputFlushInterval := resolveOutputFlushInterval(
+		cfg.OutputFlushInterval,
+		cmd.DefaultOutputFlushInterval,
+	)
+	if outputFlushInterval < 0 {
+		return errors.New("output_flush_interval must be >= 0")
+	}
 
 	for _, c := range cfg.Commands {
-		if err := validateReplyConfig(&c.ReplyConfig); err != nil {
-			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
-		}
-		interaction, err := normalizeInteraction(c.Interaction)
-		if err != nil {
-			return fmt.Errorf("keyword '%s': %w", c.Keyword, err)
-		}
-		c.Interaction = interaction
-		if err := validateCommandDefinition(&c.Definition); err != nil {
+		if err := validateCommandConfig(c, outputFlushInterval); err != nil {
 			return err
-		}
-		if strings.EqualFold(strings.TrimSpace(c.Runner), cmd.RunnerHTTP) && c.Interaction == cmd.InteractionStdin {
-			return fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", c.Keyword)
-		}
-		for _, reply := range c.Replies {
-			definition, replyConfig := resolveReplyCommand(c, reply)
-			if err := validateReplyConfig(replyConfig); err != nil {
-				return fmt.Errorf("keyword '%s': %w", reply.Keyword, err)
-			}
-			if err := validateCommandDefinition(definition); err != nil {
-				return err
-			}
-			reply.Definition = *definition
-			reply.ReplyConfig = *replyConfig
 		}
 	}
 	return nil
@@ -235,6 +282,9 @@ func validateCommandDefinition(c *cmd.Definition) error {
 	}
 	if c.StdinIdleTimeout < 0 {
 		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
+	}
+	if c.OutputFlushInterval < 0 {
+		return fmt.Errorf("output_flush_interval must be >= 0 for keyword %q", c.Keyword)
 	}
 	runner, err := normalizeRunner(c)
 	if err != nil {
