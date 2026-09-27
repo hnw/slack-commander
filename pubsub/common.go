@@ -1,5 +1,14 @@
 package pubsub
 
+const (
+	// OutputFormatPlain sends output as plain Slack text.
+	OutputFormatPlain = "plain"
+	// OutputFormatMonospaced wraps output in a monospace code block.
+	OutputFormatMonospaced = "monospaced"
+	// OutputFormatMarkdown sends output as a Slack markdown block.
+	OutputFormatMarkdown = "markdown"
+)
+
 // Config defines Slack pub/sub settings.
 type Config struct {
 	ReplyConfig

@@ -355,11 +355,7 @@ func routeThreadReply(
 	if rootConfig == nil {
 		return
 	}
-	interaction, err := rootConfig.Interaction.Normalize()
-	if err != nil {
-		return
-	}
-	switch interaction {
+	switch rootConfig.Interaction {
 	case cmd.InteractionOneshot:
 		return
 	case cmd.InteractionStdin:

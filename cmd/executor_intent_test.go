@@ -177,7 +177,7 @@ func TestExecutorCommandInteractionPassesBodyToHTTPOnlyForTrailingWildcard(t *te
 }
 
 func TestExecutorRejectsChainsContainingNonOneshotCommand(t *testing.T) {
-	newConfig := func(keyword string, interaction Interaction) *CommandConfig {
+	newConfig := func(keyword string, interaction string) *CommandConfig {
 		config := NewCommandConfig(&Definition{Keyword: keyword, Command: keyword}, nil)
 		config.Interaction = interaction
 		return config
@@ -302,7 +302,7 @@ func TestExecutorIntentDetection(t *testing.T) {
 func TestExecutorInteractionInput(t *testing.T) {
 	tests := []struct {
 		name        string
-		interaction Interaction
+		interaction string
 		input       string
 		wantArgs    []string
 		wantCalls   int
@@ -321,7 +321,9 @@ func TestExecutorInteractionInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)
-			config.Interaction = tt.interaction
+			if tt.interaction != "" {
+				config.Interaction = tt.interaction
+			}
 			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
 			if len(calls) != tt.wantCalls {
 				t.Fatalf("calls = %#v, want %d calls", calls, tt.wantCalls)
