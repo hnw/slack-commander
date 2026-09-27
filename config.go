@@ -156,16 +156,17 @@ func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
 }
 
 func validateConfig(cfg *Config) error {
+	if strings.TrimSpace(cfg.SlackBotToken) == "" {
+		return errors.New("slack_bot_token is required")
+	}
+	if strings.TrimSpace(cfg.SlackAppToken) == "" {
+		return errors.New("slack_app_token is required")
+	}
 	if cfg.NumWorkers < 1 {
 		return fmt.Errorf("num_workers must be >= 1 (got %d)", cfg.NumWorkers)
 	}
-	if len(cfg.AllowedUserIDs) == 0 &&
-		len(cfg.AllowedChannelIDs) == 0 &&
-		!cfg.AllowUnsafeOpenAccess {
-		return errors.New(
-			"open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, " +
-				"or set allow_unsafe_open_access=true to keep old behavior",
-		)
+	if err := validateOpenAccess(cfg); err != nil {
+		return err
 	}
 	if err := validateReplyConfig(&cfg.ReplyConfig); err != nil {
 		return err
@@ -201,6 +202,18 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
+func validateOpenAccess(cfg *Config) error {
+	if len(cfg.AllowedUserIDs) == 0 &&
+		len(cfg.AllowedChannelIDs) == 0 &&
+		!cfg.AllowUnsafeOpenAccess {
+		return errors.New(
+			"open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, " +
+				"or set allow_unsafe_open_access=true to keep old behavior",
+		)
+	}
+	return nil
+}
+
 func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 	switch cfg.OutputFormat {
 	case "", pubsub.OutputFormatPlain, pubsub.OutputFormatMonospaced, pubsub.OutputFormatMarkdown:
@@ -211,8 +224,14 @@ func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 }
 
 func validateCommandDefinition(c *cmd.Definition) error {
+	if strings.TrimSpace(c.Keyword) == "" {
+		return errors.New("keyword is required")
+	}
 	if err := validateKeywordWildcards(c.Keyword); err != nil {
 		return err
+	}
+	if c.Timeout < 0 {
+		return fmt.Errorf("timeout must be >= 0 for keyword %q", c.Keyword)
 	}
 	if c.StdinIdleTimeout < 0 {
 		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
@@ -225,6 +244,9 @@ func validateCommandDefinition(c *cmd.Definition) error {
 		return err
 	}
 	if runner != cmd.RunnerHTTP {
+		if strings.TrimSpace(c.Command) == "" {
+			return fmt.Errorf("command is required for keyword %q", c.Keyword)
+		}
 		if strings.HasPrefix(c.Command, "*") {
 			return fmt.Errorf("command field must not start with '*': %s", c.Command)
 		}

@@ -72,8 +72,156 @@ func writeConfigFile(t *testing.T, text string) string {
 	return path
 }
 
+func validTestConfig(commands ...*CommandConfig) *Config {
+	return &Config{
+		PubSubConfig: PubSubConfig{
+			SlackBotToken:  "xoxb-test",
+			SlackAppToken:  "xapp-test",
+			AllowedUserIDs: []string{"U123"},
+		},
+		NumWorkers: 1,
+		Commands:   commands,
+	}
+}
+
+func TestValidateConfigRequiresSlackTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clear func(*Config)
+		want  string
+	}{
+		{
+			name:  "bot token",
+			clear: func(cfg *Config) { cfg.SlackBotToken = " " },
+			want:  "slack_bot_token is required",
+		},
+		{
+			name:  "app token",
+			clear: func(cfg *Config) { cfg.SlackAppToken = "" },
+			want:  "slack_app_token is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Command: "date"}})
+			tc.clear(cfg)
+
+			err := validateConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateConfigRequiresCommandFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config func() *Config
+		want   string
+	}{
+		{
+			name: "top-level keyword is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Command: "date"}})
+			},
+			want: "keyword is required",
+		},
+		{
+			name: "top-level keyword is blank",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: " ", Command: "date"}})
+			},
+			want: "keyword is required",
+		},
+		{
+			name: "reply keyword is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{
+					Definition: cmd.Definition{Keyword: "date", Command: "date"},
+					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Command: "retry"}}},
+				})
+			},
+			want: "keyword is required",
+		},
+		{
+			name: "exec command is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerExec}})
+			},
+			want: "command is required",
+		},
+		{
+			name: "compose command is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerCompose}})
+			},
+			want: "command is required",
+		},
+		{
+			name: "reply exec command is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{
+					Definition: cmd.Definition{Keyword: "date", Command: "date"},
+					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Keyword: "retry"}}},
+				})
+			},
+			want: "command is required",
+		},
+		{
+			name: "reply compose command is missing",
+			config: func() *Config {
+				return validTestConfig(&CommandConfig{
+					Definition: cmd.Definition{Keyword: "date", Command: "date"},
+					Replies: []*ReplyCommandConfig{{
+						Definition: cmd.Definition{Keyword: "retry"},
+						Runner:     cmd.RunnerCompose,
+					}},
+				})
+			},
+			want: "command is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConfig(tc.config())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateConfigTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout int
+		wantErr string
+	}{
+		{name: "negative is rejected", timeout: -1, wantErr: "timeout must be >= 0"},
+		{name: "zero is allowed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{
+				Keyword: "date", Command: "date", Timeout: tc.timeout,
+			}})
+
+			err := validateConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadConfigResolvesConfiguration(t *testing.T) {
 	path := writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
 allowed_user_ids = ["U123"]
 
 [[commands]]
@@ -118,10 +266,10 @@ func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 		{name: "unknown field", text: "unknown = true"},
 		{name: "type mismatch", text: "num_workers = 'one'"},
 		{name: "syntax error", text: "num_workers ="},
-		{name: "unknown runner", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\nrunner = 'remote'"},
-		{name: "unknown interaction", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\ninteraction = 'session'"},
-		{name: "invalid output format", text: "allowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\noutput_format = 'html'"},
-		{name: "invalid worker count", text: "allowed_user_ids = ['U']\nnum_workers = 0"},
+		{name: "unknown runner", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\nrunner = 'remote'"},
+		{name: "unknown interaction", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\ninteraction = 'session'"},
+		{name: "invalid output format", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\noutput_format = 'html'"},
+		{name: "invalid worker count", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\nnum_workers = 0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := loadConfig(writeConfigFile(t, tc.text)); err == nil {
@@ -168,7 +316,7 @@ func TestConfigInteraction(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
-			err := decodeConfigString("allowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
+			err := decodeConfigString("slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -233,7 +381,7 @@ func TestValidateConfigKeywordWildcardCount(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands: []*CommandConfig{{
 					Definition: cmd.Definition{Keyword: tc.keyword, Command: "echo"},
@@ -252,7 +400,7 @@ func TestValidateConfigKeywordWildcardCount(t *testing.T) {
 
 func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
 	cfg := &Config{
-		PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
 		Commands: []*CommandConfig{{
 			Definition: cmd.Definition{Keyword: "todo", Command: "todo"},
@@ -315,7 +463,7 @@ func TestValidateConfigTTY(t *testing.T) {
 				definition.URL = "http://example.com/hook"
 			}
 			cfg := &Config{
-				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands:     []*CommandConfig{{Definition: definition}},
 			}
@@ -351,7 +499,7 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands: []*CommandConfig{{Definition: cmd.Definition{
 					Keyword:          "agent",
@@ -376,6 +524,10 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 
 func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
 	cfg := &Config{
+		PubSubConfig: PubSubConfig{
+			SlackBotToken: "xoxb-test",
+			SlackAppToken: "xapp-test",
+		},
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
 			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
@@ -463,7 +615,7 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands: []*CommandConfig{{
 					Definition:  cmd.Definition{Keyword: "date", Command: "date"},
@@ -655,7 +807,7 @@ command = "todo-wrapper"
 
 func TestValidateConfigValidatesCommandReplies(t *testing.T) {
 	cfg := &Config{
-		PubSubConfig: PubSubConfig{AllowedUserIDs: []string{"U123"}},
+		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
 		Commands: []*CommandConfig{{
 			Definition: cmd.Definition{Keyword: "todo", Command: "todo-wrapper"},
@@ -673,6 +825,8 @@ func TestValidateConfigValidatesCommandReplies(t *testing.T) {
 func TestValidateConfigAllowsRestrictedConfig(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{
+			SlackBotToken:  "xoxb-test",
+			SlackAppToken:  "xapp-test",
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,
@@ -689,6 +843,8 @@ func TestValidateConfigAllowsRestrictedConfig(t *testing.T) {
 func TestValidateConfigAllowsExplicitUnsafeOpenAccess(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{
+			SlackBotToken:         "xoxb-test",
+			SlackAppToken:         "xapp-test",
 			AllowUnsafeOpenAccess: true,
 		},
 		NumWorkers: 1,
@@ -705,6 +861,8 @@ func TestValidateConfigAllowsExplicitUnsafeOpenAccess(t *testing.T) {
 func TestValidateConfigAllowsHTTPRunner(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{
+			SlackBotToken:  "xoxb-test",
+			SlackAppToken:  "xapp-test",
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,
@@ -732,6 +890,8 @@ func TestValidateConfigAllowsHTTPRunner(t *testing.T) {
 func TestValidateConfigRejectsHTTPRunnerWithoutURL(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{
+			SlackBotToken:  "xoxb-test",
+			SlackAppToken:  "xapp-test",
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,

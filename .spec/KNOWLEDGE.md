@@ -1,5 +1,8 @@
 # KNOWLEDGE
 
+## 設定の実行可能性検証（2026-09-27）
+- `loadConfig` が通る設定は、Slack token、command keyword、exec / compose command が空でないことまで保証する。HTTP command は不要で、timeout の `0` は従来どおり無制限、負値だけを拒否する。
+
 ## Slack thread context と実行直列化（2026-09-23）
 - `ConversationContext` の `ChannelID` と `RootThreadTimestamp` を実行直前に環境変数へ合成することで、exec / compose の runner 実装ごとの分岐を避けつつ、Slack event の値を既存同名値より優先できる。
 - Executor worker 間で `ThreadLocks` を共有し、`ThreadKey` ごとの `sync.Mutex` を実行全体に適用する。mutex待機のFIFOやworker占有は保証・回避せず、map entryのcleanupも初版では行わない。
