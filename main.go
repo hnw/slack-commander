@@ -6,13 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
@@ -50,35 +48,23 @@ func run(args []string) int {
 		return 0
 	}
 
-	zapCfg := zap.NewDevelopmentConfig()
-	zapCfg.DisableStacktrace = true
-	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	zapCfg.EncoderConfig.EncodeDuration = zapcore.SecondsDurationEncoder
-	zapCfg.Level.SetLevel(zapcore.WarnLevel)
+	var level slog.LevelVar
+	level.Set(slog.LevelWarn)
 	if *verbose {
-		zapCfg.Level.SetLevel(zapcore.InfoLevel)
+		level.Set(slog.LevelInfo)
 	}
 	if *debug {
-		zapCfg.Level.SetLevel(zapcore.DebugLevel)
+		level.Set(slog.LevelDebug)
 	}
 	if *quiet {
-		zapCfg.Level.SetLevel(zapcore.ErrorLevel)
+		level.Set(slog.LevelError)
 	}
 
-	logger, err := zapCfg.Build()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	defer func() {
-		_ = logger.Sync()
-	}()
-	sugar := logger.Sugar()
-	stdLogger, err := zap.NewStdLogAt(logger, zapcore.DebugLevel)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: &level,
+	})
+	logger := slog.New(handler)
+	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
 	cmdConfig := commandConfigs(cfg.Commands)
 
@@ -157,7 +143,7 @@ func run(args []string) int {
 
 	exitCode := 0
 	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		sugar.Errorf("Socket Mode error: %v", err)
+		logger.Error("Socket Mode error", "error", err)
 		exitCode = 1
 	}
 	stop()
