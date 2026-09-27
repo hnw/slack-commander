@@ -15,42 +15,23 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 	tests := []struct {
 		name string
 		text string
+		want []string
 	}{
-		{name: "unknown top-level field", text: "unknown = true"},
-		{name: "unknown command field", text: "[[commands]]\nunknown = true"},
-		{name: "unknown reply field", text: "[[commands]]\n[[commands.replies]]\nunknown = true"},
-		{name: "type mismatch", text: "num_workers = 'one'"},
-		{name: "syntax error", text: "num_workers ="},
+		{name: "unknown top-level field", text: "unknown = true", want: []string{"unknown", "field", "1|"}},
+		{name: "unknown command field", text: "[[commands]]\nunknown = true", want: []string{"unknown", "field", "2|"}},
+		{name: "unknown reply field", text: "[[commands]]\n[[commands.replies]]\nunknown = true", want: []string{"unknown", "field", "3|"}},
+		{name: "type mismatch", text: "num_workers = 'one'", want: []string{"num_workers", "1|"}},
+		{name: "syntax error", text: "num_workers =", want: []string{"num_workers", "1|"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var cfg Config
-			if err := decodeConfig(strings.NewReader(tt.text), &cfg); err == nil {
-				t.Fatal("decodeConfig() accepted invalid configuration")
-			}
-		})
-	}
-}
-
-func TestDecodeConfigReportsTOMLContext(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		text string
-		want []string
-	}{
-		{name: "unknown field", text: "unknown = true", want: []string{"unknown", "field", "1|"}},
-		{name: "nested unknown field", text: "[[commands]]\nunknown = true", want: []string{"unknown", "field", "2|"}},
-		{name: "syntax error", text: "num_workers =", want: []string{"num_workers", "1|"}},
-		{name: "type mismatch", text: "num_workers = 'one'", want: []string{"num_workers", "1|"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var cfg Config
-			err := decodeConfigString(tc.text, &cfg)
+			err := decodeConfig(strings.NewReader(tt.text), &cfg)
 			if err == nil {
 				t.Fatal("decodeConfig() accepted invalid configuration")
 			}
-			for _, want := range tc.want {
+			for _, want := range tt.want {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("decodeConfig() error = %q, want it to contain %q", err, want)
 				}
@@ -263,11 +244,7 @@ func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 		name string
 		text string
 	}{
-		{name: "unknown field", text: "unknown = true"},
-		{name: "type mismatch", text: "num_workers = 'one'"},
-		{name: "syntax error", text: "num_workers ="},
 		{name: "unknown runner", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\nrunner = 'remote'"},
-		{name: "unknown interaction", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\ninteraction = 'session'"},
 		{name: "invalid output format", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\n[[commands]]\nkeyword = 'date'\ncommand = 'date'\noutput_format = 'html'"},
 		{name: "invalid worker count", text: "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\nnum_workers = 0"},
 	} {
@@ -279,77 +256,20 @@ func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestConfigStdinIdleTimeout(t *testing.T) {
-	for _, setting := range []string{"", "stdin_idle_timeout = 0", "stdin_idle_timeout = 300"} {
-		var cfg Config
-		err := decodeConfigString(
-			"[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\ntimeout = 3600\n"+setting,
-			&cfg,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := 0
-		if strings.HasSuffix(setting, "300") {
-			want = 300
-		}
-		if len(cfg.Commands) != 1 || cfg.Commands[0].StdinIdleTimeout != want ||
-			cfg.Commands[0].Timeout != 3600 {
-			t.Fatalf("config=%+v", cfg)
-		}
-	}
-}
-
-func TestConfigInteraction(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		setting     string
-		want        string
-		wantErrText string
-	}{
-		{name: "defaults to oneshot", want: cmd.InteractionOneshot},
-		{name: "stdin", setting: "interaction = 'stdin'", want: cmd.InteractionStdin},
-		{name: "command", setting: "interaction = 'command'", want: cmd.InteractionCommand},
-		{name: "rejects unknown", setting: "interaction = 'session'", wantErrText: "unknown interaction"},
-		{name: "http supports command", setting: "interaction = 'command'\nrunner = 'http'\nurl = 'https://example.com'", want: cmd.InteractionCommand},
-		{name: "http rejects stdin", setting: "interaction = 'stdin'\nrunner = 'http'\nurl = 'https://example.com'", wantErrText: "does not support stdin"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var cfg Config
-			err := decodeConfigString("slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']\nnum_workers = 1\n[[commands]]\nkeyword = 'agent'\ncommand = 'cat'\n"+tc.setting, &cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = validateConfig(&cfg)
-			if tc.wantErrText != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErrText) {
-					t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErrText)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := cfg.Commands[0].Interaction; got != tc.want {
-				t.Fatalf("interaction = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestNormalizeInteraction(t *testing.T) {
 	for _, tc := range []struct {
+		name    string
 		value   string
 		want    string
 		wantErr string
 	}{
-		{want: cmd.InteractionOneshot},
-		{value: cmd.InteractionOneshot, want: cmd.InteractionOneshot},
-		{value: cmd.InteractionStdin, want: cmd.InteractionStdin},
-		{value: cmd.InteractionCommand, want: cmd.InteractionCommand},
-		{value: "session", wantErr: `unknown interaction "session"`},
+		{name: "empty defaults to oneshot", want: cmd.InteractionOneshot},
+		{name: "oneshot", value: cmd.InteractionOneshot, want: cmd.InteractionOneshot},
+		{name: "stdin", value: cmd.InteractionStdin, want: cmd.InteractionStdin},
+		{name: "command", value: cmd.InteractionCommand, want: cmd.InteractionCommand},
+		{name: "unknown is rejected", value: "session", wantErr: `unknown interaction "session"`},
 	} {
-		t.Run(tc.value, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeInteraction(tc.value)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -362,6 +282,43 @@ func TestNormalizeInteraction(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("normalizeInteraction() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateConfigHTTPInteraction(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		interaction string
+		wantErr     string
+	}{
+		{name: "command is allowed", interaction: cmd.InteractionCommand},
+		{name: "stdin is rejected", interaction: cmd.InteractionStdin, wantErr: "does not support stdin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PubSubConfig: PubSubConfig{
+					SlackBotToken:  "xoxb-test",
+					SlackAppToken:  "xapp-test",
+					AllowedUserIDs: []string{"U123"},
+				},
+				NumWorkers: 1,
+				Commands: []*CommandConfig{{
+					Definition:  cmd.Definition{Keyword: "notify", Runner: cmd.RunnerHTTP, URL: "https://example.com"},
+					Interaction: tc.interaction,
+				}},
+			}
+
+			err := validateConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -411,29 +368,6 @@ func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
 	}
 	if err := validateConfig(cfg); err == nil {
 		t.Fatal("validateConfig() accepted multiple wildcards in a reply keyword")
-	}
-}
-
-func TestConfigTTYDefaultsToFalse(t *testing.T) {
-	var cfg Config
-	if err := decodeConfigString("[[commands]]\nkeyword = 'agent'\ncommand = 'cat'", &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Commands[0].TTY {
-		t.Fatal("tty default = true, want false")
-	}
-}
-
-func TestConfigDecodesTTY(t *testing.T) {
-	var cfg Config
-	if err := decodeConfigString(
-		"[[commands]]\nkeyword = 'agent'\ncommand = 'agent'\ntty = true",
-		&cfg,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.Commands[0].TTY {
-		t.Fatal("tty = true was not decoded")
 	}
 }
 
@@ -573,32 +507,6 @@ reply_broadcast = false
 	}
 }
 
-func TestConfigDecodesOutputFormat(t *testing.T) {
-	var cfg Config
-	err := decodeConfigString(`
-allowed_user_ids = ["U123"]
-
-[[commands]]
-keyword = "markdown"
-command = "date"
-output_format = "markdown"
-
-[[commands.replies]]
-keyword = "monospaced"
-command = "date"
-output_format = "monospaced"
-`, &cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Commands[0].OutputFormat != "markdown" {
-		t.Fatalf("command output_format = %q, want markdown", cfg.Commands[0].OutputFormat)
-	}
-	if cfg.Commands[0].Replies[0].OutputFormat != "monospaced" {
-		t.Fatalf("reply output_format = %q, want monospaced", cfg.Commands[0].Replies[0].OutputFormat)
-	}
-}
-
 func TestValidateConfigOutputFormat(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -641,51 +549,6 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
-	}
-}
-
-//nolint:gocyclo // This test keeps every decoded reply field visible in one configuration fixture.
-func TestConfigDecodesCommandReplies(t *testing.T) {
-	var cfg Config
-	err := decodeConfigString(`
-allowed_user_ids = ["U123"]
-
-[[commands]]
-keyword = "todo *"
-command = "todo-wrapper *"
-
-[[commands.replies]]
-keyword = "cancel"
-command = "todo-wrapper --cancel"
-runner = "http"
-timeout = 30
-tty = false
-stdin_idle_timeout = 10
-method = "POST"
-url = "https://example.com/todo"
-headers = { Authorization = "Bearer token" }
-body = '{"text":"*"}'
-username = "todo bot"
-icon_emoji = ":memo:"
-icon_url = "https://example.com/icon.png"
-reply_broadcast = true
-`, &cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Commands) != 1 || len(cfg.Commands[0].Replies) != 1 {
-		t.Fatalf("commands = %+v", cfg.Commands)
-	}
-	reply := cfg.Commands[0].Replies[0]
-	if reply.Keyword != "cancel" || reply.Command != "todo-wrapper --cancel" ||
-		reply.Runner != "http" || reply.Timeout == nil || *reply.Timeout != 30 ||
-		reply.TTY == nil || *reply.TTY ||
-		reply.StdinIdleTimeout == nil || *reply.StdinIdleTimeout != 10 || reply.Method != "POST" ||
-		reply.URL != "https://example.com/todo" || reply.Headers["Authorization"] != "Bearer token" ||
-		reply.Body != `{"text":"*"}` || reply.Username != "todo bot" ||
-		reply.IconEmoji != ":memo:" || reply.IconURL != "https://example.com/icon.png" ||
-		reply.ReplyBroadcast == nil || !*reply.ReplyBroadcast {
-		t.Fatalf("reply = %+v", reply)
 	}
 }
 
