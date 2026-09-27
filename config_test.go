@@ -33,6 +33,32 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 	}
 }
 
+func TestDecodeConfigReportsTOMLContext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want []string
+	}{
+		{name: "unknown field", text: "unknown = true", want: []string{"unknown", "field", "1|"}},
+		{name: "nested unknown field", text: "[[commands]]\nunknown = true", want: []string{"unknown", "field", "2|"}},
+		{name: "syntax error", text: "num_workers =", want: []string{"num_workers", "1|"}},
+		{name: "type mismatch", text: "num_workers = 'one'", want: []string{"num_workers", "1|"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg Config
+			err := decodeConfigString(tc.text, &cfg)
+			if err == nil {
+				t.Fatal("decodeConfig() accepted invalid configuration")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("decodeConfig() error = %q, want it to contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func decodeConfigString(text string, cfg *Config) error {
 	return decodeConfig(strings.NewReader(text), cfg)
 }

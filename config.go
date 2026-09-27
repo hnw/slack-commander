@@ -67,7 +67,24 @@ func loadConfig(path string) (*Config, error) {
 func decodeConfig(r io.Reader, cfg *Config) error {
 	decoder := toml.NewDecoder(r)
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(cfg)
+	if err := decoder.Decode(cfg); err != nil {
+		return formatTOMLError(err)
+	}
+	return nil
+}
+
+func formatTOMLError(err error) error {
+	var strictErr *toml.StrictMissingError
+	if errors.As(err, &strictErr) {
+		return errors.New(strictErr.String())
+	}
+
+	var decodeErr *toml.DecodeError
+	if errors.As(err, &decodeErr) {
+		return errors.New(decodeErr.String())
+	}
+
+	return err
 }
 
 func resolveReplyCommand(
