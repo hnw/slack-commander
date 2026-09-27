@@ -9,7 +9,6 @@ require (
 	github.com/mattn/go-sixel v0.0.8
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/slack-go/slack v0.23.1
-	go.uber.org/zap v1.27.1
 )
 
 require (
@@ -53,7 +52,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.3 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
