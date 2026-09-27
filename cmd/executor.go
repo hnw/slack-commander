@@ -47,16 +47,17 @@ type CommandOutput struct {
 
 // Definition describes a command definition in the configuration.
 type Definition struct {
-	StdinIdleTimeout int  `toml:"stdin_idle_timeout"`
-	TTY              bool `toml:"tty"`
-	Timeout          int
-	Keyword          string
-	Command          string
-	Runner           string
-	Method           string
-	URL              string
-	Headers          map[string]string
-	Body             string
+	StdinIdleTimeout    int  `toml:"stdin_idle_timeout"`
+	TTY                 bool `toml:"tty"`
+	Timeout             int
+	OutputFlushInterval time.Duration
+	Keyword             string
+	Command             string
+	Runner              string
+	Method              string
+	URL                 string
+	Headers             map[string]string
+	Body                string
 }
 
 // CommandConfig holds a Definition with reply configuration.
@@ -362,14 +363,14 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 }
 
 func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, m *Matcher) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, m.cfg.SystemReplyConfig, input.ConversationContext)
+	syserr := newErrWriter(wq, input.ReplyInfo, m.cfg.SystemReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2
 }
 
 func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *parsedCommand) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext)
+	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext, DefaultOutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
 	_ = syserr.Flush()
 	return 127
@@ -398,8 +399,8 @@ func runMatchedCommand(
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	setSlackContextEnvironment(execCmd, input.ConversationContext)
-	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
-	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext)
+	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
+	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
 	if m.cfg.TTY {
 		terminal := newTTYOutputNormalizer(stdout)
 		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {

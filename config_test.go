@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hnw/slack-commander/cmd"
 	"github.com/hnw/slack-commander/pubsub"
@@ -254,6 +255,92 @@ func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOutputFlushIntervalConfiguration(t *testing.T) {
+	t.Run("defaults to one second", func(t *testing.T) {
+		cfg, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "date"
+command = "date"
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != time.Second {
+			t.Fatalf("output flush interval = %s, want %s", got, time.Second)
+		}
+	})
+
+	t.Run("command and reply override inherited interval", func(t *testing.T) {
+		cfg, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+output_flush_interval = "500ms"
+
+[[commands]]
+keyword = "date"
+command = "date"
+
+[[commands]]
+keyword = "todo"
+command = "todo"
+output_flush_interval = "2s"
+
+[[commands.replies]]
+keyword = "retry"
+command = "todo retry"
+
+[[commands.replies]]
+keyword = "stop"
+command = "todo stop"
+output_flush_interval = "0s"
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != 500*time.Millisecond {
+			t.Fatalf("top-level output flush interval = %s, want %s", got, 500*time.Millisecond)
+		}
+		if got := cfg.Commands[1].Definition.OutputFlushInterval; got != 2*time.Second {
+			t.Fatalf("command output flush interval = %s, want %s", got, 2*time.Second)
+		}
+		if got := cfg.Commands[1].Replies[0].Definition.OutputFlushInterval; got != 2*time.Second {
+			t.Fatalf("inherited reply output flush interval = %s, want %s", got, 2*time.Second)
+		}
+		if got := cfg.Commands[1].Replies[1].Definition.OutputFlushInterval; got != 0 {
+			t.Fatalf("overridden reply output flush interval = %s, want 0", got)
+		}
+	})
+
+	t.Run("rejects negative interval", func(t *testing.T) {
+		_, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+output_flush_interval = "-1s"
+
+[[commands]]
+keyword = "date"
+command = "date"
+`))
+		if err == nil || !strings.Contains(err.Error(), "output_flush_interval must be >= 0") {
+			t.Fatalf("loadConfig() error = %v, want negative interval error", err)
+		}
+	})
+
+	t.Run("rejects invalid duration", func(t *testing.T) {
+		var cfg Config
+		err := decodeConfigString(`output_flush_interval = "fast"`, &cfg)
+		if err == nil {
+			t.Fatal("decodeConfig() accepted invalid duration")
+		}
+	})
 }
 
 func TestNormalizeInteraction(t *testing.T) {
