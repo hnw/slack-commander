@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"container/list"
 	"log"
+	"sync"
 )
 
 // RootTextResolver returns Slack-normalized text for a thread root.
@@ -31,14 +33,14 @@ type ConversationCoordinator struct {
 	resolve            RootTextResolver
 	enqueue            func(*CommandInput) bool
 	normalizeFirstLine func(string) string
-	routes             *ThreadRouteCache
-	inputs             ThreadInputRegistry
-	locks              ThreadLocks
+	routes             *conversationRoutes
+	inputs             conversationInputs
+	locks              conversationLocks
 }
 
 // NewConversationCoordinator creates the owner of conversation routing state.
 func NewConversationCoordinator(commands []*CommandConfig, resolve RootTextResolver, enqueue func(*CommandInput) bool, normalizeFirstLine func(string) string, routeCapacity int) *ConversationCoordinator {
-	return &ConversationCoordinator{commands: commands, resolve: resolve, enqueue: enqueue, normalizeFirstLine: normalizeFirstLine, routes: NewThreadRouteCache(routeCapacity)}
+	return &ConversationCoordinator{commands: commands, resolve: resolve, enqueue: enqueue, normalizeFirstLine: normalizeFirstLine, routes: newConversationRoutes(routeCapacity)}
 }
 
 // AcceptRoot queues a root command and records its route after queue acceptance.
@@ -62,14 +64,14 @@ func (c *ConversationCoordinator) acceptRoot(input *CommandInput, normalizedText
 		return false
 	}
 	if root != nil {
-		c.routes.Store(input.ConversationContext.ThreadKey(), root)
+		c.routes.store(newConversationKey(input.ConversationContext), root)
 	}
 	return true
 }
 
 // AcceptThreadReply routes a reply according to its root command interaction.
 func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (ThreadReplyResult, error) {
-	root, found := c.routes.Lookup(input.ConversationContext.ThreadKey())
+	root, found := c.routes.lookup(newConversationKey(input.ConversationContext))
 	if !found {
 		if c.resolve == nil {
 			return ThreadReplyIgnored, nil
@@ -79,7 +81,7 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 			return ThreadReplyIgnored, err
 		}
 		root = MatchSingleCommand(text, c.commands)
-		c.routes.Store(input.ConversationContext.ThreadKey(), root)
+		c.routes.store(newConversationKey(input.ConversationContext), root)
 	}
 	if root == nil {
 		return ThreadReplyIgnored, nil
@@ -88,7 +90,7 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 	case InteractionOneshot:
 		return ThreadReplyIgnored, nil
 	case InteractionStdin:
-		endpoint := c.inputs.Lookup(input.ConversationContext.ThreadKey())
+		endpoint := c.inputs.lookup(newConversationKey(input.ConversationContext))
 		if endpoint == nil {
 			return ThreadReplyIgnored, nil
 		}
@@ -113,7 +115,7 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 
 // RunSerialized runs work without overlapping commands in one conversation.
 func (c *ConversationCoordinator) RunSerialized(ctx ConversationContext, run func()) {
-	unlock := c.locks.Lock(ctx)
+	unlock := c.locks.lock(ctx)
 	defer unlock()
 	run()
 }
@@ -132,11 +134,11 @@ type conversationLifecycle struct {
 }
 
 func (l conversationLifecycle) StdinReady(endpoint *InteractiveStdin) {
-	l.coordinator.inputs.Register(l.context.ThreadKey(), endpoint)
+	l.coordinator.inputs.register(newConversationKey(l.context), endpoint)
 }
 
 func (l conversationLifecycle) StdinClosed(endpoint *InteractiveStdin) {
-	l.coordinator.inputs.Unregister(l.context.ThreadKey(), endpoint)
+	l.coordinator.inputs.unregister(newConversationKey(l.context), endpoint)
 }
 
 func (c *ConversationCoordinator) normalizeCommandFirstLine(text string) string {
@@ -144,4 +146,125 @@ func (c *ConversationCoordinator) normalizeCommandFirstLine(text string) string 
 		return text
 	}
 	return c.normalizeFirstLine(text)
+}
+
+type conversationKey struct {
+	channelID           string
+	rootThreadTimestamp string
+}
+
+func newConversationKey(context ConversationContext) conversationKey {
+	return conversationKey{channelID: context.ChannelID, rootThreadTimestamp: context.RootThreadTimestamp}
+}
+
+type conversationInputs struct {
+	mu     sync.Mutex
+	inputs map[conversationKey]*InteractiveStdin
+}
+
+func (i *conversationInputs) register(key conversationKey, input *InteractiveStdin) {
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if input.closed {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.inputs == nil {
+		i.inputs = make(map[conversationKey]*InteractiveStdin)
+	}
+	i.inputs[key] = input
+}
+
+func (i *conversationInputs) lookup(key conversationKey) *InteractiveStdin {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.inputs[key]
+}
+
+func (i *conversationInputs) unregister(key conversationKey, input *InteractiveStdin) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.inputs[key] == input {
+		delete(i.inputs, key)
+	}
+}
+
+type conversationLocks struct {
+	mu    sync.Mutex
+	locks map[conversationKey]*sync.Mutex
+}
+
+func (l *conversationLocks) lock(context ConversationContext) func() {
+	if context.ChannelID == "" || context.RootThreadTimestamp == "" {
+		return func() {}
+	}
+	key := newConversationKey(context)
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = make(map[conversationKey]*sync.Mutex)
+	}
+	lock := l.locks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		l.locks[key] = lock
+	}
+	l.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+type conversationRoutes struct {
+	mu       sync.Mutex
+	capacity int
+	entries  map[conversationKey]*list.Element
+	lru      *list.List
+}
+
+type conversationRoute struct {
+	key     conversationKey
+	command *CommandConfig
+}
+
+func newConversationRoutes(capacity int) *conversationRoutes {
+	return &conversationRoutes{capacity: capacity}
+}
+
+func (r *conversationRoutes) lookup(key conversationKey) (*CommandConfig, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.entries == nil {
+		return nil, false
+	}
+	element := r.entries[key]
+	if element == nil {
+		return nil, false
+	}
+	r.lru.MoveToFront(element)
+	return element.Value.(conversationRoute).command, true
+}
+
+func (r *conversationRoutes) store(key conversationKey, command *CommandConfig) {
+	if r.capacity <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.entries == nil {
+		r.entries = make(map[conversationKey]*list.Element)
+		r.lru = list.New()
+	}
+	if element := r.entries[key]; element != nil {
+		element.Value = conversationRoute{key: key, command: command}
+		r.lru.MoveToFront(element)
+		return
+	}
+	element := r.lru.PushFront(conversationRoute{key: key, command: command})
+	r.entries[key] = element
+	if r.lru.Len() <= r.capacity {
+		return
+	}
+	oldest := r.lru.Back()
+	delete(r.entries, oldest.Value.(conversationRoute).key)
+	r.lru.Remove(oldest)
 }

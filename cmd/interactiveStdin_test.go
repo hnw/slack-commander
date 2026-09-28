@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"testing"
-	"testing/synctest"
 	"time"
 )
 
@@ -73,55 +72,4 @@ func TestInteractiveStdinReportsWriteError(t *testing.T) {
 	if err := e.TrySend("late"); !errors.Is(err, ErrInteractiveStdinClosed) {
 		t.Fatal(err)
 	}
-}
-
-func TestThreadInputRegistryReplacement(t *testing.T) {
-	var registry ThreadInputRegistry
-	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
-	a := newInteractiveStdinSession("", 0, nil)
-	b := newInteractiveStdinSession("", 0, nil)
-	registry.Register(key, a)
-	if registry.Lookup(key) != a {
-		t.Fatal("registration not found")
-	}
-	registry.Register(key, b)
-	registry.Unregister(key, a)
-	if registry.Lookup(key) != b {
-		t.Fatal("old process removed new registration")
-	}
-	for _, other := range []ThreadKey{
-		{ChannelID: "C", RootThreadTimestamp: "other"},
-		{ChannelID: "other", RootThreadTimestamp: "1"},
-	} {
-		if registry.Lookup(other) != nil {
-			t.Fatalf("cross-thread route for %+v", other)
-		}
-	}
-	registry.Unregister(key, b)
-	if registry.Lookup(key) != nil {
-		t.Fatal("old endpoint restored")
-	}
-}
-
-func TestThreadInputRegistryIdleCleanupKeepsNewRegistration(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var registry ThreadInputRegistry
-		key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
-		r, w := io.Pipe()
-		defer func() { _ = r.Close() }()
-		old := newInteractiveStdinSession("", time.Second, nil)
-		old.onClose = func() { registry.Unregister(key, old) }
-		defer old.Close()
-		old.Start(w)
-		registry.Register(key, old)
-		newer := newInteractiveStdinSession("", 0, nil)
-		defer newer.Close()
-		registry.Register(key, newer)
-		time.Sleep(time.Second)
-		synctest.Wait()
-		registry.Register(key, old)
-		if registry.Lookup(key) != newer {
-			t.Fatal("closed endpoint replaced or removed newer registration")
-		}
-	})
 }

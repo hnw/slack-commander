@@ -27,11 +27,6 @@ type ConversationContext struct {
 	RootThreadTimestamp string
 }
 
-// ThreadKey returns the stable key shared by thread input and route state.
-func (c ConversationContext) ThreadKey() ThreadKey {
-	return ThreadKey(c)
-}
-
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
 type CommandOutput struct {
 	ReplyInfo           interface{}
@@ -102,6 +97,10 @@ func ExecutorWithCoordinator(ctx context.Context, rq chan *CommandInput, wq chan
 			if !ok {
 				return
 			}
+			if coordinator == nil {
+				executeCommandInput(ctx, input, matchers, runnerFactory, wq, nil)
+				continue
+			}
 			coordinator.RunSerialized(input.ConversationContext, func() {
 				executeCommandInput(ctx, input, matchers, runnerFactory, wq, coordinator.Lifecycle(input.ConversationContext))
 			})
@@ -117,52 +116,7 @@ func ExecutorWithRunner(
 	cfgs []*CommandConfig,
 	runnerFactory RunnerFactory,
 ) {
-	ExecutorWithThreadInput(ctx, rq, wq, cfgs, runnerFactory, nil)
-}
-
-// ExecutorWithThreadInput は実行中の thread 入力先を listener と他の worker に公開する。
-func ExecutorWithThreadInput(
-	ctx context.Context,
-	rq chan *CommandInput,
-	wq chan *CommandOutput,
-	cfgs []*CommandConfig,
-	runnerFactory RunnerFactory,
-	registry *ThreadInputRegistry,
-) {
-	ExecutorWithThreadInputAndLocks(ctx, rq, wq, cfgs, runnerFactory, registry, nil)
-}
-
-// ExecutorWithThreadInputAndLocks serializes new commands from the same Slack thread.
-func ExecutorWithThreadInputAndLocks(
-	ctx context.Context,
-	rq chan *CommandInput,
-	wq chan *CommandOutput,
-	cfgs []*CommandConfig,
-	runnerFactory RunnerFactory,
-	registry *ThreadInputRegistry,
-	threadLocks *ThreadLocks,
-) {
-	runnerFactory = normalizeRunnerFactory(runnerFactory)
-	matchers := buildMatchers(cfgs, runnerFactory)
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case input, ok := <-rq:
-			if !ok {
-				return
-			}
-			func() {
-				unlock := threadLocks.Lock(input.ConversationContext)
-				defer unlock()
-				executeCommandInput(ctx, input, matchers, runnerFactory, wq, newLegacyLifecycle(registry, input.ConversationContext))
-			}()
-		}
-	}
+	ExecutorWithCoordinator(ctx, rq, wq, cfgs, runnerFactory, nil)
 }
 
 func executeCommandInput(
@@ -255,30 +209,6 @@ func MatchSingleCommand(text string, cfgs []*CommandConfig) *CommandConfig {
 		}
 	}
 	return nil
-}
-
-type legacyLifecycle struct {
-	registry *ThreadInputRegistry
-	context  ConversationContext
-}
-
-func newLegacyLifecycle(registry *ThreadInputRegistry, context ConversationContext) StdinLifecycle {
-	if registry == nil || context.ChannelID == "" || context.RootThreadTimestamp == "" {
-		return nil
-	}
-	return legacyLifecycle{registry: registry, context: context}
-}
-
-func (l legacyLifecycle) StdinReady(endpoint *InteractiveStdin) {
-	if l.registry != nil {
-		l.registry.Register(l.context.ThreadKey(), endpoint)
-	}
-}
-
-func (l legacyLifecycle) StdinClosed(endpoint *InteractiveStdin) {
-	if l.registry != nil {
-		l.registry.Unregister(l.context.ThreadKey(), endpoint)
-	}
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
@@ -503,13 +433,6 @@ func runWithLifecycleInputWithLineEnding(
 		endpoint.Start(stdin)
 		lifecycle.StdinReady(endpoint)
 	})
-}
-
-func runWithInput(command Cmd, timeout int, idle time.Duration, initial string, conversation ConversationContext, registry *ThreadInputRegistry) int {
-	if registry == nil || conversation.ChannelID == "" || conversation.RootThreadTimestamp == "" {
-		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil)
-	}
-	return runWithLifecycleInput(command, timeout, idle, initial, conversation, newLegacyLifecycle(registry, conversation))
 }
 
 type parsedCommand struct {

@@ -100,7 +100,7 @@ func TestExecutorSerializesCommandsInSameThread(t *testing.T) {
 	runner := &environmentRecordingRunner{started: started, release: release}
 	rq := make(chan *CommandInput, 2)
 	wq := make(chan *CommandOutput, 10)
-	locks := &ThreadLocks{}
+	coordinator := NewConversationCoordinator(dateConfig(), nil, func(*CommandInput) bool { return true }, nil, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var workers sync.WaitGroup
@@ -108,14 +108,13 @@ func TestExecutorSerializesCommandsInSameThread(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			ExecutorWithThreadInputAndLocks(
+			ExecutorWithCoordinator(
 				ctx,
 				rq,
 				wq,
 				dateConfig(),
 				func(*CommandConfig) CommandRunner { return runner },
-				nil,
-				locks,
+				coordinator,
 			)
 		}()
 	}
@@ -145,7 +144,7 @@ func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
 	runner := &environmentRecordingRunner{started: started, release: release}
 	rq := make(chan *CommandInput, 2)
 	wq := make(chan *CommandOutput, 10)
-	locks := &ThreadLocks{}
+	coordinator := NewConversationCoordinator(dateConfig(), nil, func(*CommandInput) bool { return true }, nil, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var workers sync.WaitGroup
@@ -153,14 +152,13 @@ func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			ExecutorWithThreadInputAndLocks(
+			ExecutorWithCoordinator(
 				ctx,
 				rq,
 				wq,
 				dateConfig(),
 				func(*CommandConfig) CommandRunner { return runner },
-				nil,
-				locks,
+				coordinator,
 			)
 		}()
 	}

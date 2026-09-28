@@ -24,14 +24,14 @@ func TestConversationCoordinatorCachesOnlyQueuedMatchedRoots(t *testing.T) {
 	if c.AcceptRoot(input) {
 		t.Fatal("unexpected queue success")
 	}
-	if _, ok := c.routes.Lookup(input.ConversationContext.ThreadKey()); ok {
+	if _, ok := c.routes.lookup(newConversationKey(input.ConversationContext)); ok {
 		t.Fatal("failed root enqueue was cached")
 	}
 	queued = true
 	if !c.AcceptRoot(input) {
 		t.Fatal("root was not queued")
 	}
-	if got, ok := c.routes.Lookup(input.ConversationContext.ThreadKey()); !ok || got != root {
+	if got, ok := c.routes.lookup(newConversationKey(input.ConversationContext)); !ok || got != root {
 		t.Fatalf("route = %v, %v", got, ok)
 	}
 }
@@ -92,6 +92,23 @@ func TestConversationCoordinatorCachesResolverNonMatch(t *testing.T) {
 	}
 	if lookups != 1 {
 		t.Fatalf("resolver calls = %d", lookups)
+	}
+}
+
+func TestConversationCoordinatorEvictsLeastRecentlyUsedRoute(t *testing.T) {
+	root := coordinatorRoot(InteractionOneshot)
+	lookups := 0
+	c := NewConversationCoordinator([]*CommandConfig{root}, func(ConversationContext) (string, error) {
+		lookups++
+		return "run", nil
+	}, func(*CommandInput) bool { return true }, nil, 2)
+	for _, thread := range []string{"A", "B", "A", "C", "B"} {
+		if _, err := c.AcceptThreadReply(&CommandInput{Text: "reply", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: thread}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if lookups != 4 {
+		t.Fatalf("resolver calls = %d, want 4", lookups)
 	}
 }
 
@@ -196,7 +213,7 @@ func TestConversationCoordinatorKeepsNewestEndpoint(t *testing.T) {
 	root := coordinatorRoot(InteractionStdin)
 	c := NewConversationCoordinator([]*CommandConfig{root}, nil, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, nil, 2)
 	ctx := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
-	c.routes.Store(ctx.ThreadKey(), root)
+	c.routes.store(newConversationKey(ctx), root)
 	_, oldWriter := io.Pipe()
 	_, newWriter := io.Pipe()
 	old := NewInteractiveStdin(oldWriter, "", func(error) {})
@@ -205,7 +222,7 @@ func TestConversationCoordinatorKeepsNewestEndpoint(t *testing.T) {
 	lifecycle.StdinReady(old)
 	lifecycle.StdinReady(newEndpoint)
 	lifecycle.StdinClosed(old)
-	if got := c.inputs.Lookup(ctx.ThreadKey()); got != newEndpoint {
+	if got := c.inputs.lookup(newConversationKey(ctx)); got != newEndpoint {
 		t.Fatal("old endpoint close removed new endpoint")
 	}
 	lifecycle.StdinClosed(newEndpoint)
