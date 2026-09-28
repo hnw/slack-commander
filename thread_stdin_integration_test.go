@@ -18,39 +18,43 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	smc := socketmode.New(slack.New("test"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var registry cmd.ThreadInputRegistry
-	var locks cmd.ThreadLocks
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	routeCache := cmd.NewThreadRouteCache(1)
 	root := cmd.NewCommandConfig(&cmd.Definition{
-		Keyword: "agent", Command: `/bin/sh -c 'IFS= read -r first; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`, Timeout: 10,
+		Keyword: "agent", Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`, Timeout: 10,
 	}, nil)
 	root.Interaction = cmd.InteractionStdin
 	configs := []*cmd.CommandConfig{root}
+	coordinator := cmd.NewConversationCoordinator(configs, nil, func(input *cmd.CommandInput) bool {
+		select {
+		case requests <- input:
+			return true
+		default:
+			return false
+		}
+	}, pubsub.NormalizeCommandFirstLine, 1)
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			cmd.ExecutorWithThreadInputAndLocks(
+			cmd.ExecutorWithCoordinator(
 				ctx,
 				requests,
 				outputs,
 				configs,
 				nil,
-				&registry,
-				&locks,
+				coordinator,
 			)
 		}()
 	}
 	listenerDone := make(chan struct{})
 	go func() {
-		pubsub.SlackListener(ctx, smc, requests, pubsub.Config{
+		pubsub.SlackListener(ctx, smc, pubsub.Config{
 			AllowedUserIDs: []string{
 				"U",
 			}, AllowedChannelIDs: []string{"C"},
-		}, &registry, configs, routeCache)
+		}, coordinator)
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })
@@ -61,35 +65,27 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			}},
 		}}
 	}
-	key := cmd.ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
 	send("", "agent\nold")
-	_ = awaitInteractiveStdinEndpoint(t, &registry, key, nil)
+	awaitThreadStdinReady(t, outputs)
 	send("1", "<@BOT> “raw” &amp;")
 	awaitThreadStdinOutput(t, outputs, "old|<@BOT> “raw” &amp;\n")
-	if registry.Lookup(key) != nil {
-		t.Fatal("endpoint survived process exit")
-	}
 }
 
-func awaitInteractiveStdinEndpoint(
-	t *testing.T,
-	registry *cmd.ThreadInputRegistry,
-	key cmd.ThreadKey,
-	previous *cmd.InteractiveStdin,
-) *cmd.InteractiveStdin {
+func awaitThreadStdinReady(t *testing.T, outputs <-chan *cmd.CommandOutput) {
 	t.Helper()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.NewTimer(3 * time.Second)
+	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
 	for {
-		if endpoint := registry.Lookup(key); endpoint != nil && endpoint != previous {
-			return endpoint
-		}
 		select {
-		case <-ticker.C:
+		case output := <-outputs:
+			if output.Text == "ready\n" {
+				return
+			}
+			if output.Finished {
+				t.Fatalf("command exited before stdin was ready: %+v", output)
+			}
 		case <-timeout.C:
-			t.Fatal("endpoint not published")
+			t.Fatal("stdin did not become ready")
 		}
 	}
 }

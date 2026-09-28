@@ -3,9 +3,7 @@ package pubsub
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/hnw/slack-commander/cmd"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
@@ -120,26 +118,28 @@ func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
 	}
 }
 
-func TestEnqueueCommand(t *testing.T) {
-	ch := make(chan *cmd.CommandInput, 1)
-	input := &cmd.CommandInput{Text: "date"}
+func TestShouldIgnoreMessageEventPreservesBotAndReminderHandling(t *testing.T) {
+	previousUserID := userID
+	userID = "U-self"
+	t.Cleanup(func() { userID = previousUserID })
 
-	if ok := enqueueCommand(ch, input); !ok {
-		t.Fatalf("expected enqueue success")
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{AcceptBotMessage: true}) {
+		t.Fatal("accepted bot message was ignored")
 	}
-}
-
-func TestEnqueueCommandQueueFullDoesNotBlock(t *testing.T) {
-	ch := make(chan *cmd.CommandInput, 1)
-	ch <- &cmd.CommandInput{Text: "filled"}
-
-	start := time.Now()
-	ok := enqueueCommand(ch, &cmd.CommandInput{Text: "drop-me"})
-	if ok {
-		t.Fatalf("expected enqueue failure when queue is full")
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{}) {
+		t.Fatal("bot message ignored accept_bot_message=false was accepted")
 	}
-	if d := time.Since(start); d > 100*time.Millisecond {
-		t.Fatalf("enqueue blocked too long: %v", d)
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageChanged}, Config{}) {
+		t.Fatal("message_changed was accepted")
+	}
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageDeleted}, Config{}) {
+		t.Fatal("message_deleted was accepted")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMeMessage}, Config{}) {
+		t.Fatal("non-edit subtype was newly ignored")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{User: "USLACKBOT", Text: "Reminder: todo"}, Config{AcceptReminder: true}) {
+		t.Fatal("accepted reminder was ignored")
 	}
 }
 

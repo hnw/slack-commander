@@ -46,6 +46,25 @@ func TestConversationCoordinatorNormalizesCommandRootBeforeQueueing(t *testing.T
 	}
 }
 
+func TestConversationCoordinatorMatchesNormalizedRootAndPreservesCommandBody(t *testing.T) {
+	root := coordinatorRoot(InteractionCommand)
+	var queued *CommandInput
+	c := NewConversationCoordinator(
+		[]*CommandConfig{root},
+		nil,
+		func(input *CommandInput) bool { queued = input; return true },
+		func(string) string { return "run\n\u201craw\u201d" },
+		2,
+	)
+	input := &CommandInput{Text: "<@BOT> run\n\u201craw\u201d", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
+	if !c.AcceptNormalizedRoot(input, "run\nnormalized") {
+		t.Fatal("root was not queued")
+	}
+	if queued == nil || queued.Text != "run\n\u201craw\u201d" {
+		t.Fatalf("queued=%+v", queued)
+	}
+}
+
 func TestConversationCoordinatorCachesResolverMatch(t *testing.T) {
 	root := coordinatorRoot(InteractionOneshot)
 	lookups := 0

@@ -87,9 +87,20 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	var threadInputs cmd.ThreadInputRegistry
-	threadRoutes := cmd.NewThreadRouteCache(4096)
-	var threadLocks cmd.ThreadLocks
+	coordinator := cmd.NewConversationCoordinator(
+		cmdConfig,
+		pubsub.SlackRootTextResolver(smc),
+		func(input *cmd.CommandInput) bool {
+			select {
+			case commandQueue <- input:
+				return true
+			default:
+				return false
+			}
+		},
+		pubsub.NormalizeCommandFirstLine,
+		4096,
+	)
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
 	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
@@ -109,14 +120,13 @@ func run(args []string) int {
 		executorWG.Add(1)
 		go func() {
 			defer executorWG.Done()
-			cmd.ExecutorWithThreadInputAndLocks(
+			cmd.ExecutorWithCoordinator(
 				ctx,
 				commandQueue,
 				outputQueue,
 				cmdConfig,
 				runnerFactory,
-				&threadInputs,
-				&threadLocks,
+				coordinator,
 			)
 		}()
 	}
@@ -133,11 +143,8 @@ func run(args []string) int {
 		pubsub.SlackListener(
 			ctx,
 			smc,
-			commandQueue,
 			cfg.PubSubConfig,
-			&threadInputs,
-			cmdConfig,
-			threadRoutes,
+			coordinator,
 		)
 	}()
 

@@ -43,9 +43,20 @@ func NewConversationCoordinator(commands []*CommandConfig, resolve RootTextResol
 
 // AcceptRoot queues a root command and records its route after queue acceptance.
 func (c *ConversationCoordinator) AcceptRoot(input *CommandInput) bool {
-	root := MatchSingleCommand(input.Text, c.commands)
+	return c.acceptRoot(input, input.Text)
+}
+
+// AcceptNormalizedRoot queues a root using Slack-normalized text for matching.
+func (c *ConversationCoordinator) AcceptNormalizedRoot(input *CommandInput, normalizedText string) bool {
+	return c.acceptRoot(input, normalizedText)
+}
+
+func (c *ConversationCoordinator) acceptRoot(input *CommandInput, normalizedText string) bool {
+	root := MatchSingleCommand(normalizedText, c.commands)
 	if root != nil && root.Interaction == InteractionCommand {
 		input.Text = c.normalizeCommandFirstLine(input.Text)
+	} else {
+		input.Text = normalizedText
 	}
 	if c.enqueue == nil || !c.enqueue(input) {
 		return false
