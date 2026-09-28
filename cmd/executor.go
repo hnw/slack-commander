@@ -16,8 +16,7 @@ import (
 type CommandInput struct {
 	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
 	Text                string      // 起動コマンド平文
-	CommandConfigs      []*CommandConfig
-	Interaction         string
+	ExecutionConfigs    []*ExecutionConfig
 	ConversationContext ConversationContext
 }
 
@@ -40,12 +39,15 @@ type CommandOutput struct {
 	ExitCode            int
 }
 
-// Definition describes a command definition in the configuration.
-type Definition struct {
+// ExecutionConfig is the complete resolved configuration needed to execute a command.
+type ExecutionConfig struct {
 	StdinIdleTimeout    int  `toml:"stdin_idle_timeout"`
 	TTY                 bool `toml:"tty"`
 	Timeout             int
-	OutputFlushInterval time.Duration
+	OutputFlushInterval time.Duration `toml:"-"`
+	AllowInChain        bool          `toml:"-"`
+	InteractiveStdin    bool          `toml:"-"`
+	InputBodyMode       InputBodyMode `toml:"-"`
 	Keyword             string
 	Command             string
 	Runner              string
@@ -53,39 +55,24 @@ type Definition struct {
 	URL                 string
 	Headers             map[string]string
 	Body                string
-}
-
-// CommandConfig holds a Definition with reply configuration.
-type CommandConfig struct {
-	*Definition
-	ReplyConfig       interface{} //*pubsub.ReplyConfig
-	SystemReplyConfig interface{} //*pubsub.ReplyConfig
-	Replies           []*CommandConfig
-	Interaction       string
-}
-
-// NewCommandConfig builds a CommandConfig from a definition and reply config.
-func NewCommandConfig(def *Definition, replyConfig interface{}) *CommandConfig {
-	return &CommandConfig{
-		Definition:  def,
-		ReplyConfig: replyConfig,
-		Interaction: InteractionOneshot,
-	}
+	// ReplyConfig and SystemReplyConfig are opaque output metadata.
+	ReplyConfig       interface{} `toml:"-"`
+	SystemReplyConfig interface{} `toml:"-"`
 }
 
 // Executor runs commands using the default runner factory.
-func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig) {
-	ExecutorWithRunner(context.Background(), rq, wq, cfgs, nil)
+func Executor(rq chan *CommandInput, wq chan *CommandOutput, configs []*ExecutionConfig) {
+	ExecutorWithRunner(context.Background(), rq, wq, configs, nil)
 }
 
-// RunnerFactory returns a runner for the given command config.
-type RunnerFactory func(cfg *CommandConfig) CommandRunner
+// RunnerFactory returns a runner for the given execution definition.
+type RunnerFactory func(config *ExecutionConfig) CommandRunner
 
 // ExecutorWithCoordinator keeps the existing queue/worker loop while delegating
 // conversation serialization and stdin lifecycle ownership to the coordinator.
-func ExecutorWithCoordinator(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory, coordinator *ConversationCoordinator) {
+func ExecutorWithCoordinator(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, configs []*ExecutionConfig, runnerFactory RunnerFactory, coordinator *ConversationCoordinator) {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
-	matchers := buildMatchers(cfgs, runnerFactory)
+	matchers := buildMatchers(configs, runnerFactory)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -113,10 +100,10 @@ func ExecutorWithRunner(
 	ctx context.Context,
 	rq chan *CommandInput,
 	wq chan *CommandOutput,
-	cfgs []*CommandConfig,
+	configs []*ExecutionConfig,
 	runnerFactory RunnerFactory,
 ) {
-	ExecutorWithCoordinator(ctx, rq, wq, cfgs, runnerFactory, nil)
+	ExecutorWithCoordinator(ctx, rq, wq, configs, runnerFactory, nil)
 }
 
 func executeCommandInput(
@@ -128,25 +115,14 @@ func executeCommandInput(
 	lifecycle StdinLifecycle,
 ) {
 	inputMatchers := matchers
-	if input.CommandConfigs != nil {
-		inputMatchers = buildMatchers(input.CommandConfigs, runnerFactory)
+	if input.ExecutionConfigs != nil {
+		inputMatchers = buildMatchers(input.ExecutionConfigs, runnerFactory)
 	}
 
 	cmdMsg, stdinText := splitCommandInput(input.Text)
 	cmds, parseErr := parseCommands(cmdMsg)
 
-	interaction := input.Interaction
-	if interaction == "" && len(cmds) > 0 {
-		if matcher, _ := findMatchedMatcher(cmds[0], inputMatchers); matcher != nil {
-			interaction = matcher.cfg.Interaction
-		}
-	}
-
-	if len(cmds) > 1 && !chainUsesOnlyOneshot(cmds, inputMatchers) {
-		return
-	}
-
-	if interaction != InteractionOneshot && len(cmds) != 1 {
+	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, inputMatchers) {
 		return
 	}
 
@@ -154,14 +130,18 @@ func executeCommandInput(
 	initialStdin := stdinText
 	inputLifecycle := lifecycle
 
-	if interaction == InteractionCommand {
+	if len(cmds) == 0 {
+		return
+	}
+	matcher, _ := findMatchedMatcher(cmds[0], inputMatchers)
+	if matcher != nil && matcher.config.InputBodyMode == InputBodyArgument {
 		if stdinText != "" {
 			rawBody = "\n" + stdinText
 		}
 		initialStdin = ""
 	}
 
-	if interaction != InteractionStdin {
+	if matcher == nil || !matcher.config.InteractiveStdin {
 		inputLifecycle = nil
 	}
 
@@ -178,56 +158,36 @@ func executeCommandInput(
 	)
 }
 
-func chainUsesOnlyOneshot(cmds []*parsedCommand, matchers []*Matcher) bool {
+func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, matchers []*Matcher) bool {
 	for _, command := range cmds {
 		matcher, _ := findMatchedMatcher(command, matchers)
 		if matcher == nil {
 			continue
 		}
-		if matcher.cfg.Interaction != InteractionOneshot {
+		if !matcher.config.AllowInChain {
 			return false
 		}
 	}
 	return true
 }
 
-// MatchSingleCommand returns the configured command matching one complete input command.
-// Chained or malformed inputs have no owner for thread reply routing.
-func MatchSingleCommand(text string, cfgs []*CommandConfig) *CommandConfig {
-	cmdMsg, _ := splitCommandInput(text)
-	cmds, err := parseCommands(cmdMsg)
-	if err != nil || len(cmds) != 1 {
-		return nil
-	}
-	for _, cfg := range cfgs {
-		matcher := newMatcher(cfg)
-		if matcher == nil {
-			continue
-		}
-		if args := matcher.build(cmds[0].args); len(args) > 0 {
-			return cfg
-		}
-	}
-	return nil
-}
-
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
 	if runnerFactory != nil {
 		return runnerFactory
 	}
-	return func(*CommandConfig) CommandRunner {
+	return func(*ExecutionConfig) CommandRunner {
 		return NewExecRunner()
 	}
 }
 
-func buildMatchers(cfgs []*CommandConfig, runnerFactory RunnerFactory) []*Matcher {
-	matchers := make([]*Matcher, 0, len(cfgs))
-	for _, cfg := range cfgs {
-		matcher := newMatcher(cfg)
+func buildMatchers(configs []*ExecutionConfig, runnerFactory RunnerFactory) []*Matcher {
+	matchers := make([]*Matcher, 0, len(configs))
+	for _, config := range configs {
+		matcher := newMatcher(config)
 		if matcher == nil {
 			continue
 		}
-		runner := runnerFactory(cfg)
+		runner := runnerFactory(config)
 		if runner == nil {
 			runner = NewExecRunner()
 		}
@@ -325,7 +285,7 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 }
 
 func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, m *Matcher) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, m.cfg.SystemReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
+	syserr := newErrWriter(wq, input.ReplyInfo, m.config.SystemReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2
@@ -349,10 +309,10 @@ func runMatchedCommand(
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if m.cfg.Timeout > 0 {
+	if m.config.Timeout > 0 {
 		cmdCtx, cancel = context.WithTimeout(
 			ctx,
-			time.Duration(m.cfg.Timeout)*time.Second,
+			time.Duration(m.config.Timeout)*time.Second,
 		)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
@@ -361,9 +321,9 @@ func runMatchedCommand(
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	setSlackContextEnvironment(execCmd, input.ConversationContext)
-	stdout := newStdWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
-	stderr := newErrWriter(wq, input.ReplyInfo, m.cfg.ReplyConfig, input.ConversationContext, m.cfg.OutputFlushInterval)
-	if m.cfg.TTY {
+	stdout := newStdWriter(wq, input.ReplyInfo, m.config.ReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
+	stderr := newErrWriter(wq, input.ReplyInfo, m.config.ReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
+	if m.config.TTY {
 		terminal := newTTYOutputNormalizer(stdout)
 		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {
 			cmd.SetTTY()
@@ -372,7 +332,7 @@ func runMatchedCommand(
 		execCmd.SetStderr(terminal)
 		ret := runWithLifecycleInputWithLineEnding(
 			execCmd,
-			m.cfg.Timeout,
+			m.config.Timeout,
 			0,
 			stdinText,
 			input.ConversationContext,
@@ -384,7 +344,7 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second, stdinText, input.ConversationContext, lifecycle)
+	ret := runWithLifecycleInput(execCmd, m.config.Timeout, time.Duration(m.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationContext, lifecycle)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 

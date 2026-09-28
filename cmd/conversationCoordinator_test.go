@@ -10,9 +10,18 @@ import (
 )
 
 func coordinatorRoot(interaction string) *CommandConfig {
-	root := NewCommandConfig(&Definition{Keyword: "run", Command: "run"}, nil)
-	root.Interaction = interaction
-	root.Replies = []*CommandConfig{NewCommandConfig(&Definition{Keyword: "stop", Command: "stop"}, nil)}
+	root := NewCommandConfig(&ExecutionConfig{Keyword: "run", Command: "run"})
+	switch interaction {
+	case InteractionStdin:
+		root.AllowInChain = false
+		root.InteractiveStdin = true
+		root.ThreadReplyMode = ThreadReplyStdin
+	case InteractionCommand:
+		root.AllowInChain = false
+		root.InputBodyMode = InputBodyArgument
+		root.ThreadReplyMode = ThreadReplyCommand
+	}
+	root.Replies = []*CommandConfig{NewCommandConfig(&ExecutionConfig{Keyword: "stop", Command: "stop"})}
 	return root
 }
 
@@ -140,7 +149,7 @@ func TestConversationCoordinatorRoutesCommandReplyAndReportsQueueFull(t *testing
 	if queued == nil {
 		t.Fatal("reply was not queued")
 	}
-	if queued.Interaction != InteractionCommand || len(queued.CommandConfigs) != 1 || queued.CommandConfigs[0] != root.Replies[0] || queued.Text != "normalized\nbody" {
+	if len(queued.ExecutionConfigs) != 1 || queued.ExecutionConfigs[0] != root.Replies[0].ExecutionConfig || queued.Text != "normalized\nbody" {
 		t.Fatalf("queued=%+v", queued)
 	}
 	c.enqueue = func(*CommandInput) bool { return false }

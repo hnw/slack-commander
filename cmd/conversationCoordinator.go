@@ -38,6 +38,35 @@ type ConversationCoordinator struct {
 	locks              conversationLocks
 }
 
+// CommandConfig holds application-level conversation directives.
+type CommandConfig struct {
+	*ExecutionConfig
+	Replies         []*CommandConfig
+	ThreadReplyMode ThreadReplyMode
+}
+
+// NewCommandConfig builds a runtime command config from resolved execution settings.
+func NewCommandConfig(config *ExecutionConfig) *CommandConfig {
+	return &CommandConfig{ExecutionConfig: config}
+}
+
+// MatchSingleCommand returns the configured command matching one complete input command.
+// Chained or malformed inputs have no owner for thread reply routing.
+func MatchSingleCommand(text string, configs []*CommandConfig) *CommandConfig {
+	cmdMsg, _ := splitCommandInput(text)
+	cmds, err := parseCommands(cmdMsg)
+	if err != nil || len(cmds) != 1 {
+		return nil
+	}
+	for _, config := range configs {
+		matcher := newMatcher(config.ExecutionConfig)
+		if matcher != nil && len(matcher.build(cmds[0].args)) > 0 {
+			return config
+		}
+	}
+	return nil
+}
+
 // NewConversationCoordinator creates the owner of conversation routing state.
 func NewConversationCoordinator(commands []*CommandConfig, resolve RootTextResolver, enqueue func(*CommandInput) bool, normalizeFirstLine func(string) string, routeCapacity int) *ConversationCoordinator {
 	return &ConversationCoordinator{commands: commands, resolve: resolve, enqueue: enqueue, normalizeFirstLine: normalizeFirstLine, routes: newConversationRoutes(routeCapacity)}
@@ -55,7 +84,7 @@ func (c *ConversationCoordinator) AcceptNormalizedRoot(input *CommandInput, norm
 
 func (c *ConversationCoordinator) acceptRoot(input *CommandInput, normalizedText string) bool {
 	root := MatchSingleCommand(normalizedText, c.commands)
-	if root != nil && root.Interaction == InteractionCommand {
+	if root != nil && root.ThreadReplyMode == ThreadReplyCommand {
 		input.Text = c.normalizeCommandFirstLine(input.Text)
 	} else {
 		input.Text = normalizedText
@@ -69,7 +98,7 @@ func (c *ConversationCoordinator) acceptRoot(input *CommandInput, normalizedText
 	return true
 }
 
-// AcceptThreadReply routes a reply according to its root command interaction.
+// AcceptThreadReply routes a reply according to its root command policy.
 func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (ThreadReplyResult, error) {
 	root, found := c.routes.lookup(newConversationKey(input.ConversationContext))
 	if !found {
@@ -86,10 +115,10 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 	if root == nil {
 		return ThreadReplyIgnored, nil
 	}
-	switch root.Interaction {
-	case InteractionOneshot:
+	switch root.ThreadReplyMode {
+	case ThreadReplyIgnore:
 		return ThreadReplyIgnored, nil
-	case InteractionStdin:
+	case ThreadReplyStdin:
 		endpoint := c.inputs.lookup(newConversationKey(input.ConversationContext))
 		if endpoint == nil {
 			return ThreadReplyIgnored, nil
@@ -98,19 +127,27 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 			log.Printf("[WARN] dropping interactive stdin channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
 		}
 		return ThreadReplyRouted, nil
-	case InteractionCommand:
+	case ThreadReplyCommand:
 		if len(root.Replies) == 0 || c.enqueue == nil {
 			return ThreadReplyIgnored, nil
 		}
 		input.Text = c.normalizeCommandFirstLine(input.Text)
-		input.CommandConfigs = root.Replies
-		input.Interaction = InteractionCommand
+		input.ExecutionConfigs = ExecutionConfigs(root.Replies)
 		if !c.enqueue(input) {
 			return ThreadReplyQueueFull, nil
 		}
 		return ThreadReplyRouted, nil
 	}
 	return ThreadReplyIgnored, nil
+}
+
+// ExecutionConfigs returns the resolved execution settings for runtime commands.
+func ExecutionConfigs(commands []*CommandConfig) []*ExecutionConfig {
+	configs := make([]*ExecutionConfig, len(commands))
+	for i, command := range commands {
+		configs[i] = command.ExecutionConfig
+	}
+	return configs
 }
 
 // RunSerialized runs work without overlapping commands in one conversation.

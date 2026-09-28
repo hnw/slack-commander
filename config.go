@@ -36,17 +36,18 @@ type Config struct {
 }
 
 type CommandConfig struct {
-	cmd.Definition
+	cmd.ExecutionConfig
 	pubsub.ReplyConfig
-	Interaction         string    `toml:"interaction"`
-	OutputFlushInterval *Duration `toml:"output_flush_interval"`
+	Interaction         string              `toml:"interaction"`
+	ThreadReplyMode     cmd.ThreadReplyMode `toml:"-"`
+	OutputFlushInterval *Duration           `toml:"output_flush_interval"`
 	Replies             []*ReplyCommandConfig
 }
 
 // ReplyCommandConfig is a thread-reply command definition.
 // It deliberately has no Replies field: nested reply routing is unsupported.
 type ReplyCommandConfig struct {
-	cmd.Definition
+	cmd.ExecutionConfig
 	pubsub.ReplyConfig
 	Runner              string    `toml:"runner"`
 	Timeout             *int      `toml:"timeout"`
@@ -106,33 +107,36 @@ func formatTOMLError(err error) error {
 func resolveReplyCommand(
 	parent *CommandConfig,
 	reply *ReplyCommandConfig,
-) (*cmd.Definition, *pubsub.ReplyConfig) {
-	definition := reply.Definition
+) (*cmd.ExecutionConfig, *pubsub.ReplyConfig) {
+	executionConfig := reply.ExecutionConfig
 	if reply.Runner == "" {
-		definition.Runner = parent.Runner
+		executionConfig.Runner = parent.Runner
 	} else {
-		definition.Runner = reply.Runner
+		executionConfig.Runner = reply.Runner
 	}
 	if reply.Timeout == nil {
-		definition.Timeout = parent.Timeout
+		executionConfig.Timeout = parent.Timeout
 	} else {
-		definition.Timeout = *reply.Timeout
+		executionConfig.Timeout = *reply.Timeout
 	}
 	if reply.StdinIdleTimeout == nil {
-		definition.StdinIdleTimeout = parent.StdinIdleTimeout
+		executionConfig.StdinIdleTimeout = parent.StdinIdleTimeout
 	} else {
-		definition.StdinIdleTimeout = *reply.StdinIdleTimeout
+		executionConfig.StdinIdleTimeout = *reply.StdinIdleTimeout
 	}
 	if reply.OutputFlushInterval == nil {
-		definition.OutputFlushInterval = parent.Definition.OutputFlushInterval
+		executionConfig.OutputFlushInterval = parent.ExecutionConfig.OutputFlushInterval
 	} else {
-		definition.OutputFlushInterval = time.Duration(*reply.OutputFlushInterval)
+		executionConfig.OutputFlushInterval = time.Duration(*reply.OutputFlushInterval)
 	}
 	if reply.TTY == nil {
-		definition.TTY = parent.TTY
+		executionConfig.TTY = parent.TTY
 	} else {
-		definition.TTY = *reply.TTY
+		executionConfig.TTY = *reply.TTY
 	}
+	executionConfig.AllowInChain = parent.AllowInChain
+	executionConfig.InteractiveStdin = parent.InteractiveStdin
+	executionConfig.InputBodyMode = parent.InputBodyMode
 
 	replyConfig := &pubsub.ReplyConfig{
 		Username:       parent.Username,
@@ -156,21 +160,19 @@ func resolveReplyCommand(
 	if reply.OutputFormat != "" {
 		replyConfig.OutputFormat = reply.OutputFormat
 	}
-	return &definition, replyConfig
+	executionConfig.ReplyConfig = replyConfig
+	executionConfig.SystemReplyConfig = pubsub.NewSystemReplyConfig(replyConfig.ReplyBroadcast)
+	return &executionConfig, replyConfig
 }
 
 func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
 	converted := make([]*cmd.CommandConfig, len(configs))
 	for i, config := range configs {
-		converted[i] = cmd.NewCommandConfig(&config.Definition, &config.ReplyConfig)
-		converted[i].SystemReplyConfig = pubsub.NewSystemReplyConfig(config.ReplyBroadcast)
-		converted[i].Interaction = config.Interaction
+		converted[i] = cmd.NewCommandConfig(&config.ExecutionConfig)
+		converted[i].ThreadReplyMode = config.ThreadReplyMode
 		converted[i].Replies = make([]*cmd.CommandConfig, len(config.Replies))
 		for j, reply := range config.Replies {
-			converted[i].Replies[j] = cmd.NewCommandConfig(&reply.Definition, &reply.ReplyConfig)
-			converted[i].Replies[j].SystemReplyConfig = pubsub.NewSystemReplyConfig(
-				reply.ReplyConfig.ReplyBroadcast,
-			)
+			converted[i].Replies[j] = cmd.NewCommandConfig(&reply.ExecutionConfig)
 		}
 	}
 	return converted
@@ -188,7 +190,7 @@ func validateCommandConfig(c *CommandConfig, inheritedOutputFlushInterval time.D
 		c.OutputFlushInterval,
 		inheritedOutputFlushInterval,
 	)
-	c.Definition.OutputFlushInterval = outputFlushInterval
+	c.ExecutionConfig.OutputFlushInterval = outputFlushInterval
 	if validationErr := validateReplyConfig(&c.ReplyConfig); validationErr != nil {
 		return fmt.Errorf("keyword '%s': %w", c.Keyword, validationErr)
 	}
@@ -197,7 +199,10 @@ func validateCommandConfig(c *CommandConfig, inheritedOutputFlushInterval time.D
 		return fmt.Errorf("keyword '%s': %w", c.Keyword, interactionErr)
 	}
 	c.Interaction = interaction
-	if validationErr := validateCommandDefinition(&c.Definition); validationErr != nil {
+	resolveInteraction(c)
+	c.ExecutionConfig.ReplyConfig = &c.ReplyConfig
+	c.SystemReplyConfig = pubsub.NewSystemReplyConfig(c.ReplyBroadcast)
+	if validationErr := validateCommandExecutionConfig(&c.ExecutionConfig); validationErr != nil {
 		return validationErr
 	}
 	if strings.EqualFold(strings.TrimSpace(c.Runner), cmd.RunnerHTTP) && c.Interaction == cmd.InteractionStdin {
@@ -208,13 +213,33 @@ func validateCommandConfig(c *CommandConfig, inheritedOutputFlushInterval time.D
 		if validationErr := validateReplyConfig(replyConfig); validationErr != nil {
 			return fmt.Errorf("keyword '%s': %w", reply.Keyword, validationErr)
 		}
-		if validationErr := validateCommandDefinition(definition); validationErr != nil {
+		if validationErr := validateCommandExecutionConfig(definition); validationErr != nil {
 			return validationErr
 		}
-		reply.Definition = *definition
+		reply.ExecutionConfig = *definition
 		reply.ReplyConfig = *replyConfig
 	}
 	return nil
+}
+
+func resolveInteraction(c *CommandConfig) {
+	switch c.Interaction {
+	case cmd.InteractionStdin:
+		c.AllowInChain = false
+		c.InteractiveStdin = true
+		c.InputBodyMode = cmd.InputBodyStdin
+		c.ThreadReplyMode = cmd.ThreadReplyStdin
+	case cmd.InteractionCommand:
+		c.AllowInChain = false
+		c.InteractiveStdin = false
+		c.InputBodyMode = cmd.InputBodyArgument
+		c.ThreadReplyMode = cmd.ThreadReplyCommand
+	default:
+		c.AllowInChain = true
+		c.InteractiveStdin = false
+		c.InputBodyMode = cmd.InputBodyStdin
+		c.ThreadReplyMode = cmd.ThreadReplyIgnore
+	}
 }
 
 func validateConfig(cfg *Config) error {
@@ -270,7 +295,7 @@ func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 	}
 }
 
-func validateCommandDefinition(c *cmd.Definition) error {
+func validateCommandExecutionConfig(c *cmd.ExecutionConfig) error {
 	if strings.TrimSpace(c.Keyword) == "" {
 		return errors.New("keyword is required")
 	}
@@ -325,7 +350,7 @@ func validateKeywordWildcards(keyword string) error {
 	return nil
 }
 
-func validateTTY(c *cmd.Definition) error {
+func validateTTY(c *cmd.ExecutionConfig) error {
 	if c.TTY && c.StdinIdleTimeout > 0 {
 		return fmt.Errorf(
 			"tty cannot be used with stdin_idle_timeout for keyword '%s'",
@@ -335,7 +360,7 @@ func validateTTY(c *cmd.Definition) error {
 	return nil
 }
 
-func normalizeRunner(c *cmd.Definition) (string, error) {
+func normalizeRunner(c *cmd.ExecutionConfig) (string, error) {
 	runner := strings.ToLower(strings.TrimSpace(c.Runner))
 	if runner == "" {
 		runner = cmd.RunnerExec

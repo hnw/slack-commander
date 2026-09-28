@@ -84,7 +84,7 @@ func TestValidateConfigRequiresSlackTokens(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Command: "date"}})
+			cfg := validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"}})
 			tc.clear(cfg)
 
 			err := validateConfig(cfg)
@@ -104,14 +104,14 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		{
 			name: "top-level keyword is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Command: "date"}})
+				return validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Command: "date"}})
 			},
 			want: "keyword is required",
 		},
 		{
 			name: "top-level keyword is blank",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: " ", Command: "date"}})
+				return validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: " ", Command: "date"}})
 			},
 			want: "keyword is required",
 		},
@@ -119,8 +119,8 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 			name: "reply keyword is missing",
 			config: func() *Config {
 				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
-					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Command: "retry"}}},
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"},
+					Replies:         []*ReplyCommandConfig{{ExecutionConfig: cmd.ExecutionConfig{Command: "retry"}}},
 				})
 			},
 			want: "keyword is required",
@@ -128,14 +128,14 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		{
 			name: "exec command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerExec}})
+				return validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Runner: cmd.RunnerExec}})
 			},
 			want: "command is required",
 		},
 		{
 			name: "compose command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerCompose}})
+				return validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Runner: cmd.RunnerCompose}})
 			},
 			want: "command is required",
 		},
@@ -143,8 +143,8 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 			name: "reply exec command is missing",
 			config: func() *Config {
 				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
-					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Keyword: "retry"}}},
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"},
+					Replies:         []*ReplyCommandConfig{{ExecutionConfig: cmd.ExecutionConfig{Keyword: "retry"}}},
 				})
 			},
 			want: "command is required",
@@ -153,10 +153,10 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 			name: "reply compose command is missing",
 			config: func() *Config {
 				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"},
 					Replies: []*ReplyCommandConfig{{
-						Definition: cmd.Definition{Keyword: "retry"},
-						Runner:     cmd.RunnerCompose,
+						ExecutionConfig: cmd.ExecutionConfig{Keyword: "retry"},
+						Runner:          cmd.RunnerCompose,
 					}},
 				})
 			},
@@ -182,7 +182,7 @@ func TestValidateConfigTimeout(t *testing.T) {
 		{name: "zero is allowed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{
+			cfg := validTestConfig(&CommandConfig{ExecutionConfig: cmd.ExecutionConfig{
 				Keyword: "date", Command: "date", Timeout: tc.timeout,
 			}})
 
@@ -235,7 +235,7 @@ url = "https://example.com/retry"
 		t.Fatalf("http method = %q, want POST", cfg.Commands[1].Method)
 	}
 	reply := cfg.Commands[1].Replies[0]
-	if reply.Definition.Runner != cmd.RunnerHTTP || reply.ReplyConfig.OutputFormat != pubsub.OutputFormatMarkdown {
+	if reply.ExecutionConfig.Runner != cmd.RunnerHTTP || reply.ReplyConfig.OutputFormat != pubsub.OutputFormatMarkdown {
 		t.Fatalf("resolved reply = %+v", reply)
 	}
 }
@@ -271,7 +271,7 @@ command = "date"
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != time.Second {
+		if got := cfg.Commands[0].ExecutionConfig.OutputFlushInterval; got != time.Second {
 			t.Fatalf("output flush interval = %s, want %s", got, time.Second)
 		}
 	})
@@ -304,16 +304,16 @@ output_flush_interval = "0s"
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != 500*time.Millisecond {
+		if got := cfg.Commands[0].ExecutionConfig.OutputFlushInterval; got != 500*time.Millisecond {
 			t.Fatalf("top-level output flush interval = %s, want %s", got, 500*time.Millisecond)
 		}
-		if got := cfg.Commands[1].Definition.OutputFlushInterval; got != 2*time.Second {
+		if got := cfg.Commands[1].ExecutionConfig.OutputFlushInterval; got != 2*time.Second {
 			t.Fatalf("command output flush interval = %s, want %s", got, 2*time.Second)
 		}
-		if got := cfg.Commands[1].Replies[0].Definition.OutputFlushInterval; got != 2*time.Second {
+		if got := cfg.Commands[1].Replies[0].ExecutionConfig.OutputFlushInterval; got != 2*time.Second {
 			t.Fatalf("inherited reply output flush interval = %s, want %s", got, 2*time.Second)
 		}
-		if got := cfg.Commands[1].Replies[1].Definition.OutputFlushInterval; got != 0 {
+		if got := cfg.Commands[1].Replies[1].ExecutionConfig.OutputFlushInterval; got != 0 {
 			t.Fatalf("overridden reply output flush interval = %s, want 0", got)
 		}
 	})
@@ -374,6 +374,59 @@ func TestNormalizeInteraction(t *testing.T) {
 	}
 }
 
+func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
+	tests := []struct {
+		interaction string
+		allow       bool
+		liveStdin   bool
+		bodyMode    cmd.InputBodyMode
+		replyMode   cmd.ThreadReplyMode
+	}{
+		{cmd.InteractionOneshot, true, false, cmd.InputBodyStdin, cmd.ThreadReplyIgnore},
+		{cmd.InteractionStdin, false, true, cmd.InputBodyStdin, cmd.ThreadReplyStdin},
+		{cmd.InteractionCommand, false, false, cmd.InputBodyArgument, cmd.ThreadReplyCommand},
+	}
+	for _, tt := range tests {
+		t.Run(tt.interaction, func(t *testing.T) {
+			config := &CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: "run", Command: "run"}, Interaction: tt.interaction}
+			if err := validateCommandConfig(config, cmd.DefaultOutputFlushInterval); err != nil {
+				t.Fatal(err)
+			}
+			if config.AllowInChain != tt.allow || config.InteractiveStdin != tt.liveStdin || config.InputBodyMode != tt.bodyMode || config.ThreadReplyMode != tt.replyMode {
+				t.Fatalf("resolved config = %+v", config)
+			}
+		})
+	}
+}
+
+func TestCommandConfigEmbedsExecutionConfig(t *testing.T) {
+	config := CommandConfig{ExecutionConfig: cmd.ExecutionConfig{Keyword: "run", Command: "run"}}
+	if config.Keyword != "run" || config.Command != "run" {
+		t.Fatalf("execution config = %+v", config.ExecutionConfig)
+	}
+}
+
+func TestValidateCommandConfigResolvesCommandReplySemantics(t *testing.T) {
+	config := &CommandConfig{
+		ExecutionConfig: cmd.ExecutionConfig{Keyword: "run", Command: "run"},
+		Interaction:     cmd.InteractionCommand,
+		Replies: []*ReplyCommandConfig{{
+			ExecutionConfig: cmd.ExecutionConfig{Keyword: "reply *", Command: "reply *"},
+		}},
+	}
+	if err := validateCommandConfig(config, cmd.DefaultOutputFlushInterval); err != nil {
+		t.Fatal(err)
+	}
+	reply := config.Replies[0].ExecutionConfig
+	if reply.AllowInChain || reply.InteractiveStdin || reply.InputBodyMode != cmd.InputBodyArgument {
+		t.Fatalf("reply definition = %+v", reply)
+	}
+	converted := commandConfigs([]*CommandConfig{config})[0].Replies[0].ExecutionConfig
+	if converted.AllowInChain || converted.InteractiveStdin || converted.InputBodyMode != cmd.InputBodyArgument {
+		t.Fatalf("converted reply definition = %+v", converted)
+	}
+}
+
 func TestValidateConfigHTTPInteraction(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -392,8 +445,8 @@ func TestValidateConfigHTTPInteraction(t *testing.T) {
 				},
 				NumWorkers: 1,
 				Commands: []*CommandConfig{{
-					Definition:  cmd.Definition{Keyword: "notify", Runner: cmd.RunnerHTTP, URL: "https://example.com"},
-					Interaction: tc.interaction,
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "notify", Runner: cmd.RunnerHTTP, URL: "https://example.com"},
+					Interaction:     tc.interaction,
 				}},
 			}
 
@@ -428,7 +481,7 @@ func TestValidateConfigKeywordWildcardCount(t *testing.T) {
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands: []*CommandConfig{{
-					Definition: cmd.Definition{Keyword: tc.keyword, Command: "echo"},
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: tc.keyword, Command: "echo"},
 				}},
 			}
 			err := validateConfig(cfg)
@@ -447,9 +500,9 @@ func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
 		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
 		Commands: []*CommandConfig{{
-			Definition: cmd.Definition{Keyword: "todo", Command: "todo"},
+			ExecutionConfig: cmd.ExecutionConfig{Keyword: "todo", Command: "todo"},
 			Replies: []*ReplyCommandConfig{{
-				Definition: cmd.Definition{Keyword: "update * again *", Command: "todo"},
+				ExecutionConfig: cmd.ExecutionConfig{Keyword: "update * again *", Command: "todo"},
 			}},
 		}},
 	}
@@ -477,7 +530,7 @@ func TestValidateConfigTTY(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			definition := cmd.Definition{
+			definition := cmd.ExecutionConfig{
 				Keyword: "agent", Command: "cat", Runner: tt.runner, TTY: true, StdinIdleTimeout: tt.idle,
 			}
 			if tt.runner == "http" {
@@ -486,7 +539,7 @@ func TestValidateConfigTTY(t *testing.T) {
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands:     []*CommandConfig{{Definition: definition}},
+				Commands:     []*CommandConfig{{ExecutionConfig: definition}},
 			}
 			err := validateConfig(cfg)
 			if tt.wantErr == "" {
@@ -522,7 +575,7 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands: []*CommandConfig{{Definition: cmd.Definition{
+				Commands: []*CommandConfig{{ExecutionConfig: cmd.ExecutionConfig{
 					Keyword:          "agent",
 					Command:          "cat",
 					StdinIdleTimeout: tc.timeout,
@@ -551,7 +604,7 @@ func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
 		},
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+			{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"}},
 		},
 	}
 
@@ -613,15 +666,15 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
 				Commands: []*CommandConfig{{
-					Definition:  cmd.Definition{Keyword: "date", Command: "date"},
-					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"},
+					ReplyConfig:     pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
 				}},
 			}
 			if tc.reply {
 				cfg.Commands[0].OutputFormat = ""
 				cfg.Commands[0].Replies = []*ReplyCommandConfig{{
-					Definition:   cmd.Definition{Keyword: "reply", Command: "date"},
-					OutputFormat: tc.outputFormat,
+					ExecutionConfig: cmd.ExecutionConfig{Keyword: "reply", Command: "date"},
+					OutputFormat:    tc.outputFormat,
 				}}
 			}
 
@@ -680,10 +733,12 @@ output_format = "plain"
 
 	t.Run("inherits parent settings", func(t *testing.T) {
 		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[0])
-		wantDefinition := &cmd.Definition{
+		wantDefinition := &cmd.ExecutionConfig{
 			Keyword: "cancel", Command: "todo-wrapper --cancel", Runner: "compose",
 			Timeout: 3600, StdinIdleTimeout: 300, TTY: true,
 		}
+		wantDefinition.ReplyConfig = definition.ReplyConfig
+		wantDefinition.SystemReplyConfig = definition.SystemReplyConfig
 		if !reflect.DeepEqual(definition, wantDefinition) {
 			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
 		}
@@ -699,7 +754,9 @@ output_format = "plain"
 
 	t.Run("overrides parent including explicit zero values", func(t *testing.T) {
 		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[1])
-		wantDefinition := &cmd.Definition{Keyword: "stop", Command: "todo-wrapper --stop", Runner: "exec"}
+		wantDefinition := &cmd.ExecutionConfig{Keyword: "stop", Command: "todo-wrapper --stop", Runner: "exec"}
+		wantDefinition.ReplyConfig = definition.ReplyConfig
+		wantDefinition.SystemReplyConfig = definition.SystemReplyConfig
 		if !reflect.DeepEqual(definition, wantDefinition) {
 			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
 		}
@@ -760,10 +817,10 @@ func TestValidateConfigValidatesCommandReplies(t *testing.T) {
 		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
 		Commands: []*CommandConfig{{
-			Definition: cmd.Definition{Keyword: "todo", Command: "todo-wrapper"},
+			ExecutionConfig: cmd.ExecutionConfig{Keyword: "todo", Command: "todo-wrapper"},
 			Replies: []*ReplyCommandConfig{{
-				Definition: cmd.Definition{Keyword: "cancel"},
-				Runner:     "http",
+				ExecutionConfig: cmd.ExecutionConfig{Keyword: "cancel"},
+				Runner:          "http",
 			}},
 		}},
 	}
@@ -781,7 +838,7 @@ func TestValidateConfigAllowsRestrictedConfig(t *testing.T) {
 		},
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+			{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"}},
 		},
 	}
 
@@ -799,7 +856,7 @@ func TestValidateConfigAllowsExplicitUnsafeOpenAccess(t *testing.T) {
 		},
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+			{ExecutionConfig: cmd.ExecutionConfig{Keyword: "date", Command: "date"}},
 		},
 	}
 
@@ -818,7 +875,7 @@ func TestValidateConfigAllowsHTTPRunner(t *testing.T) {
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
 			{
-				Definition: cmd.Definition{
+				ExecutionConfig: cmd.ExecutionConfig{
 					Keyword: "notify *",
 					Runner:  "http",
 					Method:  "POST",
@@ -847,7 +904,7 @@ func TestValidateConfigRejectsHTTPRunnerWithoutURL(t *testing.T) {
 		NumWorkers: 1,
 		Commands: []*CommandConfig{
 			{
-				Definition: cmd.Definition{
+				ExecutionConfig: cmd.ExecutionConfig{
 					Keyword: "notify *",
 					Runner:  "http",
 				},

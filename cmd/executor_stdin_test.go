@@ -208,8 +208,8 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
-	config := NewCommandConfig(&Definition{TTY: true}, nil)
-	matcher := &Matcher{cfg: config, runner: NewExecRunner()}
+	config := NewCommandConfig(&ExecutionConfig{TTY: true})
+	matcher := &Matcher{config: config.ExecutionConfig, runner: NewExecRunner()}
 	outputs := make(chan *CommandOutput, 10)
 	done := make(chan int, 1)
 	go func() {
@@ -285,7 +285,7 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	var registry testThreadRegistry
 	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
 	matcher := &Matcher{
-		cfg:    NewCommandConfig(&Definition{TTY: true}, nil),
+		config: NewCommandConfig(&ExecutionConfig{TTY: true}).ExecutionConfig,
 		runner: singleCmdRunner{command: capture},
 	}
 	done := make(chan int, 1)
@@ -354,10 +354,11 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
 	cfg := NewCommandConfig(
-		&Definition{Keyword: "agent", Command: "agent"},
-		nil,
+		&ExecutionConfig{Keyword: "agent", Command: "agent"},
 	)
-	cfg.Interaction = InteractionStdin
+	cfg.AllowInChain = false
+	cfg.InteractiveStdin = true
+	cfg.InputBodyMode = InputBodyStdin
 	rq <- &CommandInput{
 		Text:                "agent\ninitial",
 		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
@@ -370,7 +371,7 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 			rq,
 			wq,
 			[]*CommandConfig{cfg},
-			func(*CommandConfig) CommandRunner {
+			func(*ExecutionConfig) CommandRunner {
 				return singleCmdRunner{c}
 			},
 			&registry,
@@ -426,31 +427,26 @@ func (c *endpointProbeCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int
 	return 0
 }
 
-func TestExecutorPublishesLiveStdinOnlyForStdinInteraction(t *testing.T) {
-	for _, interaction := range []string{InteractionOneshot, InteractionCommand} {
-		t.Run(interaction, func(t *testing.T) {
-			probe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
-			var registry testThreadRegistry
-			key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
-			rq := make(chan *CommandInput, 1)
-			wq := make(chan *CommandOutput, 10)
-			cfg := NewCommandConfig(&Definition{Keyword: "agent", Command: "agent"}, nil)
-			cfg.Interaction = interaction
-			rq <- &CommandInput{Text: "agent\ninitial", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
-			close(rq)
-			done := make(chan struct{})
-			go func() {
-				testExecutorWithLifecycle(context.Background(), rq, wq, []*CommandConfig{cfg}, func(*CommandConfig) CommandRunner {
-					return singleCmdRunner{probe}
-				}, &registry)
-				close(done)
-			}()
-			<-probe.started
-			if endpoint := registry.lookup(key); endpoint != nil {
-				t.Fatalf("unexpected endpoint = %v", endpoint)
-			}
-			close(probe.finish)
-			<-done
-		})
+func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
+	probe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
+	var registry testThreadRegistry
+	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 10)
+	cfg := NewCommandConfig(&ExecutionConfig{Keyword: "agent", Command: "agent"})
+	rq <- &CommandInput{Text: "agent\ninitial", ConversationContext: key}
+	close(rq)
+	done := make(chan struct{})
+	go func() {
+		testExecutorWithLifecycle(context.Background(), rq, wq, []*CommandConfig{cfg}, func(*ExecutionConfig) CommandRunner {
+			return singleCmdRunner{probe}
+		}, &registry)
+		close(done)
+	}()
+	<-probe.started
+	if endpoint := registry.lookup(key); endpoint != nil {
+		t.Fatalf("unexpected endpoint = %v", endpoint)
 	}
+	close(probe.finish)
+	<-done
 }

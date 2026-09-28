@@ -55,7 +55,7 @@ func testRunWithInput(command Cmd, timeout int, idle time.Duration, initial stri
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory, registry *testThreadRegistry) {
-	matchers := buildMatchers(cfgs, normalizeRunnerFactory(runnerFactory))
+	matchers := buildMatchers(ExecutionConfigs(cfgs), normalizeRunnerFactory(runnerFactory))
 	for input := range rq {
 		var lifecycle StdinLifecycle
 		if registry != nil {

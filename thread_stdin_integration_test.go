@@ -20,10 +20,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	defer cancel()
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	root := cmd.NewCommandConfig(&cmd.Definition{
+	root := cmd.NewCommandConfig(&cmd.ExecutionConfig{
 		Keyword: "agent", Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`, Timeout: 10,
-	}, nil)
-	root.Interaction = cmd.InteractionStdin
+	})
+	root.AllowInChain = false
+	root.InteractiveStdin = true
+	root.ThreadReplyMode = cmd.ThreadReplyStdin
 	configs := []*cmd.CommandConfig{root}
 	coordinator := cmd.NewConversationCoordinator(configs, nil, func(input *cmd.CommandInput) bool {
 		select {
@@ -42,7 +44,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 				ctx,
 				requests,
 				outputs,
-				configs,
+				cmd.ExecutionConfigs(configs),
 				nil,
 				coordinator,
 			)

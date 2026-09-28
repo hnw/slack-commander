@@ -10,12 +10,12 @@ import (
 )
 
 type httpRunner struct {
-	cfg *CommandConfig
+	config *ExecutionConfig
 }
 
 // NewHTTPRunner returns a runner backed by net/http.
-func NewHTTPRunner(cfg *CommandConfig) CommandRunner {
-	return &httpRunner{cfg: cfg}
+func NewHTTPRunner(config *ExecutionConfig) CommandRunner {
+	return &httpRunner{config: config}
 }
 
 func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string) Cmd {
@@ -30,7 +30,7 @@ func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string
 	}
 	return &httpCmd{
 		ctx:         ctx,
-		cfg:         r.cfg,
+		config:      r.config,
 		wildcard:    wildcard,
 		hasWildcard: hasWildcard,
 	}
@@ -38,7 +38,7 @@ func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string
 
 type httpCmd struct {
 	ctx         context.Context
-	cfg         *CommandConfig
+	config      *ExecutionConfig
 	wildcard    string
 	hasWildcard bool
 	stdin       io.Reader
@@ -80,22 +80,22 @@ func (c *httpCmd) Run(timeout int) int {
 }
 
 func (c *httpCmd) validateConfig() error {
-	if c.cfg == nil || c.cfg.Definition == nil {
+	if c.config == nil {
 		return errors.New("http config is nil")
 	}
-	if strings.TrimSpace(c.cfg.URL) == "" {
+	if strings.TrimSpace(c.config.URL) == "" {
 		return errors.New("url is required for http runner")
 	}
 	return nil
 }
 
 func (c *httpCmd) buildRequest() (*http.Request, error) {
-	method := strings.ToUpper(strings.TrimSpace(c.cfg.Method))
+	method := strings.ToUpper(strings.TrimSpace(c.config.Method))
 	if method == "" {
 		method = "POST"
 	}
-	urlStr := c.expandWildcard(c.cfg.URL)
-	body := c.expandWildcard(c.cfg.Body)
+	urlStr := c.expandWildcard(c.config.URL)
+	body := c.expandWildcard(c.config.Body)
 
 	var bodyReader io.Reader
 	if body != "" {
@@ -107,7 +107,7 @@ func (c *httpCmd) buildRequest() (*http.Request, error) {
 		return nil, err
 	}
 
-	for k, v := range c.cfg.Headers {
+	for k, v := range c.config.Headers {
 		if strings.TrimSpace(k) == "" {
 			continue
 		}

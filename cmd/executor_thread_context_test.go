@@ -32,7 +32,7 @@ func (c *environmentRecordingCmd) Run(int) int {
 }
 
 func dateConfig() []*CommandConfig {
-	return []*CommandConfig{NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil)}
+	return []*CommandConfig{NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})}
 }
 
 type environmentRecordingRunner struct {
@@ -66,8 +66,8 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 			context.Background(),
 			rq,
 			wq,
-			dateConfig(),
-			func(*CommandConfig) CommandRunner { return runner },
+			ExecutionConfigs(dateConfig()),
+			func(*ExecutionConfig) CommandRunner { return runner },
 		)
 		close(done)
 	}()
@@ -112,8 +112,8 @@ func TestExecutorSerializesCommandsInSameThread(t *testing.T) {
 				ctx,
 				rq,
 				wq,
-				dateConfig(),
-				func(*CommandConfig) CommandRunner { return runner },
+				ExecutionConfigs(dateConfig()),
+				func(*ExecutionConfig) CommandRunner { return runner },
 				coordinator,
 			)
 		}()
@@ -156,8 +156,8 @@ func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
 				ctx,
 				rq,
 				wq,
-				dateConfig(),
-				func(*CommandConfig) CommandRunner { return runner },
+				ExecutionConfigs(dateConfig()),
+				func(*ExecutionConfig) CommandRunner { return runner },
 				coordinator,
 			)
 		}()
@@ -182,11 +182,11 @@ func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
 func TestExecutorWithCoordinatorPreservesConversationContextOutput(t *testing.T) {
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 2)
-	root := NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil)
+	root := NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})
 	coordinator := NewConversationCoordinator([]*CommandConfig{root}, nil, func(*CommandInput) bool { return true }, nil, 1)
 	rq <- &CommandInput{Text: "date", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
 	close(rq)
-	ExecutorWithCoordinator(context.Background(), rq, wq, []*CommandConfig{root}, func(*CommandConfig) CommandRunner { return &environmentRecordingRunner{} }, coordinator)
+	ExecutorWithCoordinator(context.Background(), rq, wq, ExecutionConfigs([]*CommandConfig{root}), func(*ExecutionConfig) CommandRunner { return &environmentRecordingRunner{} }, coordinator)
 	output := <-wq
 	if output.ConversationContext != (ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}) {
 		t.Fatalf("context=%+v", output.ConversationContext)

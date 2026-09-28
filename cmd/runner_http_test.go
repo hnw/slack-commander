@@ -33,15 +33,15 @@ func TestHTTPRunnerPostWithWildcard(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := NewCommandConfig(&Definition{
+	cfg := NewCommandConfig(&ExecutionConfig{
 		Runner:  "http",
 		Method:  "post",
 		URL:     srv.URL + "/hook",
 		Headers: map[string]string{"Content-Type": "application/json"},
 		Body:    `{"text":"*"}`,
-	}, nil)
+	})
 
-	runner := NewHTTPRunner(cfg)
+	runner := NewHTTPRunner(cfg.ExecutionConfig)
 	cmd := runner.CommandContext(context.Background(), "http", "hello world")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -89,13 +89,13 @@ func TestHTTPRunnerJoinsWildcardArgs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := NewCommandConfig(&Definition{
+	cfg := NewCommandConfig(&ExecutionConfig{
 		Runner: "http",
 		URL:    srv.URL,
 		Body:   "*",
-	}, nil)
+	})
 
-	cmd := NewHTTPRunner(cfg).CommandContext(
+	cmd := NewHTTPRunner(cfg.ExecutionConfig).CommandContext(
 		context.Background(),
 		"http",
 		"hello world",
@@ -131,14 +131,14 @@ func TestHTTPRunnerExpandsAllWildcards(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := NewCommandConfig(&Definition{
+	cfg := NewCommandConfig(&ExecutionConfig{
 		Runner:  "http",
 		URL:     srv.URL + "/users/*/messages/*",
 		Headers: map[string]string{"X-Value": "*:*"},
 		Body:    "*:*",
-	}, nil)
+	})
 
-	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http", "hello")
+	cmd := NewHTTPRunner(cfg.ExecutionConfig).CommandContext(context.Background(), "http", "hello")
 	if exitCode := cmd.Run(0); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}
@@ -169,14 +169,14 @@ func TestHTTPRunnerLeavesWildcardsWithoutArgs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := NewCommandConfig(&Definition{
+	cfg := NewCommandConfig(&ExecutionConfig{
 		Runner:  "http",
 		URL:     srv.URL + "/*",
 		Headers: map[string]string{"X-Value": "*"},
 		Body:    "*",
-	}, nil)
+	})
 
-	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http")
+	cmd := NewHTTPRunner(cfg.ExecutionConfig).CommandContext(context.Background(), "http")
 	if exitCode := cmd.Run(0); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}

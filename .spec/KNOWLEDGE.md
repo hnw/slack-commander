@@ -1,5 +1,13 @@
 # KNOWLEDGE
 
+## ExecutionConfig の runtime 境界（2026-09-28）
+- `ExecutionConfig` は execution semantics と opaque な output metadata を含む resolved runtime config とする。Executor、Matcher、RunnerFactory はこれだけを受け、Coordinator の runtime command は `ExecutionConfig`、`Replies`、`ThreadReplyMode` だけを保持する。
+- application の `CommandConfig` は `ExecutionConfig` と `pubsub.ReplyConfig` を埋め込み、config resolution が後者を `ExecutionConfig.ReplyConfig` / `SystemReplyConfig` に設定する。`Interaction` は application/config layer 内の解決に限定する。
+
+## interaction の解決済み実行セマンティクス（2026-09-28）
+- `interaction` は config resolution で `ExecutionConfig.AllowInChain`、`InteractiveStdin`、`InputBodyMode` と `ThreadReplyMode` に一度だけ展開する。Executor と Matcher は `ExecutionConfig` を受け、application-level `CommandConfig` や directive 文字列を再解釈しない。
+- reply command は親の解決済み execution semantics を継承する。`command` reply は本文を stdin ではなく trailing wildcard の argv に渡す。
+
 ## 設定の実行可能性検証（2026-09-27）
 - `loadConfig` が通る設定は、Slack token、command keyword、exec / compose command が空でないことまで保証する。HTTP command は不要で、timeout の `0` は従来どおり無制限、負値だけを拒否する。
 

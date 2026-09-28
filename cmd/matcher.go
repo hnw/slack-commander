@@ -24,15 +24,15 @@ var wildcardReplacer = strings.NewReplacer(
 
 // Matcher matches parsed keywords to a configured command.
 type Matcher struct {
-	cfg      *CommandConfig
+	config   *ExecutionConfig
 	keywords []string
 	runner   CommandRunner
 }
 
-func newMatcher(cfg *CommandConfig) *Matcher {
+func newMatcher(config *ExecutionConfig) *Matcher {
 	return &Matcher{
-		cfg:      cfg,
-		keywords: strings.Fields(cfg.Keyword),
+		config:   config,
+		keywords: strings.Fields(config.Keyword),
 	}
 }
 
@@ -44,11 +44,11 @@ func (m *Matcher) build(keywords []string) []string {
 	if !ok {
 		return nil
 	}
-	runner := strings.ToLower(strings.TrimSpace(m.cfg.Runner))
+	runner := strings.ToLower(strings.TrimSpace(m.config.Runner))
 	if runner == RunnerHTTP {
 		return buildHTTPArgs(hasWildcard, wildcard)
 	}
-	return buildCommandArgs(m.cfg.Command, hasWildcard, wildcard)
+	return buildCommandArgs(m.config.Command, hasWildcard, wildcard)
 }
 
 func (m *Matcher) hasTrailingWildcard() bool {

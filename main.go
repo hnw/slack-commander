@@ -103,15 +103,15 @@ func run(args []string) int {
 	)
 	var composeRunnerOnce sync.Once
 	var composeRunner cmd.CommandRunner
-	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
-		if cfg.Runner == cmd.RunnerCompose {
+	runnerFactory := func(config *cmd.ExecutionConfig) cmd.CommandRunner {
+		if config.Runner == cmd.RunnerCompose {
 			composeRunnerOnce.Do(func() {
 				composeRunner = cmd.NewComposeRunner("")
 			})
 			return composeRunner
 		}
-		if cfg.Runner == cmd.RunnerHTTP {
-			return cmd.NewHTTPRunner(cfg)
+		if config.Runner == cmd.RunnerHTTP {
+			return cmd.NewHTTPRunner(config)
 		}
 		return cmd.NewExecRunner()
 	}
@@ -124,7 +124,7 @@ func run(args []string) int {
 				ctx,
 				commandQueue,
 				outputQueue,
-				cmdConfig,
+				cmd.ExecutionConfigs(cmdConfig),
 				runnerFactory,
 				coordinator,
 			)
