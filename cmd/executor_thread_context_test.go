@@ -181,6 +181,20 @@ func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
 	workers.Wait()
 }
 
+func TestExecutorWithCoordinatorPreservesConversationContextOutput(t *testing.T) {
+	rq := make(chan *CommandInput, 1)
+	wq := make(chan *CommandOutput, 2)
+	root := NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil)
+	coordinator := NewConversationCoordinator([]*CommandConfig{root}, nil, func(*CommandInput) bool { return true }, nil, 1)
+	rq <- &CommandInput{Text: "date", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
+	close(rq)
+	ExecutorWithCoordinator(context.Background(), rq, wq, []*CommandConfig{root}, func(*CommandConfig) CommandRunner { return &environmentRecordingRunner{} }, coordinator)
+	output := <-wq
+	if output.ConversationContext != (ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}) {
+		t.Fatalf("context=%+v", output.ConversationContext)
+	}
+}
+
 func awaitStart(t *testing.T, started <-chan struct{}) {
 	t.Helper()
 	select {

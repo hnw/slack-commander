@@ -86,6 +86,29 @@ func Executor(rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConf
 // RunnerFactory returns a runner for the given command config.
 type RunnerFactory func(cfg *CommandConfig) CommandRunner
 
+// ExecutorWithCoordinator keeps the existing queue/worker loop while delegating
+// conversation serialization and stdin lifecycle ownership to the coordinator.
+func ExecutorWithCoordinator(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory, coordinator *ConversationCoordinator) {
+	runnerFactory = normalizeRunnerFactory(runnerFactory)
+	matchers := buildMatchers(cfgs, runnerFactory)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case input, ok := <-rq:
+			if !ok {
+				return
+			}
+			coordinator.RunSerialized(input.ConversationContext, func() {
+				executeCommandInput(ctx, input, matchers, runnerFactory, wq, coordinator.Lifecycle(input.ConversationContext))
+			})
+		}
+	}
+}
+
 // ExecutorWithRunner runs commands using runners provided by runnerFactory.
 func ExecutorWithRunner(
 	ctx context.Context,
@@ -133,7 +156,11 @@ func ExecutorWithThreadInputAndLocks(
 			if !ok {
 				return
 			}
-			executeCommandInput(ctx, input, matchers, runnerFactory, wq, registry, threadLocks)
+			func() {
+				unlock := threadLocks.Lock(input.ConversationContext)
+				defer unlock()
+				executeCommandInput(ctx, input, matchers, runnerFactory, wq, newLegacyLifecycle(registry, input.ConversationContext))
+			}()
 		}
 	}
 }
@@ -144,8 +171,7 @@ func executeCommandInput(
 	matchers []*Matcher,
 	runnerFactory RunnerFactory,
 	wq chan *CommandOutput,
-	registry *ThreadInputRegistry,
-	threadLocks *ThreadLocks,
+	lifecycle StdinLifecycle,
 ) {
 	inputMatchers := matchers
 	if input.CommandConfigs != nil {
@@ -172,7 +198,7 @@ func executeCommandInput(
 
 	rawBody := ""
 	initialStdin := stdinText
-	inputRegistry := registry
+	inputLifecycle := lifecycle
 
 	if interaction == InteractionCommand {
 		if stdinText != "" {
@@ -182,10 +208,10 @@ func executeCommandInput(
 	}
 
 	if interaction != InteractionStdin {
-		inputRegistry = nil
+		inputLifecycle = nil
 	}
 
-	executeCommandsWithThreadLock(
+	_ = executeCommands(
 		ctx,
 		cmds,
 		parseErr,
@@ -194,8 +220,7 @@ func executeCommandInput(
 		input,
 		inputMatchers,
 		wq,
-		inputRegistry,
-		threadLocks,
+		inputLifecycle,
 	)
 }
 
@@ -232,21 +257,28 @@ func MatchSingleCommand(text string, cfgs []*CommandConfig) *CommandConfig {
 	return nil
 }
 
-func executeCommandsWithThreadLock(
-	ctx context.Context,
-	cmds []*parsedCommand,
-	parseErr error,
-	stdinText string,
-	rawBody string,
-	input *CommandInput,
-	matchers []*Matcher,
-	wq chan *CommandOutput,
-	registry *ThreadInputRegistry,
-	threadLocks *ThreadLocks,
-) {
-	unlock := threadLocks.Lock(input.ConversationContext)
-	defer unlock()
-	_ = executeCommands(ctx, cmds, parseErr, stdinText, rawBody, input, matchers, wq, registry)
+type legacyLifecycle struct {
+	registry *ThreadInputRegistry
+	context  ConversationContext
+}
+
+func newLegacyLifecycle(registry *ThreadInputRegistry, context ConversationContext) StdinLifecycle {
+	if registry == nil || context.ChannelID == "" || context.RootThreadTimestamp == "" {
+		return nil
+	}
+	return legacyLifecycle{registry: registry, context: context}
+}
+
+func (l legacyLifecycle) StdinReady(endpoint *InteractiveStdin) {
+	if l.registry != nil {
+		l.registry.Register(l.context.ThreadKey(), endpoint)
+	}
+}
+
+func (l legacyLifecycle) StdinClosed(endpoint *InteractiveStdin) {
+	if l.registry != nil {
+		l.registry.Unregister(l.context.ThreadKey(), endpoint)
+	}
 }
 
 func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
@@ -307,7 +339,7 @@ func executeCommands(
 	input *CommandInput,
 	matchers []*Matcher,
 	wq chan *CommandOutput,
-	registry *ThreadInputRegistry,
+	lifecycle StdinLifecycle,
 ) int {
 	ret := 0
 	for i, cmd := range cmds {
@@ -350,7 +382,7 @@ func executeCommands(
 		if rawBody != "" && m.hasTrailingWildcard() {
 			args = append(args, rawBody)
 		}
-		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, registry)
+		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, lifecycle)
 	}
 	return ret
 }
@@ -383,7 +415,7 @@ func runMatchedCommand(
 	stdinText string,
 	input *CommandInput,
 	wq chan *CommandOutput,
-	registry *ThreadInputRegistry,
+	lifecycle StdinLifecycle,
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
@@ -408,13 +440,13 @@ func runMatchedCommand(
 		}
 		execCmd.SetStdout(terminal)
 		execCmd.SetStderr(terminal)
-		ret := runWithInputWithLineEnding(
+		ret := runWithLifecycleInputWithLineEnding(
 			execCmd,
 			m.cfg.Timeout,
 			0,
 			stdinText,
 			input.ConversationContext,
-			registry,
+			lifecycle,
 			"\r",
 		)
 		_ = terminal.Flush()
@@ -422,32 +454,31 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second,
-		stdinText, input.ConversationContext, registry)
+	ret := runWithLifecycleInput(execCmd, m.cfg.Timeout, time.Duration(m.cfg.StdinIdleTimeout)*time.Second, stdinText, input.ConversationContext, lifecycle)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
 	return ret
 }
 
-func runWithInput(
+func runWithLifecycleInput(
 	command Cmd,
 	timeout int,
 	idle time.Duration,
 	initial string,
 	conversation ConversationContext,
-	registry *ThreadInputRegistry,
+	lifecycle StdinLifecycle,
 ) int {
-	return runWithInputWithLineEnding(command, timeout, idle, initial, conversation, registry, "\n")
+	return runWithLifecycleInputWithLineEnding(command, timeout, idle, initial, conversation, lifecycle, "\n")
 }
 
-func runWithInputWithLineEnding(
+func runWithLifecycleInputWithLineEnding(
 	command Cmd,
 	timeout int,
 	idle time.Duration,
 	initial string,
 	conversation ConversationContext,
-	registry *ThreadInputRegistry,
+	lifecycle StdinLifecycle,
 	lineEnding string,
 ) int {
 	runner, ok := command.(interface {
@@ -457,31 +488,28 @@ func runWithInputWithLineEnding(
 		command.SetStdin(strings.NewReader(initial))
 		return command.Run(timeout)
 	}
-	if registry == nil || conversation.ChannelID == "" || conversation.RootThreadTimestamp == "" {
+	if lifecycle == nil {
 		session := newStdinSession(initial, nil)
 		defer session.Close()
 		return runner.RunWithStdin(timeout, session.Start)
 	}
-	//nolint:staticcheck // ConversationContext に項目が増えても thread 識別子の2項目だけを使う。
-	key := ThreadKey{
-		ChannelID:           conversation.ChannelID,
-		RootThreadTimestamp: conversation.RootThreadTimestamp,
-	}
 	onError := func(err error) {
-		log.Printf(
-			"[WARN] live stdin write failed channel=%s thread=%s: %v",
-			key.ChannelID,
-			key.RootThreadTimestamp,
-			err,
-		)
+		log.Printf("[WARN] live stdin write failed channel=%s thread=%s: %v", conversation.ChannelID, conversation.RootThreadTimestamp, err)
 	}
 	endpoint := newInteractiveStdinSessionWithLineEnding(initial, idle, onError, lineEnding)
-	endpoint.onClose = func() { registry.Unregister(key, endpoint) }
+	endpoint.onClose = func() { lifecycle.StdinClosed(endpoint) }
 	defer endpoint.Close()
 	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {
 		endpoint.Start(stdin)
-		registry.Register(key, endpoint)
+		lifecycle.StdinReady(endpoint)
 	})
+}
+
+func runWithInput(command Cmd, timeout int, idle time.Duration, initial string, conversation ConversationContext, registry *ThreadInputRegistry) int {
+	if registry == nil || conversation.ChannelID == "" || conversation.RootThreadTimestamp == "" {
+		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil)
+	}
+	return runWithLifecycleInput(command, timeout, idle, initial, conversation, newLegacyLifecycle(registry, conversation))
 }
 
 type parsedCommand struct {

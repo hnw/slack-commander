@@ -224,7 +224,7 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 			"initial\n",
 			&CommandInput{ConversationContext: ConversationContext(key)},
 			outputs,
-			&registry,
+			legacyLifecycle{registry: &registry, context: ConversationContext(key)},
 		)
 	}()
 
@@ -297,7 +297,7 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 			"initial",
 			&CommandInput{ConversationContext: ConversationContext(key)},
 			make(chan *CommandOutput, 1),
-			&registry,
+			legacyLifecycle{registry: &registry, context: ConversationContext(key)},
 		)
 	}()
 	endpoint := waitForInteractiveStdin(t, &registry, key)
