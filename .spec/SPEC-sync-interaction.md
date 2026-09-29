@@ -22,7 +22,7 @@ Slack thread の返信本文を、その thread で exec / compose runner が実
 ## Reply routing
 
 1. 既存の投稿者・channel 許可判定と自己出力の除外を通った thread reply を対象にする。
-2. ChannelID と RootThreadTimestamp の組で実行中プロセスを検索する。
+2. `ConversationID` で実行中プロセスを検索する。
 3. 対象があれば endpoint への即時受付を試みる。受け付けられない reply は drop して理由をログに残す。履歴取得・matcher は実行しない。
 4. 対象がなければ既存のイベント種別ごとの処理へ進む。
 5. 対象を見つけた後の drop、終了競合や write 失敗はログに残し、別経路に再解釈しない。drop した reply の再試行・保留は行わない。
@@ -35,13 +35,13 @@ accept_thread_message は通常コマンドとしての受け付け設定であ�
 
 返信本文が LF で終わっていなければ末尾に LF を1つ補う。本文中と既存末尾の改行は保持する。
 
-live stdin には Slack reply の本文をそのまま渡し、command parsing 用の正規化を通さない。メンション・URL・引用符・エスケープ等は変換しない。実利用で不都合が判明した場合に見直す。
+live stdin を含む全 Slack 入力は pubsub 境界で normalizeSlackText を通し、decode 済みの本文だけを cmd へ渡す。
 
 app_mention も同じ routing table を参照する。イベントの重複排除は今回追加せず、live stdin で二重投入を実測した場合に検討する。
 
 ## Process lifecycle / stdin
 
-* registry は worker 間で共有する一時的な routing table とし、キーは ChannelID と RootThreadTimestamp の組だけにする。ConversationContext 全体をキーにしない。
+* registry は worker 間で共有する一時的な routing table とし、キーには `ConversationID` を使う。
 * registry の値は thread に対応する `InteractiveStdin` とし、生の stdin 参照に限定しない。保持するのは現在の running process への入力先だけであり、会話履歴の source of truth は Slack とする。履歴・永続状態は持たせない。
 * exec / compose process の Start 成功後、初期 stdin を `InteractiveStdin` の先頭として順序確定してから endpoint を registry に公開する。以後の reply は必ず初期 stdin より後に流す。公開前に初期入力の write 完了を待つ必要はない。
 * command chain の排他や同一 thread の多重起動制御は追加せず、既存の起動挙動を維持する。
@@ -69,9 +69,9 @@ cmd/ は executor と runner、pubsub/ は Slack event と出力、main.go は�
 既存の名前と gofmt を使う。識別子は既存定義を再利用する。
 
 ```go
-type ConversationContext struct {
-    ChannelID           string
-    RootThreadTimestamp string
+type ConversationID struct {
+    ChannelID     string
+    RootTimestamp string
 }
 ```
 

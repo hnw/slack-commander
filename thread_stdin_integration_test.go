@@ -34,7 +34,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		default:
 			return false
 		}
-	}, pubsub.NormalizeCommandFirstLine, 1)
+	}, 1)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 2, requests, coordinator, cmd.ExecutionConfigs(configs), outputs, &workers)
 	listenerDone := make(chan struct{})
@@ -57,7 +57,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	send("", "agent\nold")
 	awaitThreadStdinReady(t, outputs)
 	send("1", "<@BOT> “raw” &amp;")
-	awaitThreadStdinOutput(t, outputs, "old|<@BOT> “raw” &amp;\n")
+	awaitThreadStdinOutput(t, outputs, "old| \"raw\" &\n")
 }
 
 func awaitThreadStdinReady(t *testing.T, outputs <-chan *cmd.CommandOutput) {
@@ -88,8 +88,8 @@ func awaitThreadStdinOutput(t *testing.T, outputs <-chan *cmd.CommandOutput, wan
 		select {
 		case output := <-outputs:
 			got.WriteString(output.Text)
-			if output.ConversationContext.ChannelID != "C" ||
-				output.ConversationContext.RootThreadTimestamp != "1" {
+			if output.ConversationID.ChannelID != "C" ||
+				output.ConversationID.RootTimestamp != "1" {
 				t.Fatal("wrong output thread")
 			}
 			if output.Finished {

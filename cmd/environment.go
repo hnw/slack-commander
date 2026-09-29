@@ -11,8 +11,8 @@ type environmentSetter interface {
 	SetEnv([]string)
 }
 
-func setSlackContextEnvironment(command Cmd, context ConversationContext) {
-	if context.ChannelID == "" || context.RootThreadTimestamp == "" {
+func setSlackContextEnvironment(command Cmd, conversation ConversationID) {
+	if conversation.ChannelID == "" || conversation.RootTimestamp == "" {
 		return
 	}
 	setter, ok := command.(environmentSetter)
@@ -20,8 +20,8 @@ func setSlackContextEnvironment(command Cmd, context ConversationContext) {
 		return
 	}
 	setter.SetEnv([]string{
-		slackChannelIDEnvironment + "=" + context.ChannelID,
-		slackThreadTSEnvironment + "=" + context.RootThreadTimestamp,
+		slackChannelIDEnvironment + "=" + conversation.ChannelID,
+		slackThreadTSEnvironment + "=" + conversation.RootTimestamp,
 	})
 }
 

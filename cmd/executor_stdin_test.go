@@ -21,10 +21,10 @@ func TestExecSessionEOF(t *testing.T) {
 	for _, interactive := range []bool{false, true} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		var registry testThreadRegistry
-		conversation := ConversationContext{}
+		conversation := ConversationID{}
 		want := "raw input"
 		if interactive {
-			conversation = ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+			conversation = ConversationID{ChannelID: "C", RootTimestamp: "1"}
 			want += "\n"
 		}
 		command := NewExecRunner().CommandContext(ctx, "/bin/cat")
@@ -35,7 +35,7 @@ func TestExecSessionEOF(t *testing.T) {
 		if code != 0 || out.String() != want {
 			t.Fatalf("interactive=%v code=%d output=%q", interactive, code, out.String())
 		}
-		if registry.lookup(ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}) != nil {
+		if registry.lookup(ConversationID{ChannelID: "C", RootTimestamp: "1"}) != nil {
 			t.Fatal("stale endpoint")
 		}
 	}
@@ -58,7 +58,7 @@ func (c *eofTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
 func TestExecutorIdleUnregistersBeforeProcessExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var registry testThreadRegistry
-		key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+		key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 		command := &eofTestCmd{afterEOF: func() {
 			synctest.Wait()
 			if registry.lookup(key) != nil {
@@ -70,7 +70,7 @@ func TestExecutorIdleUnregistersBeforeProcessExit(t *testing.T) {
 			0,
 			time.Second,
 			"",
-			ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
+			ConversationID{ChannelID: "C", RootTimestamp: "1"},
 			&registry,
 		); code != 0 {
 			t.Fatal(code)
@@ -87,7 +87,7 @@ func TestExecutorFiniteCanExitWithoutConsumingStdin(t *testing.T) {
 		0,
 		0,
 		strings.Repeat("x", 1<<20),
-		ConversationContext{},
+		ConversationID{},
 		nil,
 	); code != 0 {
 		t.Fatal(code)
@@ -96,8 +96,8 @@ func TestExecutorFiniteCanExitWithoutConsumingStdin(t *testing.T) {
 
 func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	var registry testThreadRegistry
-	conversation := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewExecRunner().CommandContext(context.Background(), "/no-such-live-command")
 	if code := testRunWithInput(command, 0, 0, "initial", conversation, &registry); code != 127 {
 		t.Fatalf("code=%d", code)
@@ -130,7 +130,7 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 func waitForInteractiveStdin(
 	t *testing.T,
 	registry *testThreadRegistry,
-	key ConversationContext,
+	key ConversationID,
 ) *InteractiveStdin {
 	t.Helper()
 	ticker := time.NewTicker(time.Millisecond)
@@ -158,11 +158,11 @@ func TestExecutorStdinRemovesOnTimeoutAndCancel(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), duration)
 		t.Cleanup(cancel)
 		var registry testThreadRegistry
-		key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+		key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 		command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "read value")
 		done := make(chan int, 1)
 		go func() {
-			done <- testRunWithInput(command, 1, 0, "", ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}, &registry)
+			done <- testRunWithInput(command, 1, 0, "", ConversationID{ChannelID: "C", RootTimestamp: "1"}, &registry)
 		}()
 		endpoint := waitForInteractiveStdin(t, &registry, key)
 		if !timeout {
@@ -195,7 +195,7 @@ func TestInteractiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 		0,
 		0,
 		strings.Repeat("x", 1<<20),
-		ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
+		ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		&registry,
 	)
 	if code != 0 {
@@ -207,7 +207,7 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	config := NewCommandConfig(&ExecutionConfig{TTY: true})
 	matcher := &Matcher{config: config.ExecutionConfig, runner: NewExecRunner()}
 	outputs := make(chan *CommandOutput, 10)
@@ -222,9 +222,9 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 				"IFS= read -r first; IFS= read -r second; printf '\\033[31m%s|%s\\033[0m\\r\\n' \"$first\" \"$second\"; printf ERR >&2",
 			},
 			"initial\n",
-			&CommandInput{ConversationContext: ConversationContext(key)},
+			&CommandInput{ConversationID: ConversationID(key)},
 			outputs,
-			testLifecycle{registry: &registry, context: ConversationContext(key)},
+			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
 
@@ -283,7 +283,7 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	const expected = "initial\rreply\r"
 	capture := &stdinCaptureCmd{want: len(expected)}
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	matcher := &Matcher{
 		config: NewCommandConfig(&ExecutionConfig{TTY: true}).ExecutionConfig,
 		runner: singleCmdRunner{command: capture},
@@ -295,9 +295,9 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 			matcher,
 			[]string{"unused"},
 			"initial",
-			&CommandInput{ConversationContext: ConversationContext(key)},
+			&CommandInput{ConversationID: ConversationID(key)},
 			make(chan *CommandOutput, 1),
-			testLifecycle{registry: &registry, context: ConversationContext(key)},
+			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
 	endpoint := waitForInteractiveStdin(t, &registry, key)
@@ -349,7 +349,7 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 		lines:   make(chan string, 2),
 	}
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
@@ -360,8 +360,8 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	cfg.InteractiveStdin = true
 	cfg.InputBodyMode = InputBodyStdin
 	rq <- &CommandInput{
-		Text:                "agent\ninitial",
-		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
+		Text:           "agent\ninitial",
+		ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"},
 	}
 	close(rq)
 	done := make(chan struct{})
@@ -430,11 +430,11 @@ func (c *endpointProbeCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int
 func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	probe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
 	cfg := NewCommandConfig(&ExecutionConfig{Keyword: "agent", Command: "agent"})
-	rq <- &CommandInput{Text: "agent\ninitial", ConversationContext: key}
+	rq <- &CommandInput{Text: "agent\ninitial", ConversationID: key}
 	close(rq)
 	done := make(chan struct{})
 	go func() {

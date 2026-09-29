@@ -8,7 +8,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-func TestNewSlackInputSetsConversationContext(t *testing.T) {
+func TestNewSlackInputSetsConversationID(t *testing.T) {
 	tests := []struct {
 		name       string
 		message    *slackevents.MessageEvent
@@ -33,15 +33,18 @@ func TestNewSlackInputSetsConversationContext(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := NewSlackInput(tc.message, "date")
-			if input.ConversationContext.ChannelID != "C123" {
-				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			if input.ConversationID.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationID.ChannelID)
 			}
-			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+			if input.ConversationID.RootTimestamp != tc.wantRootTS {
 				t.Fatalf(
 					"root timestamp = %q, want %q",
-					input.ConversationContext.RootThreadTimestamp,
+					input.ConversationID.RootTimestamp,
 					tc.wantRootTS,
 				)
+			}
+			if input.MessageID.ChannelID != tc.message.Channel || input.MessageID.Timestamp != tc.message.TimeStamp {
+				t.Fatalf("message ID = %+v", input.MessageID)
 			}
 		})
 	}
@@ -76,7 +79,7 @@ func TestExtractMessageTextPreservesFallbackOrder(t *testing.T) {
 	}
 }
 
-func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
+func TestNewSlackInputFromAppMentionSetsConversationID(t *testing.T) {
 	tests := []struct {
 		name       string
 		message    *slackevents.AppMentionEvent
@@ -104,15 +107,18 @@ func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := NewSlackInputFromAppMention(tc.message, "date")
-			if input.ConversationContext.ChannelID != "C123" {
-				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			if input.ConversationID.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationID.ChannelID)
 			}
-			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+			if input.ConversationID.RootTimestamp != tc.wantRootTS {
 				t.Fatalf(
 					"root timestamp = %q, want %q",
-					input.ConversationContext.RootThreadTimestamp,
+					input.ConversationID.RootTimestamp,
 					tc.wantRootTS,
 				)
+			}
+			if input.MessageID.ChannelID != tc.message.Channel || input.MessageID.Timestamp != tc.message.TimeStamp {
+				t.Fatalf("message ID = %+v", input.MessageID)
 			}
 		})
 	}

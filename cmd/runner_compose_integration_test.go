@@ -24,7 +24,7 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(
 		ctx,
 		"app",
@@ -43,9 +43,9 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 			0,
 			0,
 			"initial",
-			ConversationContext{
-				ChannelID:           key.ChannelID,
-				RootThreadTimestamp: key.RootThreadTimestamp,
+			ConversationID{
+				ChannelID:     key.ChannelID,
+				RootTimestamp: key.RootTimestamp,
 			},
 			&registry,
 		)
@@ -142,7 +142,7 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(ctx, "app", "/bin/sh", "-c", "sleep 30")
 	command.(interface{ SetTTY() }).SetTTY()
 	var output bytes.Buffer
@@ -155,7 +155,7 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 			0,
 			0,
 			"",
-			ConversationContext(key),
+			ConversationID(key),
 			&registry,
 		)
 	}()
@@ -187,7 +187,7 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var registry testThreadRegistry
-	key := ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(ctx, "app", "wc", "-l")
 	var output bytes.Buffer
 	command.SetStdout(&output)
@@ -198,9 +198,9 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 			0,
 			time.Second,
 			"initial",
-			ConversationContext{
-				ChannelID:           key.ChannelID,
-				RootThreadTimestamp: key.RootThreadTimestamp,
+			ConversationID{
+				ChannelID:     key.ChannelID,
+				RootTimestamp: key.RootTimestamp,
 			},
 			&registry,
 		)

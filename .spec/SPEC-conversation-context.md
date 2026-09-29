@@ -37,18 +37,23 @@ cmd/*_test.go           → 実行パイプラインのユニットテスト
 
 ## Code Style
 
-新しいコンテキストは Slack の生イベント型を漏らさない値オブジェクトとして定義し、入力と出力に同じ値を渡す。zero value の `ConversationContext` は context 未設定を表し、その場合は既存の `ReplyInfo` ベースの Slack 投稿挙動へフォールバックしてよい。conversation-aware code では可能な限り context を明示的に設定する。
+Slack identity は生イベント型を漏らさない値オブジェクトとして定義する。`ConversationID` は出力先 thread、`MessageID` は reaction 対象を表し、入力から全出力へそのまま伝播する。zero value を raw event への fallback には使わない。
 
 ```go
-type ConversationContext struct {
-	ChannelID           string
-	RootThreadTimestamp string
+type ConversationID struct {
+	ChannelID     string
+	RootTimestamp string
+}
+
+type MessageID struct {
+	ChannelID string
+	Timestamp string
 }
 ```
 
 - Go の標準フォーマットに従う。
 - exported identifier は GoDoc を付ける。
-- `ReplyInfo` は invocation event / reaction target に保持し、context 未設定時の後方互換 fallback に使ってよい。新しい conversation-aware output destination の唯一の情報源にしてはならない。
+- Slack raw event は `pubsub` 境界に閉じ込め、`cmd` へ渡さない。
 - 既存の公開設定名・既存メッセージ処理の既定値は変更しない。
 
 ## Testing Strategy
@@ -59,7 +64,7 @@ type ConversationContext struct {
 
 - Always: Slack event の channel と timestamp を入力境界で検証し、通常投稿とスレッド返信の両方をテストする。後方互換の既存テストを維持する。
 - Ask first: 既存の TOML 設定名の変更、Slack API 権限の追加、依存関係の追加、永続ストアの導入。
-- Never: `ReplyInfo` の具体型キャストを新たな会話識別ロジックに追加する、Slack token をコミットする、既存の失敗テストを削除する。
+- Never: Slack raw event の具体型を `cmd` に持ち込む、Slack token をコミットする、既存の失敗テストを削除する。
 
 ## Success Criteria
 

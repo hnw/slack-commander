@@ -314,25 +314,29 @@ func TestExecutorInputBodyModes(t *testing.T) {
 	}
 }
 
-func TestExecutorPropagatesConversationContext(t *testing.T) {
+func TestExecutorPropagatesConversationID(t *testing.T) {
 	wq := make(chan *CommandOutput, 20)
 	executor := NewExecutor(ExecutionConfigs(testCommandConfigs()), func(*ExecutionConfig) CommandRunner {
 		return contextRunner{}
 	}, wq)
 
-	conversation := ConversationContext{
-		ChannelID:           "C123",
-		RootThreadTimestamp: "1700000000.000100",
+	conversation := ConversationID{
+		ChannelID:     "C123",
+		RootTimestamp: "1700000000.000100",
 	}
-	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationContext: conversation}, nil)
+	message := MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"}
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: conversation, MessageID: message}, nil)
 
 	outputs := drainOutputs(wq)
 	if len(outputs) != 4 {
 		t.Fatalf("expected spawn, stdout, stderr, and finish outputs, got %d", len(outputs))
 	}
 	for _, output := range outputs {
-		if output.ConversationContext != conversation {
-			t.Fatalf("output context = %+v, want %+v", output.ConversationContext, conversation)
+		if output.ConversationID != conversation {
+			t.Fatalf("output context = %+v, want %+v", output.ConversationID, conversation)
+		}
+		if output.MessageID != message {
+			t.Fatalf("output message ID = %+v, want %+v", output.MessageID, message)
 		}
 	}
 }

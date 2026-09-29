@@ -8,7 +8,6 @@ import (
 
 	"github.com/hnw/slack-commander/cmd"
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 )
 
@@ -42,15 +41,14 @@ func TestGetConfigUsesSystemDefault(t *testing.T) {
 
 func TestGetThreadTimestampUsesConversationRoot(t *testing.T) {
 	output := &cmd.CommandOutput{
-		ReplyInfo: &slackevents.MessageEvent{
-			Channel:         "C123",
-			TimeStamp:       "1700000000.000200",
-			ThreadTimeStamp: "1700000000.000100",
+		MessageID: cmd.MessageID{
+			ChannelID: "C123",
+			Timestamp: "1700000000.000200",
 		},
 		ReplyConfig: &ReplyConfig{},
-		ConversationContext: cmd.ConversationContext{
-			ChannelID:           "C123",
-			RootThreadTimestamp: "1700000000.000100",
+		ConversationID: cmd.ConversationID{
+			ChannelID:     "C123",
+			RootTimestamp: "1700000000.000100",
 		},
 	}
 
@@ -59,13 +57,13 @@ func TestGetThreadTimestampUsesConversationRoot(t *testing.T) {
 	}
 }
 
-func TestGetThreadTimestampFallsBackToTriggeringMessage(t *testing.T) {
+func TestGetThreadTimestampUsesOnlyConversationID(t *testing.T) {
 	output := &cmd.CommandOutput{
-		ReplyInfo:   &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000200"},
+		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{},
 	}
 
-	if got := getThreadTimestamp(output); got != "1700000000.000200" {
+	if got := getThreadTimestamp(output); got != "" {
 		t.Fatalf("thread timestamp = %q", got)
 	}
 }
@@ -105,11 +103,11 @@ func TestPostMessagePostsOneRootThreadReply(t *testing.T) {
 
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 	output := &cmd.CommandOutput{
-		ReplyInfo:   &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000200"},
+		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{},
-		ConversationContext: cmd.ConversationContext{
-			ChannelID:           "C123",
-			RootThreadTimestamp: "1700000000.000100",
+		ConversationID: cmd.ConversationID{
+			ChannelID:     "C123",
+			RootTimestamp: "1700000000.000100",
 		},
 		Text: "output",
 	}
@@ -194,7 +192,7 @@ func TestPostMessageFormatsAttachments(t *testing.T) {
 
 			smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 			output := &cmd.CommandOutput{
-				ReplyInfo:   &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000200"},
+				MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 				ReplyConfig: &ReplyConfig{OutputFormat: tt.outputFormat},
 				Text:        "*output*",
 				IsErrOut:    tt.isErrOut,
@@ -245,11 +243,11 @@ func TestPostMessageDisablesBroadcastWhenExplicitlyFalse(t *testing.T) {
 
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 	output := &cmd.CommandOutput{
-		ReplyInfo:   &slackevents.MessageEvent{Channel: "C123", TimeStamp: "1700000000.000200"},
+		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{ReplyBroadcast: boolPtr(false)},
-		ConversationContext: cmd.ConversationContext{
-			ChannelID:           "C123",
-			RootThreadTimestamp: "1700000000.000100",
+		ConversationID: cmd.ConversationID{
+			ChannelID:     "C123",
+			RootTimestamp: "1700000000.000100",
 		},
 		Text: "output",
 	}
@@ -268,10 +266,10 @@ func TestPostMessageDisablesBroadcastWhenExplicitlyFalse(t *testing.T) {
 	}
 }
 
-func TestGetOutputChannelUsesConversationContext(t *testing.T) {
+func TestGetOutputChannelUsesConversationID(t *testing.T) {
 	output := &cmd.CommandOutput{
-		ReplyInfo: &slackevents.MessageEvent{Channel: "C-trigger"},
-		ConversationContext: cmd.ConversationContext{
+		MessageID: cmd.MessageID{ChannelID: "C-trigger"},
+		ConversationID: cmd.ConversationID{
 			ChannelID: "C-root",
 		},
 	}
@@ -284,24 +282,23 @@ func TestGetOutputChannelUsesConversationContext(t *testing.T) {
 	}
 }
 
-func TestGetOutputChannelFallsBackToTriggeringMessage(t *testing.T) {
-	output := &cmd.CommandOutput{ReplyInfo: &slackevents.MessageEvent{Channel: "C-trigger"}}
+func TestGetOutputChannelUsesOnlyConversationID(t *testing.T) {
+	output := &cmd.CommandOutput{}
 
-	if got := getOutputChannel(output); got != "C-trigger" {
+	if got := getOutputChannel(output); got != "" {
 		t.Fatalf("output channel = %q", got)
 	}
 }
 
 func TestGetReactionTimestampUsesTriggeringMessage(t *testing.T) {
 	output := &cmd.CommandOutput{
-		ReplyInfo: &slackevents.MessageEvent{
-			Channel:         "C123",
-			TimeStamp:       "1700000000.000200",
-			ThreadTimeStamp: "1700000000.000100",
+		MessageID: cmd.MessageID{
+			ChannelID: "C123",
+			Timestamp: "1700000000.000200",
 		},
-		ConversationContext: cmd.ConversationContext{
-			ChannelID:           "C123",
-			RootThreadTimestamp: "1700000000.000100",
+		ConversationID: cmd.ConversationID{
+			ChannelID:     "C123",
+			RootTimestamp: "1700000000.000100",
 		},
 	}
 

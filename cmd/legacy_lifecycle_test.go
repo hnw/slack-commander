@@ -8,10 +8,10 @@ import (
 
 type testThreadRegistry struct {
 	mu     sync.Mutex
-	inputs map[ConversationContext]*InteractiveStdin
+	inputs map[ConversationID]*InteractiveStdin
 }
 
-func (r *testThreadRegistry) register(context ConversationContext, input *InteractiveStdin) {
+func (r *testThreadRegistry) register(conversation ConversationID, input *InteractiveStdin) {
 	input.mu.Lock()
 	defer input.mu.Unlock()
 	if input.closed {
@@ -20,38 +20,43 @@ func (r *testThreadRegistry) register(context ConversationContext, input *Intera
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.inputs == nil {
-		r.inputs = make(map[ConversationContext]*InteractiveStdin)
+		r.inputs = make(map[ConversationID]*InteractiveStdin)
 	}
-	r.inputs[context] = input
+	r.inputs[conversation] = input
 }
 
-func (r *testThreadRegistry) lookup(context ConversationContext) *InteractiveStdin {
+func (r *testThreadRegistry) lookup(conversation ConversationID) *InteractiveStdin {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.inputs[context]
+	return r.inputs[conversation]
 }
 
-func (r *testThreadRegistry) unregister(context ConversationContext, input *InteractiveStdin) {
+func (r *testThreadRegistry) unregister(conversation ConversationID, input *InteractiveStdin) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.inputs[context] == input {
-		delete(r.inputs, context)
+	if r.inputs[conversation] == input {
+		delete(r.inputs, conversation)
 	}
 }
 
 type testLifecycle struct {
-	registry *testThreadRegistry
-	context  ConversationContext
+	registry     *testThreadRegistry
+	conversation ConversationID
 }
 
-func (l testLifecycle) StdinReady(input *InteractiveStdin)  { l.registry.register(l.context, input) }
-func (l testLifecycle) StdinClosed(input *InteractiveStdin) { l.registry.unregister(l.context, input) }
+func (l testLifecycle) StdinReady(input *InteractiveStdin) {
+	l.registry.register(l.conversation, input)
+}
 
-func testRunWithInput(command Cmd, timeout int, idle time.Duration, initial string, context ConversationContext, registry *testThreadRegistry) int {
-	if registry == nil || context.ChannelID == "" || context.RootThreadTimestamp == "" {
-		return runWithLifecycleInput(command, timeout, idle, initial, context, nil)
+func (l testLifecycle) StdinClosed(input *InteractiveStdin) {
+	l.registry.unregister(l.conversation, input)
+}
+
+func testRunWithInput(command Cmd, timeout int, idle time.Duration, initial string, conversation ConversationID, registry *testThreadRegistry) int {
+	if registry == nil || conversation.ChannelID == "" || conversation.RootTimestamp == "" {
+		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil)
 	}
-	return runWithLifecycleInput(command, timeout, idle, initial, context, testLifecycle{registry: registry, context: context})
+	return runWithLifecycleInput(command, timeout, idle, initial, conversation, testLifecycle{registry: registry, conversation: conversation})
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory, registry *testThreadRegistry) {
@@ -60,8 +65,8 @@ func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq ch
 		var lifecycle StdinLifecycle
 		if registry != nil {
 			lifecycle = testLifecycle{
-				registry: registry,
-				context:  input.ConversationContext,
+				registry:     registry,
+				conversation: input.ConversationID,
 			}
 		}
 		executor.Execute(ctx, input, lifecycle)

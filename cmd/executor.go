@@ -14,29 +14,35 @@ import (
 
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
 type CommandInput struct {
-	ReplyInfo           interface{} // PubSubの返信に必要な構造体（PubSubの種類ごとにキャストして利用する）
-	Text                string      // 起動コマンド平文
-	ExecutionConfigs    []*ExecutionConfig
-	ConversationContext ConversationContext
+	ConversationID   ConversationID
+	MessageID        MessageID
+	Text             string // 起動コマンド平文
+	ExecutionConfigs []*ExecutionConfig
 }
 
-// ConversationContext identifies the Slack thread that receives command output.
-type ConversationContext struct {
-	ChannelID           string
-	RootThreadTimestamp string
+// ConversationID identifies the Slack thread that receives command output.
+type ConversationID struct {
+	ChannelID     string
+	RootTimestamp string
+}
+
+// MessageID identifies the Slack message that triggered command execution.
+type MessageID struct {
+	ChannelID string
+	Timestamp string
 }
 
 // CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
 type CommandOutput struct {
-	ReplyInfo           interface{}
-	ReplyConfig         interface{}
-	ConversationContext ConversationContext
-	Text                string // コマンドからのテキスト出力（ImageData と排他）
-	ImageData           []byte // sixel を変換した PNG バイト列（Text と排他）
-	IsErrOut            bool
-	Spawned             bool
-	Finished            bool
-	ExitCode            int
+	ReplyConfig    interface{}
+	ConversationID ConversationID
+	MessageID      MessageID
+	Text           string // コマンドからのテキスト出力（ImageData と排他）
+	ImageData      []byte // sixel を変換した PNG バイト列（Text と排他）
+	IsErrOut       bool
+	Spawned        bool
+	Finished       bool
+	ExitCode       int
 }
 
 // ExecutionConfig is the complete resolved configuration needed to execute a command.
@@ -224,17 +230,17 @@ func executeCommands(
 		if i == 0 {
 			// コマンド実行開始を通知
 			wq <- &CommandOutput{
-				ReplyInfo:           input.ReplyInfo,
-				ConversationContext: input.ConversationContext,
-				Spawned:             true,
+				ConversationID: input.ConversationID,
+				MessageID:      input.MessageID,
+				Spawned:        true,
 			}
 			// 関数を抜ける時に必ず終了通知を送る
 			defer func() {
 				wq <- &CommandOutput{
-					ReplyInfo:           input.ReplyInfo,
-					ConversationContext: input.ConversationContext,
-					Finished:            true,
-					ExitCode:            ret,
+					ConversationID: input.ConversationID,
+					MessageID:      input.MessageID,
+					Finished:       true,
+					ExitCode:       ret,
 				}
 			}()
 		}
@@ -260,14 +266,14 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 }
 
 func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, m *Matcher) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, m.config.SystemReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
+	syserr := newErrWriter(wq, m.config.SystemReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2
 }
 
 func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *parsedCommand) int {
-	syserr := newErrWriter(wq, input.ReplyInfo, nil, input.ConversationContext, DefaultOutputFlushInterval)
+	syserr := newErrWriter(wq, nil, input.ConversationID, input.MessageID, DefaultOutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
 	_ = syserr.Flush()
 	return 127
@@ -295,9 +301,9 @@ func runMatchedCommand(
 	defer cancel()
 
 	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
-	setSlackContextEnvironment(execCmd, input.ConversationContext)
-	stdout := newStdWriter(wq, input.ReplyInfo, m.config.ReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
-	stderr := newErrWriter(wq, input.ReplyInfo, m.config.ReplyConfig, input.ConversationContext, m.config.OutputFlushInterval)
+	setSlackContextEnvironment(execCmd, input.ConversationID)
+	stdout := newStdWriter(wq, m.config.ReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
+	stderr := newErrWriter(wq, m.config.ReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
 	if m.config.TTY {
 		terminal := newTTYOutputNormalizer(stdout)
 		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {
@@ -310,7 +316,7 @@ func runMatchedCommand(
 			m.config.Timeout,
 			0,
 			stdinText,
-			input.ConversationContext,
+			input.ConversationID,
 			lifecycle,
 			"\r",
 		)
@@ -319,7 +325,7 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, m.config.Timeout, time.Duration(m.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationContext, lifecycle)
+	ret := runWithLifecycleInput(execCmd, m.config.Timeout, time.Duration(m.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -331,7 +337,7 @@ func runWithLifecycleInput(
 	timeout int,
 	idle time.Duration,
 	initial string,
-	conversation ConversationContext,
+	conversation ConversationID,
 	lifecycle StdinLifecycle,
 ) int {
 	return runWithLifecycleInputWithLineEnding(command, timeout, idle, initial, conversation, lifecycle, "\n")
@@ -342,7 +348,7 @@ func runWithLifecycleInputWithLineEnding(
 	timeout int,
 	idle time.Duration,
 	initial string,
-	conversation ConversationContext,
+	conversation ConversationID,
 	lifecycle StdinLifecycle,
 	lineEnding string,
 ) int {
@@ -359,7 +365,7 @@ func runWithLifecycleInputWithLineEnding(
 		return runner.RunWithStdin(timeout, session.Start)
 	}
 	onError := func(err error) {
-		log.Printf("[WARN] live stdin write failed channel=%s thread=%s: %v", conversation.ChannelID, conversation.RootThreadTimestamp, err)
+		log.Printf("[WARN] live stdin write failed channel=%s thread=%s: %v", conversation.ChannelID, conversation.RootTimestamp, err)
 	}
 	endpoint := newInteractiveStdinSessionWithLineEnding(initial, idle, onError, lineEnding)
 	endpoint.onClose = func() { lifecycle.StdinClosed(endpoint) }

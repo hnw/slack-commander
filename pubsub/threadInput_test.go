@@ -21,7 +21,7 @@ func TestSlackRootTextResolverFetchesAndNormalizesRootText(t *testing.T) {
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	resolve := SlackRootTextResolver(smc)
-	text, err := resolve(cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"})
+	text, err := resolve(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestSlackRootTextResolverNormalizesReminderRootText(t *testing.T) {
 	defer server.Close()
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	text, err := SlackRootTextResolver(smc)(cmd.ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"})
+	text, err := SlackRootTextResolver(smc)(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,8 +46,8 @@ func TestSlackRootTextResolverNormalizesReminderRootText(t *testing.T) {
 	}
 }
 
-func TestNormalizeCommandFirstLinePreservesBody(t *testing.T) {
-	if got := NormalizeCommandFirstLine("<@BOT> \u201ccancel\u201d\n\u201craw\u201d &amp;"); got != " \"cancel\"\n\u201craw\u201d &amp;" {
+func TestNormalizeSlackTextPreservesBody(t *testing.T) {
+	if got := normalizeSlackText("<@BOT> \u201ccancel\u201d\n\u201craw\u201d &amp;"); got != " \"cancel\"\n\"raw\" &" {
 		t.Fatalf("text = %q", got)
 	}
 }

@@ -13,7 +13,7 @@
 - `loadConfig` が通る設定は、Slack token、command keyword、exec / compose command が空でないことまで保証する。HTTP command は不要で、timeout の `0` は従来どおり無制限、負値だけを拒否する。
 
 ## Slack thread context と実行直列化（2026-09-23）
-- `ConversationContext` の `ChannelID` と `RootThreadTimestamp` を実行直前に環境変数へ合成することで、exec / compose の runner 実装ごとの分岐を避けつつ、Slack event の値を既存同名値より優先できる。
+- `ConversationID` の `ChannelID` と `RootTimestamp` を実行直前に環境変数へ合成することで、exec / compose の runner 実装ごとの分岐を避けつつ、Slack event の値を既存同名値より優先できる。
 - Executor worker 間で `ThreadLocks` を共有し、`ThreadKey` ごとの `sync.Mutex` を実行全体に適用する。mutex待機のFIFOやworker占有は保証・回避せず、map entryのcleanupも初版では行わない。
 - sync mode のreplyは listener が `ThreadInputRegistry` へ先にrouteするため、lock付きExecutor経路でも新規commandにせず実行中processへstdinとして渡されることを統合テストで確認した。
 
@@ -33,8 +33,8 @@
 - ユーザー決定: live 入力自体に opt-in を追加しない。EOF 待ちはコマンド本来の挙動とし、既存 timeout を安全弁とする。任意の idle EOF は上記の追加仕様に従う。
 - ユーザー決定: reply 本文が LF で終わらなければ1つ補い、本文中の改行は保持する。
 - ユーザー決定: 初期 stdin にも末尾 LF 補完を適用する。ただし初期 stdin が空の場合は空行を送らない。
-- ユーザー決定: live reply は本文を保持し、command parsing 用の変換を通さない。メンション・URL・引用符等の変換は実利用で必要になった時点で再検討する。
-- ユーザー決定: `ThreadInputRegistry` は `(ChannelID, RootThreadTimestamp) -> InteractiveStdin` の一時的な routing table に限定する。履歴は Slack を正とし、固定キュー容量・重複排除・thread reservation・多重起動制御は追加しない。
+- ユーザー決定: Slack 入力は `pubsub` の `normalizeSlackText` で正規化してから `cmd` に渡す。live reply を含め、メンション・Slack URL・引用符・HTML escape を decode する。
+- ユーザー決定: `ThreadInputRegistry` は `(ChannelID, RootTimestamp) -> InteractiveStdin` の一時的な routing table に限定する。履歴は Slack を正とし、固定キュー容量・重複排除・thread reservation・多重起動制御は追加しない。
 - ユーザー決定: interactive stdin と `stdin_idle_timeout` は exec / compose に適用し、HTTP は非対応とする。compose-exec の内部 forwarding と Docker attach は変更しない。
 - ユーザー決定: Start 成功後、初期入力を先頭として順序確定してから endpoint を公開する。同じ thread の送信先は最後に登録された process とする。
 - ユーザー決定: live reply channel は buffer 1 を第一候補とし、producer / consumer の瞬間的なずれを吸収する。転送中とは別に未処理 reply を1件だけ保持し、即時受付できない reply は drop してログに残す。無制限 queue / goroutine は作らない。

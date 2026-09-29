@@ -98,7 +98,6 @@ func run(args []string) int {
 				return false
 			}
 		},
-		pubsub.NormalizeCommandFirstLine,
 		4096,
 	)
 	var executorWG sync.WaitGroup
@@ -175,8 +174,8 @@ func startWorkers(
 					if !ok {
 						return
 					}
-					coordinator.RunSerialized(input.ConversationContext, func() {
-						executor.Execute(ctx, input, coordinator.Lifecycle(input.ConversationContext))
+					coordinator.RunSerialized(input.ConversationID, func() {
+						executor.Execute(ctx, input, coordinator.Lifecycle(input.ConversationID))
 					})
 				}
 			}

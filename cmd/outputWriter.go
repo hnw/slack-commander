@@ -24,33 +24,33 @@ type OutputWriter struct {
 
 func newStdWriter(
 	ch chan *CommandOutput,
-	replyInfo interface{},
 	cfg interface{},
-	context ConversationContext,
+	conversationID ConversationID,
+	messageID MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
-	return newOutputWriter(ch, replyInfo, cfg, false, context, flushInterval)
+	return newOutputWriter(ch, cfg, false, conversationID, messageID, flushInterval)
 }
 
 func newErrWriter(
 	ch chan *CommandOutput,
-	replyInfo interface{},
 	cfg interface{},
-	context ConversationContext,
+	conversationID ConversationID,
+	messageID MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
-	return newOutputWriter(ch, replyInfo, cfg, true, context, flushInterval)
+	return newOutputWriter(ch, cfg, true, conversationID, messageID, flushInterval)
 }
 
 func newOutputWriter(
 	ch chan *CommandOutput,
-	replyInfo interface{},
 	cfg interface{},
 	isErrOut bool,
-	context ConversationContext,
+	conversationID ConversationID,
+	messageID MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
-	raw := newRawWriter(ch, replyInfo, cfg, isErrOut, context)
+	raw := newRawWriter(ch, cfg, isErrOut, conversationID, messageID)
 	return &OutputWriter{
 		bufw:          bufio.NewWriterSize(raw, 2048),
 		raw:           raw,
@@ -116,27 +116,27 @@ func (w *OutputWriter) flushBuffered(sequence uint64) {
 }
 
 type rawWriter struct {
-	Ch                  chan *CommandOutput
-	ReplyInfo           interface{}
-	ReplyConfig         interface{}
-	ConversationContext ConversationContext
-	IsErrOut            bool
-	buf                 []byte
+	Ch             chan *CommandOutput
+	ReplyConfig    interface{}
+	ConversationID ConversationID
+	MessageID      MessageID
+	IsErrOut       bool
+	buf            []byte
 }
 
 func newRawWriter(
 	ch chan *CommandOutput,
-	replyInfo interface{},
 	cfg interface{},
 	isErrOut bool,
-	context ConversationContext,
+	conversationID ConversationID,
+	messageID MessageID,
 ) *rawWriter {
 	return &rawWriter{
-		Ch:                  ch,
-		ReplyInfo:           replyInfo,
-		ReplyConfig:         cfg,
-		ConversationContext: context,
-		IsErrOut:            isErrOut,
+		Ch:             ch,
+		ReplyConfig:    cfg,
+		ConversationID: conversationID,
+		MessageID:      messageID,
+		IsErrOut:       isErrOut,
 	}
 }
 
@@ -145,11 +145,11 @@ func (w *rawWriter) emitText(text []byte) {
 		return
 	}
 	w.Ch <- &CommandOutput{
-		ReplyInfo:           w.ReplyInfo,
-		ReplyConfig:         w.ReplyConfig,
-		ConversationContext: w.ConversationContext,
-		Text:                string(text),
-		IsErrOut:            w.IsErrOut,
+		ReplyConfig:    w.ReplyConfig,
+		ConversationID: w.ConversationID,
+		MessageID:      w.MessageID,
+		Text:           string(text),
+		IsErrOut:       w.IsErrOut,
 	}
 }
 
@@ -160,11 +160,11 @@ func (w *rawWriter) emitImage(sixelData []byte) {
 		return
 	}
 	w.Ch <- &CommandOutput{
-		ReplyInfo:           w.ReplyInfo,
-		ReplyConfig:         w.ReplyConfig,
-		ConversationContext: w.ConversationContext,
-		ImageData:           pngBytes,
-		IsErrOut:            w.IsErrOut,
+		ReplyConfig:    w.ReplyConfig,
+		ConversationID: w.ConversationID,
+		MessageID:      w.MessageID,
+		ImageData:      pngBytes,
+		IsErrOut:       w.IsErrOut,
 	}
 }
 

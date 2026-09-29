@@ -97,7 +97,7 @@ func TestExecTTYInitialInputWithoutConversationKeepsOutputOpen(t *testing.T) {
 	c.SetTTY()
 	var out bytes.Buffer
 	c.SetStdout(&out)
-	if code := testRunWithInput(c, 0, 0, "initial\n", ConversationContext{}, nil); code != 0 {
+	if code := testRunWithInput(c, 0, 0, "initial\n", ConversationID{}, nil); code != 0 {
 		t.Fatalf("code=%d output=%q", code, out.String())
 	}
 	if !strings.Contains(out.String(), "done:initial") {

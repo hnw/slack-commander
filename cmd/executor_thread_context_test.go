@@ -62,9 +62,9 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 
 	executor.Execute(context.Background(), &CommandInput{
 		Text: "date",
-		ConversationContext: ConversationContext{
-			ChannelID:           "C123",
-			RootThreadTimestamp: "1700000000.000100",
+		ConversationID: ConversationID{
+			ChannelID:     "C123",
+			RootTimestamp: "1700000000.000100",
 		},
 	}, nil)
 
@@ -80,14 +80,14 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	}
 }
 
-func TestExecutorPreservesConversationContextOutput(t *testing.T) {
+func TestExecutorPreservesConversationIDOutput(t *testing.T) {
 	wq := make(chan *CommandOutput, 2)
 	root := NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})
 	executor := NewExecutor(ExecutionConfigs([]*CommandConfig{root}), func(*ExecutionConfig) CommandRunner { return &environmentRecordingRunner{} }, wq)
-	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}, nil)
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}, nil)
 	output := <-wq
-	if output.ConversationContext != (ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}) {
-		t.Fatalf("context=%+v", output.ConversationContext)
+	if output.ConversationID != (ConversationID{ChannelID: "C", RootTimestamp: "1"}) {
+		t.Fatalf("context=%+v", output.ConversationID)
 	}
 }
 

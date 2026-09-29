@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
 	"github.com/hnw/slack-commander/cmd"
@@ -195,14 +194,11 @@ func getConfig(output *cmd.CommandOutput) *ReplyConfig {
 }
 
 func getThreadTimestamp(output *cmd.CommandOutput) string {
-	if output.ConversationContext.RootThreadTimestamp != "" {
-		return output.ConversationContext.RootThreadTimestamp
-	}
-	return getTimeStamp(output)
+	return output.ConversationID.RootTimestamp
 }
 
 func getReactionTimestamp(output *cmd.CommandOutput) string {
-	return getTimeStamp(output)
+	return output.MessageID.Timestamp
 }
 
 func buildTextAttachment(output *cmd.CommandOutput) slack.Attachment {
@@ -254,30 +250,9 @@ func getColor(output *cmd.CommandOutput) string {
 }
 
 func getOutputChannel(output *cmd.CommandOutput) string {
-	if output.ConversationContext.ChannelID != "" {
-		return output.ConversationContext.ChannelID
-	}
-	return getReactionChannel(output)
+	return output.ConversationID.ChannelID
 }
 
 func getReactionChannel(output *cmd.CommandOutput) string {
-	switch origMsg := output.ReplyInfo.(type) {
-	case *slackevents.MessageEvent:
-		return origMsg.Channel
-	case *slackevents.AppMentionEvent:
-		return origMsg.Channel
-	default:
-		panic("cast failed")
-	}
-}
-
-func getTimeStamp(output *cmd.CommandOutput) string {
-	switch origMsg := output.ReplyInfo.(type) {
-	case *slackevents.MessageEvent:
-		return origMsg.TimeStamp
-	case *slackevents.AppMentionEvent:
-		return origMsg.TimeStamp
-	default:
-		panic("cast failed")
-	}
+	return output.MessageID.ChannelID
 }
