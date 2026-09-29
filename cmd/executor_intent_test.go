@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type fakeCall struct {
@@ -85,13 +84,11 @@ func (c *fakeCmd) Run(_ int) int {
 func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 	config := NewCommandConfig(&ExecutionConfig{Keyword: "todo *", Command: "todo *", InputBodyMode: InputBodyArgument})
 	runner := &fakeRunner{}
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
-	rq <- &CommandInput{Text: "todo foo\nbar\n"}
-	close(rq)
-	ExecutorWithRunner(context.Background(), rq, wq, ExecutionConfigs([]*CommandConfig{config}), func(*ExecutionConfig) CommandRunner {
+	executor := NewExecutor(ExecutionConfigs([]*CommandConfig{config}), func(*ExecutionConfig) CommandRunner {
 		return runner
-	})
+	}, wq)
+	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n"}, nil)
 	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
 	}
@@ -248,25 +245,12 @@ func runExecutorOnce(
 	cfgs []*CommandConfig,
 ) ([]fakeCall, []*CommandOutput) {
 	t.Helper()
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 20)
 	runner := &fakeRunner{}
-	done := make(chan struct{})
-	go func() {
-		ExecutorWithRunner(context.Background(), rq, wq, ExecutionConfigs(cfgs), func(*ExecutionConfig) CommandRunner {
-			return runner
-		})
-		close(done)
-	}()
-
-	rq <- &CommandInput{Text: input}
-	close(rq)
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("executor did not finish")
-	}
+	executor := NewExecutor(ExecutionConfigs(cfgs), func(*ExecutionConfig) CommandRunner {
+		return runner
+	}, wq)
+	executor.Execute(context.Background(), &CommandInput{Text: input}, nil)
 
 	return runner.Calls(), drainOutputs(wq)
 }
@@ -331,37 +315,24 @@ func TestExecutorInputBodyModes(t *testing.T) {
 }
 
 func TestExecutorPropagatesConversationContext(t *testing.T) {
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 20)
-	done := make(chan struct{})
-	go func() {
-		ExecutorWithRunner(
-			context.Background(),
-			rq,
-			wq,
-			ExecutionConfigs(testCommandConfigs()),
-			func(*ExecutionConfig) CommandRunner {
-				return contextRunner{}
-			},
-		)
-		close(done)
-	}()
+	executor := NewExecutor(ExecutionConfigs(testCommandConfigs()), func(*ExecutionConfig) CommandRunner {
+		return contextRunner{}
+	}, wq)
 
-	context := ConversationContext{
+	conversation := ConversationContext{
 		ChannelID:           "C123",
 		RootThreadTimestamp: "1700000000.000100",
 	}
-	rq <- &CommandInput{Text: "date", ConversationContext: context}
-	close(rq)
-	<-done
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationContext: conversation}, nil)
 
 	outputs := drainOutputs(wq)
 	if len(outputs) != 4 {
 		t.Fatalf("expected spawn, stdout, stderr, and finish outputs, got %d", len(outputs))
 	}
 	for _, output := range outputs {
-		if output.ConversationContext != context {
-			t.Fatalf("output context = %+v, want %+v", output.ConversationContext, context)
+		if output.ConversationContext != conversation {
+			t.Fatalf("output context = %+v, want %+v", output.ConversationContext, conversation)
 		}
 	}
 }

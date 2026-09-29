@@ -60,63 +60,38 @@ type ExecutionConfig struct {
 	SystemReplyConfig interface{} `toml:"-"`
 }
 
-// Executor runs commands using the default runner factory.
-func Executor(rq chan *CommandInput, wq chan *CommandOutput, configs []*ExecutionConfig) {
-	ExecutorWithRunner(context.Background(), rq, wq, configs, nil)
-}
-
 // RunnerFactory returns a runner for the given execution definition.
 type RunnerFactory func(config *ExecutionConfig) CommandRunner
 
-// ExecutorWithCoordinator keeps the existing queue/worker loop while delegating
-// conversation serialization and stdin lifecycle ownership to the coordinator.
-func ExecutorWithCoordinator(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, configs []*ExecutionConfig, runnerFactory RunnerFactory, coordinator *ConversationCoordinator) {
+// Executor executes individual command inputs.
+type Executor struct {
+	matchers      []*Matcher
+	runnerFactory RunnerFactory
+	outputQueue   chan *CommandOutput
+}
+
+// NewExecutor creates an executor with initialized matchers and runners.
+func NewExecutor(configs []*ExecutionConfig, runnerFactory RunnerFactory, outputQueue chan *CommandOutput) *Executor {
 	runnerFactory = normalizeRunnerFactory(runnerFactory)
-	matchers := buildMatchers(configs, runnerFactory)
+	return &Executor{
+		matchers:      buildMatchers(configs, runnerFactory),
+		runnerFactory: runnerFactory,
+		outputQueue:   outputQueue,
+	}
+}
+
+// Execute processes one command input without queue or conversation ownership.
+func (e *Executor) Execute(
+	ctx context.Context,
+	input *CommandInput,
+	lifecycle StdinLifecycle,
+) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case input, ok := <-rq:
-			if !ok {
-				return
-			}
-			if coordinator == nil {
-				executeCommandInput(ctx, input, matchers, runnerFactory, wq, nil)
-				continue
-			}
-			coordinator.RunSerialized(input.ConversationContext, func() {
-				executeCommandInput(ctx, input, matchers, runnerFactory, wq, coordinator.Lifecycle(input.ConversationContext))
-			})
-		}
-	}
-}
-
-// ExecutorWithRunner runs commands using runners provided by runnerFactory.
-func ExecutorWithRunner(
-	ctx context.Context,
-	rq chan *CommandInput,
-	wq chan *CommandOutput,
-	configs []*ExecutionConfig,
-	runnerFactory RunnerFactory,
-) {
-	ExecutorWithCoordinator(ctx, rq, wq, configs, runnerFactory, nil)
-}
-
-func executeCommandInput(
-	ctx context.Context,
-	input *CommandInput,
-	matchers []*Matcher,
-	runnerFactory RunnerFactory,
-	wq chan *CommandOutput,
-	lifecycle StdinLifecycle,
-) {
-	inputMatchers := matchers
+	inputMatchers := e.matchers
 	if input.ExecutionConfigs != nil {
-		inputMatchers = buildMatchers(input.ExecutionConfigs, runnerFactory)
+		inputMatchers = buildMatchers(input.ExecutionConfigs, e.runnerFactory)
 	}
 
 	cmdMsg, stdinText := splitCommandInput(input.Text)
@@ -153,7 +128,7 @@ func executeCommandInput(
 		rawBody,
 		input,
 		inputMatchers,
-		wq,
+		e.outputQueue,
 		inputLifecycle,
 	)
 }

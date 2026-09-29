@@ -6,6 +6,7 @@
 
 ## interaction の解決済み実行セマンティクス（2026-09-28）
 - `interaction` は config resolution で `ExecutionConfig.AllowInChain`、`InteractiveStdin`、`InputBodyMode` と `ThreadReplyMode` に一度だけ展開する。Executor と Matcher は `ExecutionConfig` を受け、application-level `CommandConfig` や directive 文字列を再解釈しない。
+- commandQueue の受信と worker lifecycle は main が所有し、Coordinator は会話単位の直列化と stdin lifecycle を提供する。各 worker は専用の Executor と RunnerFactory を持ち、compose runner は同一 worker 内で共有し、worker 間では共有しない。
 - reply command は親の解決済み execution semantics を継承する。`command` reply は本文を stdin ではなく trailing wildcard の argv に渡す。
 
 ## 設定の実行可能性検証（2026-09-27）

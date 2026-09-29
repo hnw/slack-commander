@@ -5,7 +5,6 @@ import (
 	"io"
 	"sync"
 	"testing"
-	"time"
 )
 
 type environmentRecordingCmd struct {
@@ -57,30 +56,17 @@ func (r *environmentRecordingRunner) Commands() []*environmentRecordingCmd {
 }
 
 func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
 	runner := &environmentRecordingRunner{}
-	done := make(chan struct{})
-	go func() {
-		ExecutorWithRunner(
-			context.Background(),
-			rq,
-			wq,
-			ExecutionConfigs(dateConfig()),
-			func(*ExecutionConfig) CommandRunner { return runner },
-		)
-		close(done)
-	}()
+	executor := NewExecutor(ExecutionConfigs(dateConfig()), func(*ExecutionConfig) CommandRunner { return runner }, wq)
 
-	rq <- &CommandInput{
+	executor.Execute(context.Background(), &CommandInput{
 		Text: "date",
 		ConversationContext: ConversationContext{
 			ChannelID:           "C123",
 			RootThreadTimestamp: "1700000000.000100",
 		},
-	}
-	close(rq)
-	<-done
+	}, nil)
 
 	commands := runner.Commands()
 	if len(commands) != 1 {
@@ -94,111 +80,14 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	}
 }
 
-func TestExecutorSerializesCommandsInSameThread(t *testing.T) {
-	started := make(chan struct{}, 2)
-	release := make(chan struct{}, 2)
-	runner := &environmentRecordingRunner{started: started, release: release}
-	rq := make(chan *CommandInput, 2)
-	wq := make(chan *CommandOutput, 10)
-	coordinator := NewConversationCoordinator(dateConfig(), nil, func(*CommandInput) bool { return true }, nil, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var workers sync.WaitGroup
-	for range 2 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			ExecutorWithCoordinator(
-				ctx,
-				rq,
-				wq,
-				ExecutionConfigs(dateConfig()),
-				func(*ExecutionConfig) CommandRunner { return runner },
-				coordinator,
-			)
-		}()
-	}
-	input := &CommandInput{
-		Text:                "date",
-		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
-	}
-	rq <- input
-	rq <- input
-
-	awaitStart(t, started)
-	select {
-	case <-started:
-		t.Fatal("second command started while first command was running")
-	case <-time.After(100 * time.Millisecond):
-	}
-	release <- struct{}{}
-	awaitStart(t, started)
-	release <- struct{}{}
-	close(rq)
-	workers.Wait()
-}
-
-func TestExecutorRunsCommandsInDifferentThreadsConcurrently(t *testing.T) {
-	started := make(chan struct{}, 2)
-	release := make(chan struct{}, 2)
-	runner := &environmentRecordingRunner{started: started, release: release}
-	rq := make(chan *CommandInput, 2)
-	wq := make(chan *CommandOutput, 10)
-	coordinator := NewConversationCoordinator(dateConfig(), nil, func(*CommandInput) bool { return true }, nil, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var workers sync.WaitGroup
-	for range 2 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			ExecutorWithCoordinator(
-				ctx,
-				rq,
-				wq,
-				ExecutionConfigs(dateConfig()),
-				func(*ExecutionConfig) CommandRunner { return runner },
-				coordinator,
-			)
-		}()
-	}
-	rq <- &CommandInput{
-		Text:                "date",
-		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"},
-	}
-	rq <- &CommandInput{
-		Text:                "date",
-		ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "2"},
-	}
-
-	awaitStart(t, started)
-	awaitStart(t, started)
-	release <- struct{}{}
-	release <- struct{}{}
-	close(rq)
-	workers.Wait()
-}
-
-func TestExecutorWithCoordinatorPreservesConversationContextOutput(t *testing.T) {
-	rq := make(chan *CommandInput, 1)
+func TestExecutorPreservesConversationContextOutput(t *testing.T) {
 	wq := make(chan *CommandOutput, 2)
 	root := NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})
-	coordinator := NewConversationCoordinator([]*CommandConfig{root}, nil, func(*CommandInput) bool { return true }, nil, 1)
-	rq <- &CommandInput{Text: "date", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}
-	close(rq)
-	ExecutorWithCoordinator(context.Background(), rq, wq, ExecutionConfigs([]*CommandConfig{root}), func(*ExecutionConfig) CommandRunner { return &environmentRecordingRunner{} }, coordinator)
+	executor := NewExecutor(ExecutionConfigs([]*CommandConfig{root}), func(*ExecutionConfig) CommandRunner { return &environmentRecordingRunner{} }, wq)
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationContext: ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}}, nil)
 	output := <-wq
 	if output.ConversationContext != (ConversationContext{ChannelID: "C", RootThreadTimestamp: "1"}) {
 		t.Fatalf("context=%+v", output.ConversationContext)
-	}
-}
-
-func awaitStart(t *testing.T, started <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("command did not start")
 	}
 }
 

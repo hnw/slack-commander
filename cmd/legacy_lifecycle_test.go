@@ -55,7 +55,7 @@ func testRunWithInput(command Cmd, timeout int, idle time.Duration, initial stri
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, cfgs []*CommandConfig, runnerFactory RunnerFactory, registry *testThreadRegistry) {
-	matchers := buildMatchers(ExecutionConfigs(cfgs), normalizeRunnerFactory(runnerFactory))
+	executor := NewExecutor(ExecutionConfigs(cfgs), runnerFactory, wq)
 	for input := range rq {
 		var lifecycle StdinLifecycle
 		if registry != nil {
@@ -64,6 +64,6 @@ func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq ch
 				context:  input.ConversationContext,
 			}
 		}
-		executeCommandInput(ctx, input, matchers, runnerFactory, wq, lifecycle)
+		executor.Execute(ctx, input, lifecycle)
 	}
 }

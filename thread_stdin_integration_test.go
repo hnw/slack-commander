@@ -36,20 +36,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		}
 	}, pubsub.NormalizeCommandFirstLine, 1)
 	var workers sync.WaitGroup
-	for range 2 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			cmd.ExecutorWithCoordinator(
-				ctx,
-				requests,
-				outputs,
-				cmd.ExecutionConfigs(configs),
-				nil,
-				coordinator,
-			)
-		}()
-	}
+	startWorkers(ctx, 2, requests, coordinator, cmd.ExecutionConfigs(configs), outputs, &workers)
 	listenerDone := make(chan struct{})
 	go func() {
 		pubsub.SlackListener(ctx, smc, pubsub.Config{

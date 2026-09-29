@@ -101,35 +101,9 @@ func run(args []string) int {
 		pubsub.NormalizeCommandFirstLine,
 		4096,
 	)
-	var composeRunnerOnce sync.Once
-	var composeRunner cmd.CommandRunner
-	runnerFactory := func(config *cmd.ExecutionConfig) cmd.CommandRunner {
-		if config.Runner == cmd.RunnerCompose {
-			composeRunnerOnce.Do(func() {
-				composeRunner = cmd.NewComposeRunner("")
-			})
-			return composeRunner
-		}
-		if config.Runner == cmd.RunnerHTTP {
-			return cmd.NewHTTPRunner(config)
-		}
-		return cmd.NewExecRunner()
-	}
 	var executorWG sync.WaitGroup
-	for i := 0; i < cfg.NumWorkers; i++ {
-		executorWG.Add(1)
-		go func() {
-			defer executorWG.Done()
-			cmd.ExecutorWithCoordinator(
-				ctx,
-				commandQueue,
-				outputQueue,
-				cmd.ExecutionConfigs(cmdConfig),
-				runnerFactory,
-				coordinator,
-			)
-		}()
-	}
+	executionConfigs := cmd.ExecutionConfigs(cmdConfig)
+	startWorkers(ctx, cfg.NumWorkers, commandQueue, coordinator, executionConfigs, outputQueue, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
 	go func() {
@@ -160,4 +134,52 @@ func run(args []string) int {
 	close(outputQueue)
 	writerWG.Wait()
 	return exitCode
+}
+
+func newRunnerFactory() cmd.RunnerFactory {
+	var composeRunnerOnce sync.Once
+	var composeRunner cmd.CommandRunner
+	return func(config *cmd.ExecutionConfig) cmd.CommandRunner {
+		if config.Runner == cmd.RunnerCompose {
+			composeRunnerOnce.Do(func() {
+				composeRunner = cmd.NewComposeRunner("")
+			})
+			return composeRunner
+		}
+		if config.Runner == cmd.RunnerHTTP {
+			return cmd.NewHTTPRunner(config)
+		}
+		return cmd.NewExecRunner()
+	}
+}
+
+func startWorkers(
+	ctx context.Context,
+	workers int,
+	inputs <-chan *cmd.CommandInput,
+	coordinator *cmd.ConversationCoordinator,
+	configs []*cmd.ExecutionConfig,
+	outputQueue chan *cmd.CommandOutput,
+	wg *sync.WaitGroup,
+) {
+	for range workers {
+		executor := cmd.NewExecutor(configs, newRunnerFactory(), outputQueue)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case input, ok := <-inputs:
+					if !ok {
+						return
+					}
+					coordinator.RunSerialized(input.ConversationContext, func() {
+						executor.Execute(ctx, input, coordinator.Lifecycle(input.ConversationContext))
+					})
+				}
+			}
+		}()
+	}
 }

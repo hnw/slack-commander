@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 func TestRunCheckConfig(t *testing.T) {
@@ -55,6 +60,45 @@ func TestRunCheckConfig(t *testing.T) {
 	}
 	if stderr != "keyword is required\n" {
 		t.Fatalf("run(config without keyword) stderr = %q, want %q", stderr, "keyword is required\n")
+	}
+}
+
+func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
+	for _, closeQueue := range []bool{true, false} {
+		t.Run(map[bool]string{true: "queue closes", false: "context cancels"}[closeQueue], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			inputs := make(chan *cmd.CommandInput)
+			var workers sync.WaitGroup
+			startWorkers(ctx, 2, inputs, nil, nil, nil, &workers)
+			if closeQueue {
+				close(inputs)
+			} else {
+				cancel()
+			}
+			done := make(chan struct{})
+			go func() { workers.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("workers did not exit")
+			}
+		})
+	}
+}
+
+func TestRunnerFactoryScopesComposeRunnerToFactory(t *testing.T) {
+	firstFactory := newRunnerFactory()
+	secondFactory := newRunnerFactory()
+	config := &cmd.ExecutionConfig{Runner: cmd.RunnerCompose}
+	first := firstFactory(config)
+	sameWorker := firstFactory(config)
+	otherWorker := secondFactory(config)
+	if first != sameWorker {
+		t.Fatal("compose runner was not reused within factory")
+	}
+	if first == otherWorker {
+		t.Fatal("compose runner was shared across factories")
 	}
 }
 
