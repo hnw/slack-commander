@@ -29,7 +29,7 @@ const (
 
 // ConversationCoordinator owns routing and execution state for Slack conversations.
 type ConversationCoordinator struct {
-	commands []*CommandConfig
+	commands *CommandSet
 	resolve  RootTextResolver
 	enqueue  func(*CommandInput) bool
 	routes   *conversationRoutes
@@ -37,43 +37,14 @@ type ConversationCoordinator struct {
 	locks    conversationLocks
 }
 
-// CommandConfig holds application-level conversation directives.
-type CommandConfig struct {
-	*ExecutionConfig
-	Replies         []*CommandConfig
-	ThreadReplyMode ThreadReplyMode
-}
-
-// NewCommandConfig builds a runtime command config from resolved execution settings.
-func NewCommandConfig(config *ExecutionConfig) *CommandConfig {
-	return &CommandConfig{ExecutionConfig: config}
-}
-
-// MatchSingleCommand returns the configured command matching one complete input command.
-// Chained or malformed inputs have no owner for thread reply routing.
-func MatchSingleCommand(text string, configs []*CommandConfig) *CommandConfig {
-	cmdMsg, _ := splitCommandInput(text)
-	cmds, err := parseCommands(cmdMsg)
-	if err != nil || len(cmds) != 1 {
-		return nil
-	}
-	for _, config := range configs {
-		matcher := newMatcher(config.ExecutionConfig)
-		if matcher != nil && len(matcher.build(cmds[0].args)) > 0 {
-			return config
-		}
-	}
-	return nil
-}
-
 // NewConversationCoordinator creates the owner of conversation routing state.
-func NewConversationCoordinator(commands []*CommandConfig, resolve RootTextResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
+func NewConversationCoordinator(commands *CommandSet, resolve RootTextResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
 	return &ConversationCoordinator{commands: commands, resolve: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
 }
 
 // AcceptRoot queues a root command and records its route after queue acceptance.
 func (c *ConversationCoordinator) AcceptRoot(input *CommandInput) bool {
-	root := MatchSingleCommand(input.Text, c.commands)
+	root := c.commands.MatchSingle(input.Text)
 	if c.enqueue == nil || !c.enqueue(input) {
 		return false
 	}
@@ -94,13 +65,13 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 		if err != nil {
 			return ThreadReplyIgnored, err
 		}
-		root = MatchSingleCommand(text, c.commands)
+		root = c.commands.MatchSingle(text)
 		c.routes.store(input.ConversationID, root)
 	}
 	if root == nil {
 		return ThreadReplyIgnored, nil
 	}
-	switch root.ThreadReplyMode {
+	switch root.config.ThreadReplyMode {
 	case ThreadReplyIgnore:
 		return ThreadReplyIgnored, nil
 	case ThreadReplyStdin:
@@ -113,25 +84,16 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 		}
 		return ThreadReplyRouted, nil
 	case ThreadReplyCommand:
-		if len(root.Replies) == 0 || c.enqueue == nil {
+		if root.replies == nil || len(root.replies.commands) == 0 || c.enqueue == nil {
 			return ThreadReplyIgnored, nil
 		}
-		input.ExecutionConfigs = ExecutionConfigs(root.Replies)
+		input.CommandSet = root.replies
 		if !c.enqueue(input) {
 			return ThreadReplyQueueFull, nil
 		}
 		return ThreadReplyRouted, nil
 	}
 	return ThreadReplyIgnored, nil
-}
-
-// ExecutionConfigs returns the resolved execution settings for runtime commands.
-func ExecutionConfigs(commands []*CommandConfig) []*ExecutionConfig {
-	configs := make([]*ExecutionConfig, len(commands))
-	for i, command := range commands {
-		configs[i] = command.ExecutionConfig
-	}
-	return configs
 }
 
 // RunSerialized runs work without overlapping commands in one conversation.
@@ -227,14 +189,14 @@ type conversationRoutes struct {
 
 type conversationRoute struct {
 	key     ConversationID
-	command *CommandConfig
+	command *Command
 }
 
 func newConversationRoutes(capacity int) *conversationRoutes {
 	return &conversationRoutes{capacity: capacity}
 }
 
-func (r *conversationRoutes) lookup(conversation ConversationID) (*CommandConfig, bool) {
+func (r *conversationRoutes) lookup(conversation ConversationID) (*Command, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
@@ -248,7 +210,7 @@ func (r *conversationRoutes) lookup(conversation ConversationID) (*CommandConfig
 	return element.Value.(conversationRoute).command, true
 }
 
-func (r *conversationRoutes) store(conversation ConversationID, command *CommandConfig) {
+func (r *conversationRoutes) store(conversation ConversationID, command *Command) {
 	if r.capacity <= 0 {
 		return
 	}

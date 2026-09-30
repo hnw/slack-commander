@@ -14,10 +14,10 @@ import (
 
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
 type CommandInput struct {
-	ConversationID   ConversationID
-	MessageID        MessageID
-	Text             string // 起動コマンド平文
-	ExecutionConfigs []*ExecutionConfig
+	ConversationID ConversationID
+	MessageID      MessageID
+	Text           string // 起動コマンド平文
+	CommandSet     *CommandSet
 }
 
 // ConversationID identifies the Slack thread that receives command output.
@@ -45,44 +45,20 @@ type CommandOutput struct {
 	ExitCode       int
 }
 
-// ExecutionConfig is the complete resolved configuration needed to execute a command.
-type ExecutionConfig struct {
-	StdinIdleTimeout    int  `toml:"stdin_idle_timeout"`
-	TTY                 bool `toml:"tty"`
-	Timeout             int
-	OutputFlushInterval time.Duration `toml:"-"`
-	AllowInChain        bool          `toml:"-"`
-	InteractiveStdin    bool          `toml:"-"`
-	InputBodyMode       InputBodyMode `toml:"-"`
-	Keyword             string
-	Command             string
-	Runner              string
-	Method              string
-	URL                 string
-	Headers             map[string]string
-	Body                string
-	// ReplyConfig and SystemReplyConfig are opaque output metadata.
-	ReplyConfig       interface{} `toml:"-"`
-	SystemReplyConfig interface{} `toml:"-"`
-}
-
 // RunnerFactory returns a runner for the given execution definition.
-type RunnerFactory func(config *ExecutionConfig) CommandRunner
+type RunnerFactory func(config RunnerConfig) CommandRunner
 
 // Executor executes individual command inputs.
 type Executor struct {
-	matchers      []*Matcher
-	runnerFactory RunnerFactory
-	outputQueue   chan *CommandOutput
+	commands    *CommandSet
+	outputQueue chan *CommandOutput
 }
 
 // NewExecutor creates an executor with initialized matchers and runners.
-func NewExecutor(configs []*ExecutionConfig, runnerFactory RunnerFactory, outputQueue chan *CommandOutput) *Executor {
-	runnerFactory = normalizeRunnerFactory(runnerFactory)
+func NewExecutor(commands *CommandSet, outputQueue chan *CommandOutput) *Executor {
 	return &Executor{
-		matchers:      buildMatchers(configs, runnerFactory),
-		runnerFactory: runnerFactory,
-		outputQueue:   outputQueue,
+		commands:    commands,
+		outputQueue: outputQueue,
 	}
 }
 
@@ -95,15 +71,15 @@ func (e *Executor) Execute(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	inputMatchers := e.matchers
-	if input.ExecutionConfigs != nil {
-		inputMatchers = buildMatchers(input.ExecutionConfigs, e.runnerFactory)
+	commandSet := e.commands
+	if input.CommandSet != nil {
+		commandSet = input.CommandSet
 	}
 
 	cmdMsg, stdinText := splitCommandInput(input.Text)
 	cmds, parseErr := parseCommands(cmdMsg)
 
-	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, inputMatchers) {
+	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, commandSet) {
 		return
 	}
 
@@ -114,15 +90,15 @@ func (e *Executor) Execute(
 	if len(cmds) == 0 {
 		return
 	}
-	matcher, _ := findMatchedMatcher(cmds[0], inputMatchers)
-	if matcher != nil && matcher.config.InputBodyMode == InputBodyArgument {
+	command, _ := commandSet.Match(cmds[0])
+	if command != nil && command.config.InputBodyMode == InputBodyArgument {
 		if stdinText != "" {
 			rawBody = "\n" + stdinText
 		}
 		initialStdin = ""
 	}
 
-	if matcher == nil || !matcher.config.InteractiveStdin {
+	if command == nil || !command.config.InteractiveStdin {
 		inputLifecycle = nil
 	}
 
@@ -133,49 +109,23 @@ func (e *Executor) Execute(
 		initialStdin,
 		rawBody,
 		input,
-		inputMatchers,
+		commandSet,
 		e.outputQueue,
 		inputLifecycle,
 	)
 }
 
-func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, matchers []*Matcher) bool {
+func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, commandSet *CommandSet) bool {
 	for _, command := range cmds {
-		matcher, _ := findMatchedMatcher(command, matchers)
-		if matcher == nil {
+		matched, _ := commandSet.Match(command)
+		if matched == nil {
 			continue
 		}
-		if !matcher.config.AllowInChain {
+		if !matched.config.AllowInChain {
 			return false
 		}
 	}
 	return true
-}
-
-func normalizeRunnerFactory(runnerFactory RunnerFactory) RunnerFactory {
-	if runnerFactory != nil {
-		return runnerFactory
-	}
-	return func(*ExecutionConfig) CommandRunner {
-		return NewExecRunner()
-	}
-}
-
-func buildMatchers(configs []*ExecutionConfig, runnerFactory RunnerFactory) []*Matcher {
-	matchers := make([]*Matcher, 0, len(configs))
-	for _, config := range configs {
-		matcher := newMatcher(config)
-		if matcher == nil {
-			continue
-		}
-		runner := runnerFactory(config)
-		if runner == nil {
-			runner = NewExecRunner()
-		}
-		matcher.runner = runner
-		matchers = append(matchers, matcher)
-	}
-	return matchers
 }
 
 func splitCommandInput(text string) (string, string) {
@@ -208,7 +158,7 @@ func executeCommands(
 	stdinText string,
 	rawBody string,
 	input *CommandInput,
-	matchers []*Matcher,
+	commandSet *CommandSet,
 	wq chan *CommandOutput,
 	lifecycle StdinLifecycle,
 ) int {
@@ -218,8 +168,8 @@ func executeCommands(
 			continue
 		}
 		ret = -1
-		m, args := findMatchedMatcher(cmd, matchers)
-		if m == nil {
+		command, args := commandSet.Match(cmd)
+		if command == nil {
 			if i == 0 {
 				// キーワードにマッチしなかったらparse errorがあっても表示せず終了
 				return 0
@@ -247,13 +197,13 @@ func executeCommands(
 		if parseErr != nil {
 			// parse errorありで1つ目のコマンドがキーワードマッチした場合
 			// エラー表示して処理全体を終了
-			ret = writeParseError(wq, input, parseErr, m)
+			ret = writeParseError(wq, input, parseErr, command)
 			return ret
 		}
-		if rawBody != "" && m.hasTrailingWildcard() {
+		if rawBody != "" && command.hasTrailingWildcard() {
 			args = append(args, rawBody)
 		}
-		ret = runMatchedCommand(ctx, m, args, stdinText, input, wq, lifecycle)
+		ret = runMatchedCommand(ctx, command, args, stdinText, input, wq, lifecycle)
 	}
 	return ret
 }
@@ -265,8 +215,8 @@ func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
 	return ret != 0 && cmd.skipIfFailed
 }
 
-func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, m *Matcher) int {
-	syserr := newErrWriter(wq, m.config.SystemReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
+func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, command *Command) int {
+	syserr := newErrWriter(wq, command.config.SystemReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
 	_ = syserr.Flush()
 	return 2
@@ -281,7 +231,7 @@ func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *pars
 
 func runMatchedCommand(
 	ctx context.Context,
-	m *Matcher,
+	command *Command,
 	args []string,
 	stdinText string,
 	input *CommandInput,
@@ -290,21 +240,21 @@ func runMatchedCommand(
 ) int {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if m.config.Timeout > 0 {
+	if command.config.Timeout > 0 {
 		cmdCtx, cancel = context.WithTimeout(
 			ctx,
-			time.Duration(m.config.Timeout)*time.Second,
+			time.Duration(command.config.Timeout)*time.Second,
 		)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
 	}
 	defer cancel()
 
-	execCmd := m.runner.CommandContext(cmdCtx, args[0], args[1:]...)
+	execCmd := command.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	setSlackContextEnvironment(execCmd, input.ConversationID)
-	stdout := newStdWriter(wq, m.config.ReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
-	stderr := newErrWriter(wq, m.config.ReplyConfig, input.ConversationID, input.MessageID, m.config.OutputFlushInterval)
-	if m.config.TTY {
+	stdout := newStdWriter(wq, command.config.ReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
+	stderr := newErrWriter(wq, command.config.ReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
+	if command.config.TTY {
 		terminal := newTTYOutputNormalizer(stdout)
 		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {
 			cmd.SetTTY()
@@ -313,7 +263,7 @@ func runMatchedCommand(
 		execCmd.SetStderr(terminal)
 		ret := runWithLifecycleInputWithLineEnding(
 			execCmd,
-			m.config.Timeout,
+			command.config.Timeout,
 			0,
 			stdinText,
 			input.ConversationID,
@@ -325,7 +275,7 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, m.config.Timeout, time.Duration(m.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle)
+	ret := runWithLifecycleInput(execCmd, command.config.Timeout, time.Duration(command.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle)
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -438,15 +388,4 @@ func parse(line string) ([]*parsedCommand, error) {
 		// 未対応のオペレータだった場合は次のイテレーションでparse error
 		line = string(line[i:])
 	}
-}
-
-// findMatchedMatcher はマッチャーと構築された引数を返します。
-// マッチしない場合は nil, nil を返します。
-func findMatchedMatcher(cmd *parsedCommand, matchers []*Matcher) (*Matcher, []string) {
-	for _, m := range matchers {
-		if args := m.build(cmd.args); len(args) > 0 {
-			return m, args
-		}
-	}
-	return nil, nil
 }

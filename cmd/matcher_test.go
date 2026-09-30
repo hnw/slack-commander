@@ -6,69 +6,69 @@ import (
 )
 
 func TestMatcher(t *testing.T) {
-	cfgs := []*CommandConfig{
+	cfgs := []*testCommandConfig{
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `ping 8.8.8.8`,
 				Command: `ping -c4 8.8.8.8`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `ping *`,
 				Command: `ping * -c4`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `ping *`,
 				Command: `/bin/sh -c "ping *"`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `echo *`,
 				Command: `/bin/echo *`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `echo *`,
 				Command: `/bin/echo "*"`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `echo *`,
 				Command: `/bin/echo '*'`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `foo * bar`,
 				Command: `*`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `openurl *`,
 				Command: `pwopen --no-sandbox *`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `openurl *`,
 				Command: `pwopen --no-sandbox *`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `openurl`,
 				Command: `pwopen --no-sandbox`,
 			},
 		},
 		{
-			ExecutionConfig: &ExecutionConfig{
+			testExecutionConfig: &testExecutionConfig{
 				Keyword: `deploy * bar`,
 				Command: `deploy * bar`,
 			},
@@ -102,8 +102,8 @@ func TestMatcher(t *testing.T) {
 	}
 
 	for i, cfg := range cfgs {
-		m := newMatcher(cfg.ExecutionConfig)
-		result := m.build(args[i])
+		command := testRuntimeCommand(cfg.testExecutionConfig, nil)
+		result := command.match(args[i])
 
 		if !reflect.DeepEqual(result, expects[i]) {
 			t.Errorf(
@@ -117,53 +117,41 @@ func TestMatcher(t *testing.T) {
 }
 
 func TestMatchSingleCommandRejectsChains(t *testing.T) {
-	configs := []*CommandConfig{NewCommandConfig(&ExecutionConfig{Keyword: "todo *", Command: "todo *"})}
-	if got := MatchSingleCommand("todo first", configs); got != configs[0] {
-		t.Fatalf("MatchSingleCommand() = %v, want configured command", got)
+	set := testCommandSet([]*testCommandConfig{newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})}, nil)
+	if got := set.MatchSingle("todo first"); got != set.commands[0] {
+		t.Fatalf("MatchSingle() = %v, want configured command", got)
 	}
 	for _, text := range []string{"todo first && todo second", "todo first || todo second", "todo first ; todo second"} {
-		if got := MatchSingleCommand(text, configs); got != nil {
-			t.Fatalf("MatchSingleCommand(%q) = %v, want nil", text, got)
+		if got := set.MatchSingle(text); got != nil {
+			t.Fatalf("MatchSingle(%q) = %v, want nil", text, got)
 		}
 	}
 }
 
 func TestMatcherExpandsAllWildcards(t *testing.T) {
-	m := newMatcher((&CommandConfig{ExecutionConfig: &ExecutionConfig{
-		Keyword: "echo *",
-		Command: "echo * *",
-	}}).ExecutionConfig)
-	if got, want := m.build([]string{"echo", "foo bar"}), []string{"echo", "foo bar", "foo bar"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("build() = %#v, want %#v", got, want)
+	command := testRuntimeCommand(&testExecutionConfig{Keyword: "echo *", Command: "echo * *"}, nil)
+	if got, want := command.match([]string{"echo", "foo bar"}), []string{"echo", "foo bar", "foo bar"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("match() = %#v, want %#v", got, want)
 	}
 }
 
 func TestMatcherLeavesCommandWildcardsWithoutKeywordWildcard(t *testing.T) {
-	m := newMatcher((&CommandConfig{ExecutionConfig: &ExecutionConfig{
-		Keyword: "echo",
-		Command: "echo *",
-	}}).ExecutionConfig)
-	if got, want := m.build([]string{"echo"}), []string{"echo", "*"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("build() = %#v, want %#v", got, want)
+	command := testRuntimeCommand(&testExecutionConfig{Keyword: "echo", Command: "echo *"}, nil)
+	if got, want := command.match([]string{"echo"}), []string{"echo", "*"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("match() = %#v, want %#v", got, want)
 	}
 }
 
 func TestMatcherDoesNotParseKeywordQuotes(t *testing.T) {
-	m := newMatcher((&CommandConfig{ExecutionConfig: &ExecutionConfig{
-		Keyword: `foo "bar baz"`,
-		Command: "echo",
-	}}).ExecutionConfig)
-	if got := m.build([]string{"foo", "bar baz"}); got != nil {
-		t.Fatalf("build() = %#v, want nil", got)
+	command := testRuntimeCommand(&testExecutionConfig{Keyword: `foo "bar baz"`, Command: "echo"}, nil)
+	if got := command.match([]string{"foo", "bar baz"}); got != nil {
+		t.Fatalf("match() = %#v, want nil", got)
 	}
 }
 
 func TestMatcherDoesNotParseKeywordBackslashes(t *testing.T) {
-	m := newMatcher((&CommandConfig{ExecutionConfig: &ExecutionConfig{
-		Keyword: `foo\ bar`,
-		Command: "echo",
-	}}).ExecutionConfig)
-	if got := m.build([]string{"foo bar"}); got != nil {
-		t.Fatalf("build() = %#v, want nil", got)
+	command := testRuntimeCommand(&testExecutionConfig{Keyword: `foo\ bar`, Command: "echo"}, nil)
+	if got := command.match([]string{"foo bar"}); got != nil {
+		t.Fatalf("match() = %#v, want nil", got)
 	}
 }

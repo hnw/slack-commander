@@ -119,7 +119,7 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	}); !live {
 		t.Fatalf("compose runner %T lacks interactive stdin", compose)
 	}
-	http := NewHTTPRunner(nil).CommandContext(context.Background(), "unused")
+	http := NewHTTPRunner(RunnerConfig{}).CommandContext(context.Background(), "unused")
 	if _, live := http.(interface {
 		RunWithStdin(int, func(io.WriteCloser)) int
 	}); live {
@@ -208,14 +208,13 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	config := NewCommandConfig(&ExecutionConfig{TTY: true})
-	matcher := &Matcher{config: config.ExecutionConfig, runner: NewExecRunner()}
+	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, NewExecRunner())
 	outputs := make(chan *CommandOutput, 10)
 	done := make(chan int, 1)
 	go func() {
 		done <- runMatchedCommand(
 			ctx,
-			matcher,
+			command,
 			[]string{
 				"/bin/sh",
 				"-c",
@@ -284,15 +283,12 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	capture := &stdinCaptureCmd{want: len(expected)}
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	matcher := &Matcher{
-		config: NewCommandConfig(&ExecutionConfig{TTY: true}).ExecutionConfig,
-		runner: singleCmdRunner{command: capture},
-	}
+	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, singleCmdRunner{command: capture})
 	done := make(chan int, 1)
 	go func() {
 		done <- runMatchedCommand(
 			ctx,
-			matcher,
+			command,
 			[]string{"unused"},
 			"initial",
 			&CommandInput{ConversationID: ConversationID(key)},
@@ -353,8 +349,8 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
-	cfg := NewCommandConfig(
-		&ExecutionConfig{Keyword: "agent", Command: "agent"},
+	cfg := newTestCommandConfig(
+		&testExecutionConfig{Keyword: "agent", Command: "agent"},
 	)
 	cfg.AllowInChain = false
 	cfg.InteractiveStdin = true
@@ -370,8 +366,8 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 			ctx,
 			rq,
 			wq,
-			[]*CommandConfig{cfg},
-			func(*ExecutionConfig) CommandRunner {
+			[]*testCommandConfig{cfg},
+			func(*testExecutionConfig) CommandRunner {
 				return singleCmdRunner{c}
 			},
 			&registry,
@@ -433,12 +429,12 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
-	cfg := NewCommandConfig(&ExecutionConfig{Keyword: "agent", Command: "agent"})
+	cfg := newTestCommandConfig(&testExecutionConfig{Keyword: "agent", Command: "agent"})
 	rq <- &CommandInput{Text: "agent\ninitial", ConversationID: key}
 	close(rq)
 	done := make(chan struct{})
 	go func() {
-		testExecutorWithLifecycle(context.Background(), rq, wq, []*CommandConfig{cfg}, func(*ExecutionConfig) CommandRunner {
+		testExecutorWithLifecycle(context.Background(), rq, wq, []*testCommandConfig{cfg}, func(*testExecutionConfig) CommandRunner {
 			return singleCmdRunner{probe}
 		}, &registry)
 		close(done)

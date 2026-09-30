@@ -66,7 +66,8 @@ func run(args []string) int {
 	logger := slog.New(handler)
 	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
-	cmdConfig := commandConfigs(cfg.Commands)
+	runnerFactory := newRunnerFactory()
+	commands := buildCommandSet(cfg.commandConfigs, runnerFactory)
 
 	api := slack.New(
 		cfg.SlackBotToken,
@@ -88,7 +89,7 @@ func run(args []string) int {
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	coordinator := cmd.NewConversationCoordinator(
-		cmdConfig,
+		commands,
 		pubsub.SlackRootTextResolver(smc),
 		func(input *cmd.CommandInput) bool {
 			select {
@@ -101,8 +102,7 @@ func run(args []string) int {
 		4096,
 	)
 	var executorWG sync.WaitGroup
-	executionConfigs := cmd.ExecutionConfigs(cmdConfig)
-	startWorkers(ctx, cfg.NumWorkers, commandQueue, coordinator, executionConfigs, outputQueue, &executorWG)
+	startWorkers(ctx, cfg.NumWorkers, commandQueue, coordinator, commands, outputQueue, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
 	go func() {
@@ -136,19 +136,16 @@ func run(args []string) int {
 }
 
 func newRunnerFactory() cmd.RunnerFactory {
-	var composeRunnerOnce sync.Once
-	var composeRunner cmd.CommandRunner
-	return func(config *cmd.ExecutionConfig) cmd.CommandRunner {
+	execRunner := cmd.NewExecRunner()
+	composeRunner := cmd.NewComposeRunner("")
+	return func(config cmd.RunnerConfig) cmd.CommandRunner {
 		if config.Runner == cmd.RunnerCompose {
-			composeRunnerOnce.Do(func() {
-				composeRunner = cmd.NewComposeRunner("")
-			})
 			return composeRunner
 		}
 		if config.Runner == cmd.RunnerHTTP {
 			return cmd.NewHTTPRunner(config)
 		}
-		return cmd.NewExecRunner()
+		return execRunner
 	}
 }
 
@@ -157,12 +154,12 @@ func startWorkers(
 	workers int,
 	inputs <-chan *cmd.CommandInput,
 	coordinator *cmd.ConversationCoordinator,
-	configs []*cmd.ExecutionConfig,
+	commands *cmd.CommandSet,
 	outputQueue chan *cmd.CommandOutput,
 	wg *sync.WaitGroup,
 ) {
 	for range workers {
-		executor := cmd.NewExecutor(configs, newRunnerFactory(), outputQueue)
+		executor := cmd.NewExecutor(commands, outputQueue)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

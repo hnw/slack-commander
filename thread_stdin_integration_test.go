@@ -20,14 +20,9 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	defer cancel()
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	root := cmd.NewCommandConfig(&cmd.ExecutionConfig{
-		Keyword: "agent", Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`, Timeout: 10,
-	})
-	root.AllowInChain = false
-	root.InteractiveStdin = true
-	root.ThreadReplyMode = cmd.ThreadReplyStdin
-	configs := []*cmd.CommandConfig{root}
-	coordinator := cmd.NewConversationCoordinator(configs, nil, func(input *cmd.CommandInput) bool {
+	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval, ThreadReplyMode: cmd.ThreadReplyStdin}, cmd.NewExecRunner(), nil)
+	commands := cmd.NewCommandSet([]*cmd.Command{root})
+	coordinator := cmd.NewConversationCoordinator(commands, nil, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true
@@ -36,7 +31,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		}
 	}, 1)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 2, requests, coordinator, cmd.ExecutionConfigs(configs), outputs, &workers)
+	startWorkers(ctx, 2, requests, coordinator, commands, outputs, &workers)
 	listenerDone := make(chan struct{})
 	go func() {
 		pubsub.SlackListener(ctx, smc, pubsub.Config{

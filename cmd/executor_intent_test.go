@@ -82,12 +82,12 @@ func (c *fakeCmd) Run(_ int) int {
 }
 
 func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
-	config := NewCommandConfig(&ExecutionConfig{Keyword: "todo *", Command: "todo *", InputBodyMode: InputBodyArgument})
+	config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *", InputBodyMode: InputBodyArgument})
 	runner := &fakeRunner{}
 	wq := make(chan *CommandOutput, 10)
-	executor := NewExecutor(ExecutionConfigs([]*CommandConfig{config}), func(*ExecutionConfig) CommandRunner {
+	executor := NewExecutor(testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
 		return runner
-	}, wq)
+	}), wq)
 	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n"}, nil)
 	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
@@ -123,8 +123,8 @@ func TestExecutorArgumentBodyAppendsOnlyForTrailingWildcard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&ExecutionConfig{Keyword: tt.keyword, Command: tt.command, InputBodyMode: InputBodyArgument})
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Command: tt.command, InputBodyMode: InputBodyArgument})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != 1 || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want args %#v", calls, tt.want)
 			}
@@ -161,8 +161,8 @@ func TestExecutorArgumentBodyPassesToHTTPOnlyForTrailingWildcard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&ExecutionConfig{Keyword: tt.keyword, Runner: "http", InputBodyMode: InputBodyArgument})
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Runner: "http", InputBodyMode: InputBodyArgument})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != 1 || calls[0].name != "http" || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want HTTP args %#v", calls, tt.want)
 			}
@@ -171,43 +171,43 @@ func TestExecutorArgumentBodyPassesToHTTPOnlyForTrailingWildcard(t *testing.T) {
 }
 
 func TestExecutorRejectsChainsContainingDisallowedCommand(t *testing.T) {
-	newConfig := func(keyword string, allowInChain bool) *CommandConfig {
-		config := NewCommandConfig(&ExecutionConfig{Keyword: keyword, Command: keyword, AllowInChain: allowInChain})
+	newConfig := func(keyword string, allowInChain bool) *testCommandConfig {
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: keyword, Command: keyword, AllowInChain: allowInChain})
 		return config
 	}
 	tests := []struct {
 		name      string
 		input     string
-		configs   []*CommandConfig
+		configs   []*testCommandConfig
 		wantCalls int
 	}{
 		{
 			name: "oneshot chain executes", input: "first ; second", wantCalls: 2,
-			configs: []*CommandConfig{newConfig("first", true), newConfig("second", true)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
 		},
 		{
 			name: "stdin chain rejects", input: "stdin-first ; stdin-second",
-			configs: []*CommandConfig{newConfig("stdin-first", false), newConfig("stdin-second", false)},
+			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("stdin-second", false)},
 		},
 		{
 			name: "command chain rejects", input: "command-first ; command-second",
-			configs: []*CommandConfig{newConfig("command-first", false), newConfig("command-second", false)},
+			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("command-second", false)},
 		},
 		{
 			name: "oneshot then stdin rejects", input: "first ; stdin-second",
-			configs: []*CommandConfig{newConfig("first", true), newConfig("stdin-second", false)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("stdin-second", false)},
 		},
 		{
 			name: "oneshot then command rejects", input: "first ; command-second",
-			configs: []*CommandConfig{newConfig("first", true), newConfig("command-second", false)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("command-second", false)},
 		},
 		{
 			name: "stdin then oneshot rejects", input: "stdin-first ; second",
-			configs: []*CommandConfig{newConfig("stdin-first", false), newConfig("second", true)},
+			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("second", true)},
 		},
 		{
 			name: "command then oneshot rejects", input: "command-first ; second",
-			configs: []*CommandConfig{newConfig("command-first", false), newConfig("second", true)},
+			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("second", true)},
 		},
 	}
 
@@ -242,24 +242,24 @@ func drainOutputs(ch chan *CommandOutput) []*CommandOutput {
 func runExecutorOnce(
 	t *testing.T,
 	input string,
-	cfgs []*CommandConfig,
+	cfgs []*testCommandConfig,
 ) ([]fakeCall, []*CommandOutput) {
 	t.Helper()
 	wq := make(chan *CommandOutput, 20)
 	runner := &fakeRunner{}
-	executor := NewExecutor(ExecutionConfigs(cfgs), func(*ExecutionConfig) CommandRunner {
+	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
 		return runner
-	}, wq)
+	}), wq)
 	executor.Execute(context.Background(), &CommandInput{Text: input}, nil)
 
 	return runner.Calls(), drainOutputs(wq)
 }
 
-func testCommandConfigs() []*CommandConfig {
-	return []*CommandConfig{
-		NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true}),
-		NewCommandConfig(&ExecutionConfig{Keyword: "deploy *", Command: "deploy *", AllowInChain: true}),
-		NewCommandConfig(&ExecutionConfig{Keyword: "echo *", Command: "echo *", AllowInChain: true}),
+func testCommandConfigs() []*testCommandConfig {
+	return []*testCommandConfig{
+		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Keyword: "deploy *", Command: "deploy *", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *", AllowInChain: true}),
 	}
 }
 
@@ -300,10 +300,10 @@ func TestExecutorInputBodyModes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&ExecutionConfig{Keyword: "todo *", Command: "todo *"})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})
 			config.AllowInChain = tt.allowInChain
 			config.InputBodyMode = tt.inputBodyMode
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != tt.wantCalls {
 				t.Fatalf("calls = %#v, want %d calls", calls, tt.wantCalls)
 			}
@@ -316,9 +316,9 @@ func TestExecutorInputBodyModes(t *testing.T) {
 
 func TestExecutorPropagatesConversationID(t *testing.T) {
 	wq := make(chan *CommandOutput, 20)
-	executor := NewExecutor(ExecutionConfigs(testCommandConfigs()), func(*ExecutionConfig) CommandRunner {
+	executor := NewExecutor(testCommandSet(testCommandConfigs(), func(*testExecutionConfig) CommandRunner {
 		return contextRunner{}
-	}, wq)
+	}), wq)
 
 	conversation := ConversationID{
 		ChannelID:     "C123",
@@ -393,10 +393,10 @@ func testExecutorParseErrorWhenIntentMatches(t *testing.T) {
 func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 	t.Run("parse error uses matched command setting", func(t *testing.T) {
 		systemConfig := &struct{ replyBroadcast bool }{replyBroadcast: false}
-		config := NewCommandConfig(&ExecutionConfig{Keyword: "echo *", Command: "echo *"})
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *"})
 		config.SystemReplyConfig = systemConfig
 
-		_, outputs := runExecutorOnce(t, "echo \"hello", []*CommandConfig{config})
+		_, outputs := runExecutorOnce(t, "echo \"hello", []*testCommandConfig{config})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != systemConfig {
@@ -409,8 +409,8 @@ func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 	})
 
 	t.Run("unmatched command keeps default setting", func(t *testing.T) {
-		config := NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true})
-		_, outputs := runExecutorOnce(t, "date && missing", []*CommandConfig{config})
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true})
+		_, outputs := runExecutorOnce(t, "date && missing", []*testCommandConfig{config})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != nil {

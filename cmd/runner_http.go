@@ -10,11 +10,11 @@ import (
 )
 
 type httpRunner struct {
-	config *ExecutionConfig
+	config RunnerConfig
 }
 
 // NewHTTPRunner returns a runner backed by net/http.
-func NewHTTPRunner(config *ExecutionConfig) CommandRunner {
+func NewHTTPRunner(config RunnerConfig) CommandRunner {
 	return &httpRunner{config: config}
 }
 
@@ -38,7 +38,7 @@ func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string
 
 type httpCmd struct {
 	ctx         context.Context
-	config      *ExecutionConfig
+	config      RunnerConfig
 	wildcard    string
 	hasWildcard bool
 	stdin       io.Reader
@@ -80,9 +80,6 @@ func (c *httpCmd) Run(timeout int) int {
 }
 
 func (c *httpCmd) validateConfig() error {
-	if c.config == nil {
-		return errors.New("http config is nil")
-	}
 	if strings.TrimSpace(c.config.URL) == "" {
 		return errors.New("url is required for http runner")
 	}

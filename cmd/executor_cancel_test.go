@@ -42,11 +42,11 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 	wq := make(chan *CommandOutput, 10)
 	started := make(chan struct{}, 1)
 	runner := &blockingRunner{started: started}
-	cfgs := []*CommandConfig{
-		NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"}),
+	cfgs := []*testCommandConfig{
+		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date"}),
 	}
 
-	executor := NewExecutor(ExecutionConfigs(cfgs), func(*ExecutionConfig) CommandRunner { return runner }, wq)
+	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
 	done := make(chan struct{})
 	go func() { executor.Execute(ctx, &CommandInput{Text: "date"}, nil); close(done) }()
 
@@ -82,11 +82,11 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 	started := make(chan struct{}, 1)
 	runner := &blockingRunner{started: started}
 
-	cfgs := []*CommandConfig{
-		NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date", Timeout: 1}),
+	cfgs := []*testCommandConfig{
+		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", Timeout: 1}),
 	}
 
-	executor := NewExecutor(ExecutionConfigs(cfgs), func(*ExecutionConfig) CommandRunner { return runner }, wq)
+	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
 	done := make(chan struct{})
 	go func() { executor.Execute(context.Background(), &CommandInput{Text: "date"}, nil); close(done) }()
 

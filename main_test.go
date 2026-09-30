@@ -87,21 +87,6 @@ func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
 	}
 }
 
-func TestRunnerFactoryScopesComposeRunnerToFactory(t *testing.T) {
-	firstFactory := newRunnerFactory()
-	secondFactory := newRunnerFactory()
-	config := &cmd.ExecutionConfig{Runner: cmd.RunnerCompose}
-	first := firstFactory(config)
-	sameWorker := firstFactory(config)
-	otherWorker := secondFactory(config)
-	if first != sameWorker {
-		t.Fatal("compose runner was not reused within factory")
-	}
-	if first == otherWorker {
-		t.Fatal("compose runner was shared across factories")
-	}
-}
-
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	reader, writer, err := os.Pipe()

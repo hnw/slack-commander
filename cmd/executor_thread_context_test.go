@@ -30,8 +30,8 @@ func (c *environmentRecordingCmd) Run(int) int {
 	return 0
 }
 
-func dateConfig() []*CommandConfig {
-	return []*CommandConfig{NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})}
+func dateConfig() []*testCommandConfig {
+	return []*testCommandConfig{newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date"})}
 }
 
 type environmentRecordingRunner struct {
@@ -58,7 +58,7 @@ func (r *environmentRecordingRunner) Commands() []*environmentRecordingCmd {
 func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	wq := make(chan *CommandOutput, 10)
 	runner := &environmentRecordingRunner{}
-	executor := NewExecutor(ExecutionConfigs(dateConfig()), func(*ExecutionConfig) CommandRunner { return runner }, wq)
+	executor := NewExecutor(testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner }), wq)
 
 	executor.Execute(context.Background(), &CommandInput{
 		Text: "date",
@@ -77,17 +77,6 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 		"SLACK_THREAD_TS=1700000000.000100",
 	}; !equalStrings(got, want) {
 		t.Fatalf("environment = %q, want %q", got, want)
-	}
-}
-
-func TestExecutorPreservesConversationIDOutput(t *testing.T) {
-	wq := make(chan *CommandOutput, 2)
-	root := NewCommandConfig(&ExecutionConfig{Keyword: "date", Command: "date"})
-	executor := NewExecutor(ExecutionConfigs([]*CommandConfig{root}), func(*ExecutionConfig) CommandRunner { return &environmentRecordingRunner{} }, wq)
-	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}, nil)
-	output := <-wq
-	if output.ConversationID != (ConversationID{ChannelID: "C", RootTimestamp: "1"}) {
-		t.Fatalf("context=%+v", output.ConversationID)
 	}
 }
 

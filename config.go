@@ -32,24 +32,26 @@ type Config struct {
 	PubSubConfig
 	NumWorkers          int       `toml:"num_workers"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
-	Commands            []*CommandConfig
+	Commands            []*RawCommandConfig
+	commandConfigs      []*cmd.CommandConfig
 }
 
-type CommandConfig struct {
-	cmd.ExecutionConfig
+type RawCommandConfig struct {
+	cmd.MatcherConfig
+	cmd.RunnerConfig
+	cmd.ExecutorConfig
 	pubsub.ReplyConfig
-	Interaction         string              `toml:"interaction"`
-	ThreadReplyMode     cmd.ThreadReplyMode `toml:"-"`
-	OutputFlushInterval *Duration           `toml:"output_flush_interval"`
-	Replies             []*ReplyCommandConfig
+	Interaction         string    `toml:"interaction"`
+	OutputFlushInterval *Duration `toml:"output_flush_interval"`
+	Replies             []*RawReplyCommandConfig
 }
 
-// ReplyCommandConfig is a thread-reply command definition.
+// RawReplyCommandConfig is a thread-reply command definition.
 // It deliberately has no Replies field: nested reply routing is unsupported.
-type ReplyCommandConfig struct {
-	cmd.ExecutionConfig
+type RawReplyCommandConfig struct {
+	cmd.MatcherConfig
+	cmd.RunnerConfig
 	pubsub.ReplyConfig
-	Runner              string    `toml:"runner"`
 	Timeout             *int      `toml:"timeout"`
 	StdinIdleTimeout    *int      `toml:"stdin_idle_timeout"`
 	TTY                 *bool     `toml:"tty"`
@@ -75,7 +77,7 @@ func loadConfig(path string) (*Config, error) {
 	if err := decodeConfig(file, cfg); err != nil {
 		return nil, err
 	}
-	if err := validateConfig(cfg); err != nil {
+	if err := resolveConfig(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -104,40 +106,7 @@ func formatTOMLError(err error) error {
 	return err
 }
 
-func resolveReplyCommand(
-	parent *CommandConfig,
-	reply *ReplyCommandConfig,
-) (*cmd.ExecutionConfig, *pubsub.ReplyConfig) {
-	executionConfig := reply.ExecutionConfig
-	if reply.Runner == "" {
-		executionConfig.Runner = parent.Runner
-	} else {
-		executionConfig.Runner = reply.Runner
-	}
-	if reply.Timeout == nil {
-		executionConfig.Timeout = parent.Timeout
-	} else {
-		executionConfig.Timeout = *reply.Timeout
-	}
-	if reply.StdinIdleTimeout == nil {
-		executionConfig.StdinIdleTimeout = parent.StdinIdleTimeout
-	} else {
-		executionConfig.StdinIdleTimeout = *reply.StdinIdleTimeout
-	}
-	if reply.OutputFlushInterval == nil {
-		executionConfig.OutputFlushInterval = parent.ExecutionConfig.OutputFlushInterval
-	} else {
-		executionConfig.OutputFlushInterval = time.Duration(*reply.OutputFlushInterval)
-	}
-	if reply.TTY == nil {
-		executionConfig.TTY = parent.TTY
-	} else {
-		executionConfig.TTY = *reply.TTY
-	}
-	executionConfig.AllowInChain = parent.AllowInChain
-	executionConfig.InteractiveStdin = parent.InteractiveStdin
-	executionConfig.InputBodyMode = parent.InputBodyMode
-
+func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawReplyCommandConfig) *pubsub.ReplyConfig {
 	replyConfig := &pubsub.ReplyConfig{
 		Username:       parent.Username,
 		IconEmoji:      parent.IconEmoji,
@@ -160,22 +129,20 @@ func resolveReplyCommand(
 	if reply.OutputFormat != "" {
 		replyConfig.OutputFormat = reply.OutputFormat
 	}
-	executionConfig.ReplyConfig = replyConfig
-	executionConfig.SystemReplyConfig = pubsub.NewSystemReplyConfig(replyConfig.ReplyBroadcast)
-	return &executionConfig, replyConfig
+	return replyConfig
 }
 
-func commandConfigs(configs []*CommandConfig) []*cmd.CommandConfig {
-	converted := make([]*cmd.CommandConfig, len(configs))
-	for i, config := range configs {
-		converted[i] = cmd.NewCommandConfig(&config.ExecutionConfig)
-		converted[i].ThreadReplyMode = config.ThreadReplyMode
-		converted[i].Replies = make([]*cmd.CommandConfig, len(config.Replies))
-		for j, reply := range config.Replies {
-			converted[i].Replies[j] = cmd.NewCommandConfig(&reply.ExecutionConfig)
-		}
+func buildCommandSet(configs []*cmd.CommandConfig, factory cmd.RunnerFactory) *cmd.CommandSet {
+	commands := make([]*cmd.Command, 0, len(configs))
+	for _, config := range configs {
+		commands = append(commands, buildCommand(config, factory))
 	}
-	return converted
+	return cmd.NewCommandSet(commands)
+}
+
+func buildCommand(config *cmd.CommandConfig, factory cmd.RunnerFactory) *cmd.Command {
+	replies := buildCommandSet(config.Replies, factory)
+	return cmd.NewCommand(*config, factory(config.RunnerConfig), replies)
 }
 
 func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
@@ -185,64 +152,91 @@ func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.D
 	return inherited
 }
 
-func validateCommandConfig(c *CommandConfig, inheritedOutputFlushInterval time.Duration) error {
-	outputFlushInterval := resolveOutputFlushInterval(
-		c.OutputFlushInterval,
-		inheritedOutputFlushInterval,
-	)
-	c.ExecutionConfig.OutputFlushInterval = outputFlushInterval
-	if validationErr := validateReplyConfig(&c.ReplyConfig); validationErr != nil {
-		return fmt.Errorf("keyword '%s': %w", c.Keyword, validationErr)
+func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval time.Duration) (*cmd.CommandConfig, error) {
+	if validationErr := validateReplyConfig(&raw.ReplyConfig); validationErr != nil {
+		return nil, fmt.Errorf("keyword '%s': %w", raw.Keyword, validationErr)
 	}
-	interaction, interactionErr := normalizeInteraction(c.Interaction)
-	if interactionErr != nil {
-		return fmt.Errorf("keyword '%s': %w", c.Keyword, interactionErr)
+	interaction, err := normalizeInteraction(raw.Interaction)
+	if err != nil {
+		return nil, fmt.Errorf("keyword '%s': %w", raw.Keyword, err)
 	}
-	c.Interaction = interaction
-	resolveInteraction(c)
-	c.ExecutionConfig.ReplyConfig = &c.ReplyConfig
-	c.SystemReplyConfig = pubsub.NewSystemReplyConfig(c.ReplyBroadcast)
-	if validationErr := validateCommandExecutionConfig(&c.ExecutionConfig); validationErr != nil {
-		return validationErr
+	runnerConfig := raw.RunnerConfig
+	if _, err := normalizeRunner(&runnerConfig, raw.Keyword); err != nil {
+		return nil, err
 	}
-	if strings.EqualFold(strings.TrimSpace(c.Runner), cmd.RunnerHTTP) && c.Interaction == cmd.InteractionStdin {
-		return fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", c.Keyword)
+	executorConfig, threadReplyMode := resolveInteraction(interaction, raw.ExecutorConfig)
+	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, inheritedOutputFlushInterval)
+	if err := validateCommandDefinition(raw.MatcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
+		return nil, err
 	}
-	for _, reply := range c.Replies {
-		definition, replyConfig := resolveReplyCommand(c, reply)
-		if validationErr := validateReplyConfig(replyConfig); validationErr != nil {
-			return fmt.Errorf("keyword '%s': %w", reply.Keyword, validationErr)
+	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
+		return nil, fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", raw.Keyword)
+	}
+	config := &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: &raw.ReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(raw.ReplyBroadcast), ThreadReplyMode: threadReplyMode}
+	for _, reply := range raw.Replies {
+		resolved, err := resolveReplyCommandConfig(config, reply)
+		if err != nil {
+			return nil, err
 		}
-		if validationErr := validateCommandExecutionConfig(definition); validationErr != nil {
-			return validationErr
-		}
-		reply.ExecutionConfig = *definition
-		reply.ReplyConfig = *replyConfig
+		config.Replies = append(config.Replies, resolved)
 	}
-	return nil
+	return config, nil
 }
 
-func resolveInteraction(c *CommandConfig) {
-	switch c.Interaction {
+func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawReplyCommandConfig) (*cmd.CommandConfig, error) {
+	runnerConfig := raw.RunnerConfig
+	if runnerConfig.Runner == "" {
+		runnerConfig.Runner = parent.Runner
+	}
+	if _, err := normalizeRunner(&runnerConfig, raw.Keyword); err != nil {
+		return nil, err
+	}
+	executorConfig := parent.ExecutorConfig
+	if raw.Timeout != nil {
+		executorConfig.Timeout = *raw.Timeout
+	}
+	if raw.StdinIdleTimeout != nil {
+		executorConfig.StdinIdleTimeout = *raw.StdinIdleTimeout
+	}
+	if raw.TTY != nil {
+		executorConfig.TTY = *raw.TTY
+	}
+	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, parent.OutputFlushInterval)
+	replyConfig, ok := parent.ReplyConfig.(*pubsub.ReplyConfig)
+	if !ok {
+		return nil, errors.New("resolved parent reply config has unexpected type")
+	}
+	resolvedReplyConfig := resolveReplyConfig(*replyConfig, raw)
+	if err := validateReplyConfig(resolvedReplyConfig); err != nil {
+		return nil, fmt.Errorf("keyword '%s': %w", raw.Keyword, err)
+	}
+	if err := validateCommandDefinition(raw.MatcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
+		return nil, err
+	}
+	return &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast), ThreadReplyMode: cmd.ThreadReplyIgnore}, nil
+}
+
+func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ExecutorConfig, cmd.ThreadReplyMode) {
+	switch interaction {
 	case cmd.InteractionStdin:
-		c.AllowInChain = false
-		c.InteractiveStdin = true
-		c.InputBodyMode = cmd.InputBodyStdin
-		c.ThreadReplyMode = cmd.ThreadReplyStdin
+		executorConfig.AllowInChain = false
+		executorConfig.InteractiveStdin = true
+		executorConfig.InputBodyMode = cmd.InputBodyStdin
+		return executorConfig, cmd.ThreadReplyStdin
 	case cmd.InteractionCommand:
-		c.AllowInChain = false
-		c.InteractiveStdin = false
-		c.InputBodyMode = cmd.InputBodyArgument
-		c.ThreadReplyMode = cmd.ThreadReplyCommand
+		executorConfig.AllowInChain = false
+		executorConfig.InteractiveStdin = false
+		executorConfig.InputBodyMode = cmd.InputBodyArgument
+		return executorConfig, cmd.ThreadReplyCommand
 	default:
-		c.AllowInChain = true
-		c.InteractiveStdin = false
-		c.InputBodyMode = cmd.InputBodyStdin
-		c.ThreadReplyMode = cmd.ThreadReplyIgnore
+		executorConfig.AllowInChain = true
+		executorConfig.InteractiveStdin = false
+		executorConfig.InputBodyMode = cmd.InputBodyStdin
+		return executorConfig, cmd.ThreadReplyIgnore
 	}
 }
 
-func validateConfig(cfg *Config) error {
+func resolveConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.SlackBotToken) == "" {
 		return errors.New("slack_bot_token is required")
 	}
@@ -266,10 +260,13 @@ func validateConfig(cfg *Config) error {
 		return errors.New("output_flush_interval must be >= 0")
 	}
 
+	cfg.commandConfigs = make([]*cmd.CommandConfig, 0, len(cfg.Commands))
 	for _, c := range cfg.Commands {
-		if err := validateCommandConfig(c, outputFlushInterval); err != nil {
+		resolved, err := resolveCommandConfig(c, outputFlushInterval)
+		if err != nil {
 			return err
 		}
+		cfg.commandConfigs = append(cfg.commandConfigs, resolved)
 	}
 	return nil
 }
@@ -295,44 +292,40 @@ func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
 	}
 }
 
-func validateCommandExecutionConfig(c *cmd.ExecutionConfig) error {
-	if strings.TrimSpace(c.Keyword) == "" {
+func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.RunnerConfig, executorConfig cmd.ExecutorConfig, outputFlushInterval time.Duration) error {
+	if strings.TrimSpace(matcher.Keyword) == "" {
 		return errors.New("keyword is required")
 	}
-	if err := validateKeywordWildcards(c.Keyword); err != nil {
+	if err := validateKeywordWildcards(matcher.Keyword); err != nil {
 		return err
 	}
-	if c.Timeout < 0 {
-		return fmt.Errorf("timeout must be >= 0 for keyword %q", c.Keyword)
+	if executorConfig.Timeout < 0 {
+		return fmt.Errorf("timeout must be >= 0 for keyword %q", matcher.Keyword)
 	}
-	if c.StdinIdleTimeout < 0 {
-		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", c.Keyword)
+	if executorConfig.StdinIdleTimeout < 0 {
+		return fmt.Errorf("stdin_idle_timeout must be >= 0 for keyword '%s'", matcher.Keyword)
 	}
-	if c.OutputFlushInterval < 0 {
-		return fmt.Errorf("output_flush_interval must be >= 0 for keyword %q", c.Keyword)
+	if outputFlushInterval < 0 {
+		return fmt.Errorf("output_flush_interval must be >= 0 for keyword %q", matcher.Keyword)
 	}
-	runner, err := normalizeRunner(c)
-	if err != nil {
+	runner := runnerConfig.Runner
+	if err := validateTTY(executorConfig, matcher.Keyword); err != nil {
 		return err
 	}
-	if err := validateTTY(c); err != nil {
-		return err
+	if executorConfig.TTY && runner == cmd.RunnerHTTP {
+		return fmt.Errorf("tty is not supported for http runner (keyword '%s')", matcher.Keyword)
 	}
 	if runner != cmd.RunnerHTTP {
-		if strings.TrimSpace(c.Command) == "" {
-			return fmt.Errorf("command is required for keyword %q", c.Keyword)
+		if strings.TrimSpace(runnerConfig.Command) == "" {
+			return fmt.Errorf("command is required for keyword %q", matcher.Keyword)
 		}
-		if strings.HasPrefix(c.Command, "*") {
-			return fmt.Errorf("command field must not start with '*': %s", c.Command)
+		if strings.HasPrefix(runnerConfig.Command, "*") {
+			return fmt.Errorf("command field must not start with '*': %s", runnerConfig.Command)
 		}
 		return nil
 	}
-	c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
-	if c.Method == "" {
-		c.Method = "POST"
-	}
-	if strings.TrimSpace(c.URL) == "" {
-		return fmt.Errorf("url is required for http runner (keyword '%s')", c.Keyword)
+	if strings.TrimSpace(runnerConfig.URL) == "" {
+		return fmt.Errorf("url is required for http runner (keyword '%s')", matcher.Keyword)
 	}
 	return nil
 }
@@ -350,17 +343,17 @@ func validateKeywordWildcards(keyword string) error {
 	return nil
 }
 
-func validateTTY(c *cmd.ExecutionConfig) error {
+func validateTTY(c cmd.ExecutorConfig, keyword string) error {
 	if c.TTY && c.StdinIdleTimeout > 0 {
 		return fmt.Errorf(
 			"tty cannot be used with stdin_idle_timeout for keyword '%s'",
-			c.Keyword,
+			keyword,
 		)
 	}
 	return nil
 }
 
-func normalizeRunner(c *cmd.ExecutionConfig) (string, error) {
+func normalizeRunner(c *cmd.RunnerConfig, keyword string) (string, error) {
 	runner := strings.ToLower(strings.TrimSpace(c.Runner))
 	if runner == "" {
 		runner = cmd.RunnerExec
@@ -369,10 +362,13 @@ func normalizeRunner(c *cmd.ExecutionConfig) (string, error) {
 	case cmd.RunnerExec, cmd.RunnerCompose, cmd.RunnerHTTP:
 		c.Runner = runner
 	default:
-		return "", fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, c.Keyword)
+		return "", fmt.Errorf("unknown runner '%s' for keyword '%s'", c.Runner, keyword)
 	}
-	if c.TTY && runner == cmd.RunnerHTTP {
-		return "", fmt.Errorf("tty is not supported for http runner (keyword '%s')", c.Keyword)
+	if runner == cmd.RunnerHTTP {
+		c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
+		if c.Method == "" {
+			c.Method = "POST"
+		}
 	}
 	return runner, nil
 }
