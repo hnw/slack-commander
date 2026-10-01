@@ -41,7 +41,7 @@ type RawCommandConfig struct {
 	cmd.RunnerConfig
 	RawExecutorConfig
 	pubsub.ReplyConfig
-	pubsub.ListenerConfig
+	pubsub.RawListenerConfig
 	Interaction         string    `toml:"interaction"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
 	Replies             []*RawCommandConfig
@@ -133,7 +133,11 @@ func buildCommandSet(configs []*cmd.CommandConfig, factory cmd.RunnerFactory) *c
 
 func buildCommand(config *cmd.CommandConfig, factory cmd.RunnerFactory) *cmd.Command {
 	replies := buildCommandSet(config.Replies, factory)
-	return cmd.NewCommand(*config, factory(config.RunnerConfig), replies)
+	var runner cmd.CommandRunner
+	if !config.SyntheticStdinReply {
+		runner = factory(config.RunnerConfig)
+	}
+	return cmd.NewCommand(*config, runner, replies)
 }
 
 func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
@@ -155,7 +159,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	if _, err := normalizeRunner(&runnerConfig, raw.Keyword); err != nil {
 		return nil, err
 	}
-	executorConfig, threadReplyMode := resolveInteraction(interaction, resolveExecutorConfig(cmd.ExecutorConfig{}, raw.RawExecutorConfig))
+	executorConfig := resolveInteraction(interaction, resolveExecutorConfig(cmd.ExecutorConfig{}, raw.RawExecutorConfig))
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, inheritedOutputFlushInterval)
 	if err := validateCommandDefinition(raw.MatcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, err
@@ -163,13 +167,24 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
 		return nil, fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", raw.Keyword)
 	}
-	config := &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: &raw.ReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(raw.ReplyBroadcast), ThreadReplyMode: threadReplyMode}
+	config := &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: &raw.ReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(raw.ReplyBroadcast)}
+	configuredReplies := make([]*cmd.CommandConfig, 0, len(raw.Replies))
 	for _, reply := range raw.Replies {
 		resolved, err := resolveReplyCommandConfig(config, reply)
 		if err != nil {
 			return nil, err
 		}
-		config.Replies = append(config.Replies, resolved)
+		configuredReplies = append(configuredReplies, resolved)
+	}
+	switch interaction {
+	case cmd.InteractionCommand:
+		config.Replies = configuredReplies
+	case cmd.InteractionStdin:
+		config.Replies = []*cmd.CommandConfig{{
+			MatcherConfig:       cmd.MatcherConfig{Keyword: "*"},
+			ExecutorConfig:      executorConfig,
+			SyntheticStdinReply: true,
+		}}
 	}
 	return config, nil
 }
@@ -201,7 +216,7 @@ func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawCommandConfig)
 	if err := validateCommandDefinition(raw.MatcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, err
 	}
-	return &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast), ThreadReplyMode: cmd.ThreadReplyIgnore}, nil
+	return &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast)}, nil
 }
 
 func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {
@@ -217,23 +232,23 @@ func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.E
 	return base
 }
 
-func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ExecutorConfig, cmd.ThreadReplyMode) {
+func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) cmd.ExecutorConfig {
 	switch interaction {
 	case cmd.InteractionStdin:
 		executorConfig.AllowInChain = false
 		executorConfig.InteractiveStdin = true
 		executorConfig.InputBodyMode = cmd.InputBodyStdin
-		return executorConfig, cmd.ThreadReplyStdin
+		return executorConfig
 	case cmd.InteractionCommand:
 		executorConfig.AllowInChain = false
 		executorConfig.InteractiveStdin = false
 		executorConfig.InputBodyMode = cmd.InputBodyArgument
-		return executorConfig, cmd.ThreadReplyCommand
+		return executorConfig
 	default:
 		executorConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = false
 		executorConfig.InputBodyMode = cmd.InputBodyStdin
-		return executorConfig, cmd.ThreadReplyIgnore
+		return executorConfig
 	}
 }
 
@@ -260,7 +275,7 @@ func resolveConfig(cfg *Config) error {
 
 	cfg.commandConfigs = make([]*cmd.CommandConfig, 0, len(cfg.Commands))
 	cfg.ListenerConfigs = make([]pubsub.ListenerConfig, 0)
-	listenerDefaults := pubsub.ListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
+	listenerDefaults := pubsub.RawListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
 	nextCommandIndex := 0
 	for _, c := range cfg.Commands {
 		resolved, err := resolveCommandConfig(c, outputFlushInterval)
@@ -279,30 +294,49 @@ func resolveConfig(cfg *Config) error {
 	return nil
 }
 
-func assignCommandIndexes(raw *RawCommandConfig, resolved *cmd.CommandConfig, inherited pubsub.ListenerConfig, next int, flat *[]pubsub.ListenerConfig) (int, error) {
+func assignCommandIndexes(raw *RawCommandConfig, resolved *cmd.CommandConfig, inherited pubsub.RawListenerConfig, next int, flat *[]pubsub.ListenerConfig) (int, error) {
 	resolved.Index = next
-	listenerConfig := pubsub.ListenerConfig{
-		CommandIndex:   next,
-		AcceptReminder: raw.AcceptReminder,
-	}
-	var err error
-	listenerConfig.AllowedUserIDs, err = resolveAllowedIDs(raw.AllowedUserIDs, inherited.AllowedUserIDs, raw.Keyword, "allowed_user_ids")
+	listenerConfig, err := resolveListenerConfig(raw.RawListenerConfig, inherited, raw.Keyword)
 	if err != nil {
 		return next, err
 	}
-	listenerConfig.AllowedChannelIDs, err = resolveAllowedIDs(raw.AllowedChannelIDs, inherited.AllowedChannelIDs, raw.Keyword, "allowed_channel_ids")
-	if err != nil {
-		return next, err
-	}
-	*flat = append(*flat, listenerConfig)
+	*flat = append(*flat, pubsub.ListenerConfig{CommandIndex: next, RawListenerConfig: listenerConfig})
 	next++
-	for i, reply := range raw.Replies {
-		next, err = assignCommandIndexes(reply, resolved.Replies[i], listenerConfig, next, flat)
+
+	resolvedReplyACLs := make([]pubsub.RawListenerConfig, len(raw.Replies))
+	for i, rawReply := range raw.Replies {
+		resolvedReplyACLs[i], err = resolveListenerConfig(rawReply.RawListenerConfig, listenerConfig, rawReply.Keyword)
 		if err != nil {
 			return next, err
 		}
 	}
+	for i, reply := range resolved.Replies {
+		replyACL := listenerConfig
+		if reply.SyntheticStdinReply {
+			replyACL.AllowedUserIDs = append([]string(nil), listenerConfig.AllowedUserIDs...)
+			replyACL.AllowedChannelIDs = append([]string(nil), listenerConfig.AllowedChannelIDs...)
+		} else {
+			replyACL = resolvedReplyACLs[i]
+		}
+		reply.Index = next
+		*flat = append(*flat, pubsub.ListenerConfig{CommandIndex: next, IsReply: true, RawListenerConfig: replyACL})
+		next++
+	}
 	return next, nil
+}
+
+func resolveListenerConfig(raw, inherited pubsub.RawListenerConfig, keyword string) (pubsub.RawListenerConfig, error) {
+	resolved := pubsub.RawListenerConfig{AcceptReminder: raw.AcceptReminder}
+	var err error
+	resolved.AllowedUserIDs, err = resolveAllowedIDs(raw.AllowedUserIDs, inherited.AllowedUserIDs, keyword, "allowed_user_ids")
+	if err != nil {
+		return pubsub.RawListenerConfig{}, err
+	}
+	resolved.AllowedChannelIDs, err = resolveAllowedIDs(raw.AllowedChannelIDs, inherited.AllowedChannelIDs, keyword, "allowed_channel_ids")
+	if err != nil {
+		return pubsub.RawListenerConfig{}, err
+	}
+	return resolved, nil
 }
 
 func resolveAllowedIDs(value []string, inherited []string, keyword, name string) ([]string, error) {

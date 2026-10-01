@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,9 +28,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	defer cancel()
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval, ThreadReplyMode: cmd.ThreadReplyStdin}, cmd.NewExecRunner(), nil)
+	stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "*"}, SyntheticStdinReply: true}, nil, nil)
+	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
+	var queuedCount atomic.Int64
 	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
+		queuedCount.Add(1)
 		select {
 		case requests <- input:
 			return true
@@ -43,7 +47,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	go func() {
 		if err := pubsub.SlackListener(ctx, smc, pubsub.Config{
 			AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"},
-			ListenerConfigs: []pubsub.ListenerConfig{{CommandIndex: 0, AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}},
+			ListenerConfigs: []pubsub.ListenerConfig{{CommandIndex: 0, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 1, IsReply: true, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}},
 		}, coordinator); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
@@ -51,9 +55,13 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })
 	send := func(root, text string) {
+		timestamp := "1"
+		if root != "" {
+			timestamp = "2"
+		}
 		smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
 			Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Type: "message", Data: &slackevents.MessageEvent{
-				Channel: "C", User: "U", TimeStamp: "1", ThreadTimeStamp: root, Text: text,
+				Channel: "C", User: "U", TimeStamp: timestamp, ThreadTimeStamp: root, Text: text,
 			}},
 		}}
 	}
@@ -61,6 +69,9 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	awaitThreadStdinReady(t, outputs)
 	send("1", "<@BOT> “raw” &amp;")
 	awaitThreadStdinOutput(t, outputs, "old| \"raw\" &\n")
+	if got := queuedCount.Load(); got != 1 {
+		t.Fatalf("queue received %d inputs, want only the root command", got)
+	}
 }
 
 func awaitThreadStdinReady(t *testing.T, outputs <-chan *cmd.CommandOutput) {

@@ -356,8 +356,9 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	cfg.InteractiveStdin = true
 	cfg.InputBodyMode = InputBodyStdin
 	rq <- &CommandInput{
-		Text:           "agent\ninitial",
-		ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"},
+		Text:                  "agent\ninitial",
+		ConversationID:        ConversationID{ChannelID: "C", RootTimestamp: "1"},
+		AllowedCommandIndexes: []int{0},
 	}
 	close(rq)
 	done := make(chan struct{})
@@ -430,7 +431,7 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
 	cfg := newTestCommandConfig(&testExecutionConfig{Keyword: "agent", Command: "agent"})
-	rq <- &CommandInput{Text: "agent\ninitial", ConversationID: key}
+	rq <- &CommandInput{Text: "agent\ninitial", ConversationID: key, AllowedCommandIndexes: []int{0}}
 	close(rq)
 	done := make(chan struct{})
 	go func() {

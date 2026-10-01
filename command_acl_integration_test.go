@@ -67,9 +67,13 @@ timeout = 5
 	}()
 	t.Cleanup(func() { cancel(); <-done; workers.Wait() })
 	send := func(user, thread, text string) {
+		timestamp := "1"
+		if thread != "" {
+			timestamp = "2"
+		}
 		smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
 			Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Data: &slackevents.MessageEvent{
-				User: user, Channel: "C", TimeStamp: "1", ThreadTimeStamp: thread, Text: text,
+				User: user, Channel: "C", TimeStamp: timestamp, ThreadTimeStamp: thread, Text: text,
 			}},
 		}}
 	}
@@ -166,26 +170,35 @@ accept_reminder = true
 	t.Cleanup(func() { cancel(); <-done })
 
 	tests := []struct {
-		name  string
-		event interface{}
-		want  []string
+		name    string
+		event   interface{}
+		want    []string
+		noQueue bool
 	}{
-		{"root command applies narrower ACL", &slackevents.MessageEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "1", Text: "run"}, []string{"deploy"}},
-		{"reply uses narrowed ACL", &slackevents.MessageEvent{User: "U-guest", Channel: "C-ops", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, []string{"guest-retry"}},
-		{"reply refuses user outside both sibling ACLs", &slackevents.MessageEvent{User: "U-other", Channel: "C-ops", TimeStamp: "3", ThreadTimeStamp: "1", Text: "retry"}, nil},
-		{"sibling reply inherits parent ACL", &slackevents.MessageEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "4", ThreadTimeStamp: "1", Text: "retry"}, []string{"admin-retry"}},
-		{"same keyword selects top-level inherited command", &slackevents.MessageEvent{User: "U-top", Channel: "C-main", TimeStamp: "5", Text: "run"}, []string{"status"}},
-		{"reminder bypasses user allowlist", &slackevents.MessageEvent{User: "USLACKBOT", Channel: "C-main", TimeStamp: "6", Text: "Reminder: backup."}, []string{"backup"}},
-		{"reminder still checks channel", &slackevents.MessageEvent{User: "USLACKBOT", Channel: "C-other", TimeStamp: "7", Text: "Reminder: backup."}, nil},
-		{"app mention uses command override", &slackevents.AppMentionEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "8", Text: "<@BOT> run"}, []string{"deploy"}},
-		{"bot sender ID is allowlisted as sender", &slackevents.MessageEvent{BotID: "B-other", SubType: "bot_message", Channel: "C-main", TimeStamp: "9", Text: "run"}, []string{"status"}},
-		{"bot ID takes precedence over allowlisted user ID", &slackevents.MessageEvent{User: "U-top", BotID: "B-denied", SubType: "bot_message", Channel: "C-main", TimeStamp: "10", Text: "run"}, nil},
+		{"root command applies narrower ACL", &slackevents.MessageEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "1", Text: "run"}, []string{"deploy"}, false},
+		{"reply uses narrowed ACL", &slackevents.MessageEvent{User: "U-guest", Channel: "C-ops", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, []string{"guest-retry"}, false},
+		{"reply refuses user outside both sibling ACLs", &slackevents.MessageEvent{User: "U-other", Channel: "C-ops", TimeStamp: "3", ThreadTimeStamp: "1", Text: "retry"}, nil, true},
+		{"sibling reply inherits parent ACL", &slackevents.MessageEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "4", ThreadTimeStamp: "1", Text: "retry"}, []string{"admin-retry"}, false},
+		{"same keyword selects top-level inherited command", &slackevents.MessageEvent{User: "U-top", Channel: "C-main", TimeStamp: "5", Text: "run"}, []string{"status"}, false},
+		{"reminder bypasses user allowlist", &slackevents.MessageEvent{User: "USLACKBOT", Channel: "C-main", TimeStamp: "6", Text: "Reminder: backup."}, []string{"backup"}, false},
+		{"reminder still checks channel", &slackevents.MessageEvent{User: "USLACKBOT", Channel: "C-other", TimeStamp: "7", Text: "Reminder: backup."}, nil, true},
+		{"app mention uses command override", &slackevents.AppMentionEvent{User: "U-admin", Channel: "C-ops", TimeStamp: "8", Text: "<@BOT> run"}, []string{"deploy"}, false},
+		{"bot sender ID is allowlisted as sender", &slackevents.MessageEvent{BotID: "B-other", SubType: "bot_message", Channel: "C-main", TimeStamp: "9", Text: "run"}, []string{"status"}, false},
+		{"bot ID takes precedence over allowlisted user ID", &slackevents.MessageEvent{User: "U-top", BotID: "B-denied", SubType: "bot_message", Channel: "C-main", TimeStamp: "10", Text: "run"}, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
 				Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Data: tt.event},
 			}}
+			if tt.noQueue {
+				select {
+				case input := <-queued:
+					t.Fatalf("input without ACL candidates was queued: %+v", input)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
 			select {
 			case input := <-queued:
 				runner.calls = nil

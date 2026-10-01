@@ -18,7 +18,7 @@ type CommandInput struct {
 	MessageID             MessageID
 	Text                  string // 起動コマンド平文
 	CommandSet            *CommandSet
-	AllowedCommandIndexes []int // nilは従来の直接利用を無制限扱いに保つ。
+	AllowedCommandIndexes []int
 }
 
 // ConversationID identifies the Slack thread that receives command output.

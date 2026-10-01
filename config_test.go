@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,6 +48,54 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 	}
 }
 
+func TestDecodeConfigRejectsRuntimeOnlyCommandFields(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		value string
+	}{
+		{field: "command_index", value: "0"},
+		{field: "is_reply", value: "true"},
+		{field: "synthetic_stdin_reply", value: "true"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			var cfg Config
+			err := decodeConfigString("[[commands]]\nkeyword = \"run\"\n"+tc.field+" = "+tc.value+"\n", &cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("decodeConfig error = %v, want unknown field %q", err, tc.field)
+			}
+		})
+	}
+}
+
+func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
+	for _, tc := range []struct {
+		interaction   string
+		wantReplies   int
+		wantSynthetic bool
+	}{
+		{interaction: cmd.InteractionOneshot},
+		{interaction: cmd.InteractionStdin, wantReplies: 1, wantSynthetic: true},
+		{interaction: cmd.InteractionCommand, wantReplies: 1},
+	} {
+		t.Run(tc.interaction, func(t *testing.T) {
+			raw := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Interaction: tc.interaction, Replies: []*RawCommandConfig{{MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}}}
+			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resolved.Replies) != tc.wantReplies {
+				t.Fatalf("resolved replies = %d, want %d", len(resolved.Replies), tc.wantReplies)
+			}
+			if tc.wantSynthetic && (!resolved.Replies[0].SyntheticStdinReply || resolved.Replies[0].Keyword != "*") {
+				t.Fatalf("stdin reply = %+v, want internal synthetic wildcard", resolved.Replies[0])
+			}
+			if !tc.wantSynthetic && tc.wantReplies == 1 && resolved.Replies[0].Keyword != "retry" {
+				t.Fatalf("configured reply = %+v, want retry", resolved.Replies[0])
+			}
+		})
+	}
+}
+
 func TestResolveConfigFlattensCommandListenerPolicies(t *testing.T) {
 	text := `slack_bot_token = "xoxb-test"
 slack_app_token = "xapp-test"
@@ -56,6 +106,7 @@ allowed_channel_ids = ["C-top"]
 [[commands]]
 keyword = "status"
 command = "status"
+interaction = "command"
 accept_reminder = true
 
 [[commands.replies]]
@@ -85,10 +136,10 @@ accept_reminder = false
 	}
 
 	want := []pubsub.ListenerConfig{
-		{CommandIndex: 0, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true},
-		{CommandIndex: 1, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: false},
-		{CommandIndex: 2, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true},
-		{CommandIndex: 3, AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: false},
+		{CommandIndex: 0, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true}},
+		{CommandIndex: 1, IsReply: true, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}}},
+		{CommandIndex: 2, IsReply: true, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true}},
+		{CommandIndex: 3, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-top"}}},
 	}
 	if !reflect.DeepEqual(cfg.ListenerConfigs, want) {
 		t.Fatalf("ListenerConfigs = %#v, want %#v", cfg.ListenerConfigs, want)
@@ -96,16 +147,105 @@ accept_reminder = false
 	if cfg.commandConfigs[0].Index != 0 || cfg.commandConfigs[0].Replies[0].Index != 1 || cfg.commandConfigs[0].Replies[1].Index != 2 || cfg.commandConfigs[1].Index != 3 {
 		t.Fatalf("command indexes = root %d, replies %d/%d, second root %d", cfg.commandConfigs[0].Index, cfg.commandConfigs[0].Replies[0].Index, cfg.commandConfigs[0].Replies[1].Index, cfg.commandConfigs[1].Index)
 	}
-	for _, raw := range []*RawCommandConfig{cfg.Commands[0], cfg.Commands[0].Replies[0], cfg.Commands[0].Replies[1], cfg.Commands[1]} {
-		if raw.CommandIndex != 0 {
-			t.Fatalf("raw CommandIndex = %d, want zero", raw.CommandIndex)
+}
+
+func resolveStdinReplyTestConfig(t *testing.T) (*Config, *cmd.CommandConfig, *cmd.CommandConfig) {
+	t.Helper()
+	reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}
+	root := &RawCommandConfig{
+		MatcherConfig:     cmd.MatcherConfig{Keyword: "agent"},
+		RunnerConfig:      cmd.RunnerConfig{Command: "agent"},
+		Interaction:       cmd.InteractionStdin,
+		RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U123"}, AllowedChannelIDs: []string{"C123"}, AcceptReminder: true},
+		Replies:           []*RawCommandConfig{reply},
+	}
+	cfg := validTestConfig(root)
+	cfg.AllowedChannelIDs = []string{"C123"}
+	if err := resolveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	resolved := cfg.commandConfigs[0]
+	return cfg, resolved, resolved.Replies[0]
+}
+
+func TestResolveConfigBuildsSyntheticStdinReplyWithResolvedRootACL(t *testing.T) {
+	cfg, resolved, synthetic := resolveStdinReplyTestConfig(t)
+	if len(resolved.Replies) != 1 {
+		t.Fatalf("resolved replies = %d, want only synthetic reply", len(resolved.Replies))
+	}
+	if synthetic.Keyword != "*" || !synthetic.SyntheticStdinReply || synthetic.Index == resolved.Index {
+		t.Fatalf("synthetic reply = %+v", synthetic)
+	}
+	if len(cfg.ListenerConfigs) != 2 {
+		t.Fatalf("listener configs = %+v", cfg.ListenerConfigs)
+	}
+	syntheticACL := cfg.ListenerConfigs[1]
+	if !syntheticACL.IsReply || syntheticACL.CommandIndex != synthetic.Index || !syntheticACL.AcceptReminder || !reflect.DeepEqual(syntheticACL.AllowedUserIDs, cfg.ListenerConfigs[0].AllowedUserIDs) || !reflect.DeepEqual(syntheticACL.AllowedChannelIDs, cfg.ListenerConfigs[0].AllowedChannelIDs) {
+		t.Fatalf("synthetic ACL = %+v, root ACL = %+v", syntheticACL, cfg.ListenerConfigs[0])
+	}
+}
+
+func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
+	cfg, resolved, synthetic := resolveStdinReplyTestConfig(t)
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	queued := false
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(runtime, nil, func(*cmd.CommandInput) bool { queued = true; return true }, 1)
+	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
+	if result, err := coordinator.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{resolved.Index}}); err != nil || result != cmd.AcceptRouted {
+		t.Fatalf("root Accept() = %v, %v", result, err)
+	}
+	queued = false
+	reader, writer := io.Pipe()
+	endpoint := cmd.NewInteractiveStdin(writer, "", func(error) {})
+	coordinator.Lifecycle(conversation).StdinReady(endpoint)
+	for _, indexes := range [][]int{{resolved.Index}, {}} {
+		result, err := coordinator.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
+		if err != nil || result != cmd.AcceptIgnored || queued {
+			t.Fatalf("reply candidates %v result = %v, err = %v, queued = %v", indexes, result, err, queued)
 		}
+	}
+	result, err := coordinator.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{synthetic.Index}})
+	if err != nil || result != cmd.AcceptRouted || queued {
+		t.Fatalf("stdin explicit keyword result = %v, err = %v, queued = %v", result, err, queued)
+	}
+	line, err := bufio.NewReader(reader).ReadString('\n')
+	if err != nil || line != "retry\n" {
+		t.Fatalf("stdin explicit keyword delivery = %q, err = %v", line, err)
+	}
+	endpoint.Close()
+	_ = reader.Close()
+}
+
+func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
+	root := &RawCommandConfig{
+		MatcherConfig: cmd.MatcherConfig{Keyword: "agent"},
+		RunnerConfig:  cmd.RunnerConfig{Command: "agent"},
+		Replies:       []*RawCommandConfig{{MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}},
+	}
+	cfg := validTestConfig(root)
+	if err := resolveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.commandConfigs[0].Replies) != 0 || len(cfg.ListenerConfigs) != 1 {
+		t.Fatalf("oneshot resolved replies/listener candidates = %d/%+v, want none", len(cfg.commandConfigs[0].Replies), cfg.ListenerConfigs)
+	}
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	queued := false
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(runtime, nil, func(*cmd.CommandInput) bool { queued = true; return true }, 1)
+	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	if result, err := coordinator.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
+		t.Fatalf("root Accept() = %v, %v", result, err)
+	}
+	queued = false
+	result, err := coordinator.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}})
+	if err != nil || result != cmd.AcceptIgnored || queued {
+		t.Fatalf("oneshot reply result = %v, err = %v, queued = %v", result, err, queued)
 	}
 }
 
 func TestValidateOpenAccessUsesTopLevelAllowLists(t *testing.T) {
 	makeCommand := func(keyword string, users []string, replies ...*RawCommandConfig) *RawCommandConfig {
-		return &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: keyword}, RunnerConfig: cmd.RunnerConfig{Command: keyword}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: users}, Replies: replies}
+		return &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: keyword}, RunnerConfig: cmd.RunnerConfig{Command: keyword}, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: users}, Replies: replies}
 	}
 	tests := []struct {
 		name    string
@@ -149,8 +289,8 @@ func TestResolveConfigRejectsACLExpansion(t *testing.T) {
 		{name: "empty reply list inherits parent", rootIDs: []string{"U123"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: tc.replyIDs}}
-			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
+			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: tc.replyIDs}}
+			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Interaction: cmd.InteractionCommand, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
 			cfg := validTestConfig(root)
 			if tc.topIDs != nil {
 				cfg.AllowedUserIDs = tc.topIDs
@@ -185,8 +325,8 @@ func TestResolveConfigRejectsChannelACLExpansion(t *testing.T) {
 		{name: "empty reply channel list inherits root", rootIDs: []string{"C123"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedChannelIDs: tc.replyIDs}}
-			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, ListenerConfig: pubsub.ListenerConfig{AllowedChannelIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
+			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, RawListenerConfig: pubsub.RawListenerConfig{AllowedChannelIDs: tc.replyIDs}}
+			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Interaction: cmd.InteractionCommand, RawListenerConfig: pubsub.RawListenerConfig{AllowedChannelIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
 			cfg := validTestConfig(root)
 			cfg.AllowedChannelIDs = []string{"C123"}
 			if tc.topIDs != nil {
@@ -210,8 +350,8 @@ func TestResolveConfigRejectsChannelACLExpansion(t *testing.T) {
 }
 
 func TestResolveConfigAllowsChildRestrictionOfUnrestrictedParent(t *testing.T) {
-	reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: []string{"U-other"}}}
-	root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Replies: []*RawCommandConfig{reply}}
+	reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U-other"}}}
+	root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Interaction: cmd.InteractionCommand, Replies: []*RawCommandConfig{reply}}
 	cfg := validTestConfig(root)
 	cfg.AllowedUserIDs = nil
 	cfg.AllowedChannelIDs = []string{"C123"}
@@ -407,7 +547,7 @@ url = "https://example.com/retry"
 	if cfg.NumWorkers != 1 {
 		t.Fatalf("num_workers = %d, want 1", cfg.NumWorkers)
 	}
-	if cfg.commandConfigs[0].ThreadReplyMode != cmd.ThreadReplyIgnore || cfg.commandConfigs[0].Runner != cmd.RunnerExec {
+	if len(cfg.commandConfigs[0].Replies) != 0 || cfg.commandConfigs[0].Runner != cmd.RunnerExec {
 		t.Fatalf("resolved default command = %+v", cfg.commandConfigs[0])
 	}
 	if cfg.Commands[1].Replies[0].URL != "https://example.com/retry" {
@@ -541,7 +681,7 @@ command = "todo retry"
 		t.Fatal(err)
 	}
 	root := cfg.commandConfigs[0]
-	if root.OutputFlushInterval != 2*time.Second || root.ThreadReplyMode != cmd.ThreadReplyCommand || root.AllowInChain {
+	if root.OutputFlushInterval != 2*time.Second || root.AllowInChain {
 		t.Fatalf("resolved root = %+v", root)
 	}
 	if got := root.Replies[0].OutputFlushInterval; got != 2*time.Second {
@@ -567,6 +707,7 @@ allowed_user_ids = ["U123"]
 [[commands]]
 keyword = "todo"
 command = "todo"
+interaction = "command"
 timeout = 30
 tty = true
 
@@ -604,6 +745,7 @@ allowed_user_ids = ["U123"]
 [[commands]]
 keyword = "agent"
 command = "agent"
+interaction = "command"
 stdin_idle_timeout = 30
 
 [[commands.replies]]
@@ -656,11 +798,10 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 		allow       bool
 		liveStdin   bool
 		bodyMode    cmd.InputBodyMode
-		replyMode   cmd.ThreadReplyMode
 	}{
-		{cmd.InteractionOneshot, true, false, cmd.InputBodyStdin, cmd.ThreadReplyIgnore},
-		{cmd.InteractionStdin, false, true, cmd.InputBodyStdin, cmd.ThreadReplyStdin},
-		{cmd.InteractionCommand, false, false, cmd.InputBodyArgument, cmd.ThreadReplyCommand},
+		{cmd.InteractionOneshot, true, false, cmd.InputBodyStdin},
+		{cmd.InteractionStdin, false, true, cmd.InputBodyStdin},
+		{cmd.InteractionCommand, false, false, cmd.InputBodyArgument},
 	}
 	for _, tt := range tests {
 		t.Run(tt.interaction, func(t *testing.T) {
@@ -669,7 +810,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resolved.AllowInChain != tt.allow || resolved.InteractiveStdin != tt.liveStdin || resolved.InputBodyMode != tt.bodyMode || resolved.ThreadReplyMode != tt.replyMode {
+			if resolved.AllowInChain != tt.allow || resolved.InteractiveStdin != tt.liveStdin || resolved.InputBodyMode != tt.bodyMode {
 				t.Fatalf("resolved config = %+v", resolved)
 			}
 		})

@@ -20,12 +20,18 @@ type Config struct {
 	ListenerConfigs       []ListenerConfig `toml:"-"`
 }
 
-// ListenerConfig はraw設定と解決済みACLで同じSlack入力設定を共有するための型。
-type ListenerConfig struct {
-	CommandIndex      int      `toml:"-"`
+// RawListenerConfig はTOMLで指定可能なListener設定を保持する。
+type RawListenerConfig struct {
 	AllowedUserIDs    []string `toml:"allowed_user_ids"`
 	AllowedChannelIDs []string `toml:"allowed_channel_ids"`
 	AcceptReminder    bool     `toml:"accept_reminder"`
+}
+
+// ListenerConfig は解決済みListener設定にruntime routing metadataを加える。
+type ListenerConfig struct {
+	CommandIndex int  `toml:"-"`
+	IsReply      bool `toml:"-"`
+	RawListenerConfig
 }
 
 // ReplyConfig defines reply formatting options.

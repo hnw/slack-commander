@@ -19,18 +19,6 @@ const (
 	InputBodyArgument
 )
 
-// ThreadReplyMode controls how a root command handles thread replies.
-type ThreadReplyMode int
-
-const (
-	// ThreadReplyIgnore drops thread replies.
-	ThreadReplyIgnore ThreadReplyMode = iota
-	// ThreadReplyStdin forwards thread replies to active standard input.
-	ThreadReplyStdin
-	// ThreadReplyCommand queues configured reply commands.
-	ThreadReplyCommand
-)
-
 const (
 	// RunnerExec runs commands directly with os/exec.
 	RunnerExec = "exec"
