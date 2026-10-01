@@ -1,12 +1,96 @@
 package pubsub
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"testing"
 
+	"github.com/hnw/slack-commander/cmd"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 )
+
+func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response string
+	}{
+		{"auth failure", `{"ok":false,"error":"invalid_auth"}`},
+		{"missing user ID", `{"ok":true,"bot_id":"B-self"}`},
+		{"missing bot ID", `{"ok":true,"user_id":"U-self"}`},
+		{"missing both IDs", `{"ok":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousUserID, previousBotID := userID, ownBotID
+			userID, ownBotID = "U-stale", "B-stale"
+			t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			defer server.Close()
+			smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+			smc.Events <- socketmode.Event{Type: socketmode.EventTypeConnected}
+			smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
+				Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Data: &slackevents.MessageEvent{
+					BotID: "B-other", Channel: "C", TimeStamp: "1", Text: "run",
+				}},
+			}}
+			close(smc.Events)
+			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
+			queued := 0
+			coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(*cmd.CommandInput) bool {
+				queued++
+				return true
+			}, 1)
+			err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, coordinator)
+			if err == nil {
+				t.Fatal("SlackListener() accepted incomplete identity")
+			}
+			if queued != 0 {
+				t.Fatalf("queued %d inputs without own identity", queued)
+			}
+		})
+	}
+}
+
+func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
+	previousUserID, previousBotID := userID, ownBotID
+	userID, ownBotID = "U-stale", "B-stale"
+	t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	for _, event := range []*slackevents.MessageEvent{
+		{User: "U-self", Channel: "C", TimeStamp: "1", Text: "run"},
+		{BotID: "B-self", Channel: "C", TimeStamp: "2", Text: "run"},
+		{User: "U-other", Channel: "C", TimeStamp: "3", Text: "run"},
+		{BotID: "B-other", Channel: "C", TimeStamp: "4", Text: "run"},
+	} {
+		smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
+			Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Data: event},
+		}}
+	}
+	close(smc.Events)
+	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
+	var queued []string
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(input *cmd.CommandInput) bool {
+		queued = append(queued, input.MessageID.Timestamp)
+		return true
+	}, 1)
+	if err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, coordinator); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(queued, []string{"3", "4"}) {
+		t.Fatalf("queued timestamps = %v, want only other senders", queued)
+	}
+}
 
 func TestNewSlackInputSetsConversationID(t *testing.T) {
 	tests := []struct {
@@ -124,28 +208,65 @@ func TestNewSlackInputFromAppMentionSetsConversationID(t *testing.T) {
 	}
 }
 
-func TestShouldIgnoreMessageEventPreservesBotAndReminderHandling(t *testing.T) {
+func TestShouldIgnoreMessageEventIgnoresOwnBotAndKeepsOtherSenders(t *testing.T) {
 	previousUserID := userID
+	previousBotID := ownBotID
 	userID = "U-self"
-	t.Cleanup(func() { userID = previousUserID })
+	ownBotID = "B-self"
+	t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
 
-	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{AcceptBotMessage: true}) {
-		t.Fatal("accepted bot message was ignored")
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other", BotID: "B-other"}) {
+		t.Fatal("other bot message was ignored")
 	}
-	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{}) {
-		t.Fatal("bot message ignored accept_bot_message=false was accepted")
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{User: "U-self"}) {
+		t.Fatal("own user message was accepted")
 	}
-	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageChanged}, Config{}) {
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{BotID: "B-self"}) {
+		t.Fatal("own bot message without user ID was accepted")
+	}
+	userID, ownBotID = "", ""
+	if isOwnBotMessage("", "") {
+		t.Fatal("empty unknown sender matched an unset own ID")
+	}
+	userID, ownBotID = "U-self", "B-self"
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageChanged}) {
 		t.Fatal("message_changed was accepted")
 	}
-	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageDeleted}, Config{}) {
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageDeleted}) {
 		t.Fatal("message_deleted was accepted")
 	}
-	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMeMessage}, Config{}) {
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMeMessage}) {
 		t.Fatal("non-edit subtype was newly ignored")
 	}
-	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{User: "USLACKBOT", Text: "Reminder: todo"}, Config{AcceptReminder: true}) {
-		t.Fatal("accepted reminder was ignored")
+}
+
+func TestFilterCommandIndexesUsesReminderExceptionAndBotSenderAllowlist(t *testing.T) {
+	configs := []ListenerConfig{
+		{CommandIndex: 0, AllowedUserIDs: []string{"U-normal"}, AllowedChannelIDs: []string{"C-main"}},
+		{CommandIndex: 1, AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-main"}, AcceptReminder: true},
+		{CommandIndex: 2, AllowedUserIDs: []string{}, AllowedChannelIDs: []string{"C-ops"}, AcceptReminder: true},
+		{CommandIndex: 3, AllowedUserIDs: []string{"B-other"}, AllowedChannelIDs: []string{"C-main"}},
+	}
+	tests := []struct {
+		name     string
+		user     string
+		channel  string
+		reminder bool
+		want     []int
+	}{
+		{name: "user and channel restrict ordinary message", user: "U-normal", channel: "C-main", want: []int{0}},
+		{name: "reminder skips user allowlist only", user: "USLACKBOT", channel: "C-main", reminder: true, want: []int{1}},
+		{name: "reminder still respects channel allowlist", user: "USLACKBOT", channel: "C-ops", reminder: true, want: []int{2}},
+		{name: "non-reminder slackbot sender is allowlisted normally", user: "USLACKBOT", channel: "C-main", want: []int{}},
+		{name: "bot sender ID is allowlisted normally", user: senderIDForEvent("U-other", "B-other"), channel: "C-main", want: []int{3}},
+		{name: "empty result is explicit", user: "U-other", channel: "C-other", want: []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := filterCommandIndexes(configs, tt.user, tt.channel, tt.reminder); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("filterCommandIndexes() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

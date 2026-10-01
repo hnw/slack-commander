@@ -97,6 +97,41 @@ func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 	}
 }
 
+func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
+	runner := &fakeRunner{}
+	command := NewCommand(CommandConfig{
+		Index:          7,
+		MatcherConfig:  MatcherConfig{Keyword: "run"},
+		RunnerConfig:   RunnerConfig{Command: "run"},
+		ExecutorConfig: ExecutorConfig{AllowInChain: true},
+	}, runner, nil)
+	executor := NewExecutor(NewCommandSet([]*Command{command}), make(chan *CommandOutput, 10))
+	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{}}, nil)
+	if calls := runner.Calls(); len(calls) != 0 {
+		t.Fatalf("empty candidate set executed commands: %#v", calls)
+	}
+	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{7}}, nil)
+	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "run" {
+		t.Fatalf("allowed candidate calls = %#v, want run", calls)
+	}
+}
+
+func TestExecutorAppliesGlobalIndexesToReplyCommandSet(t *testing.T) {
+	runner := &fakeRunner{}
+	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{Keyword: "retry"}, RunnerConfig: RunnerConfig{Command: "retry"}}, runner, nil)
+	root := NewCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "run"}}, nil, NewCommandSet([]*Command{reply}))
+	executor := NewExecutor(NewCommandSet([]*Command{root}), make(chan *CommandOutput, 10))
+	executor.Execute(context.Background(), &CommandInput{Text: "retry", CommandSet: root.replies, AllowedCommandIndexes: []int{12}}, nil)
+	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "retry" {
+		t.Fatalf("reply calls = %#v, want retry", calls)
+	}
+	// The same reply command must be rejected when its global index is absent.
+	executor.Execute(context.Background(), &CommandInput{Text: "retry", CommandSet: root.replies, AllowedCommandIndexes: []int{4}}, nil)
+	if calls := runner.Calls(); len(calls) != 1 {
+		t.Fatalf("disallowed reply executed: %#v", calls)
+	}
+}
+
 func TestExecutorArgumentBodyAppendsOnlyForTrailingWildcard(t *testing.T) {
 	tests := []struct {
 		name    string

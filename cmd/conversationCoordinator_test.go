@@ -45,6 +45,27 @@ func TestConversationCoordinatorCachesOnlyQueuedMatchedRoots(t *testing.T) {
 	}
 }
 
+func TestConversationCoordinatorResolvesEvictedRootWithOriginalCandidates(t *testing.T) {
+	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{Index: 3}, nil, nil)})
+	first := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "first"}, ThreadReplyMode: ThreadReplyIgnore}, nil, nil)
+	second := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "second"}, ThreadReplyMode: ThreadReplyCommand}, nil, replySet)
+	commands := NewCommandSet([]*Command{first, second})
+	var queued *CommandInput
+	coordinator := NewConversationCoordinatorWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
+		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{2}}, nil
+	}, func(input *CommandInput) bool { queued = input; return true }, 0)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	if !coordinator.AcceptRoot(&CommandInput{Text: "run", ConversationID: conversation, AllowedCommandIndexes: []int{2}}) {
+		t.Fatal("AcceptRoot() failed")
+	}
+	if _, err := coordinator.AcceptThreadReply(&CommandInput{Text: "retry", ConversationID: conversation}); err != nil {
+		t.Fatal(err)
+	}
+	if queued == nil || queued.CommandSet != replySet {
+		t.Fatalf("thread reply route = %+v, want the ACL-selected root's reply set", queued)
+	}
+}
+
 func TestConversationCoordinatorPreservesNormalizedCommandRoot(t *testing.T) {
 	root := coordinatorRoot(InteractionCommand)
 	var queued *CommandInput
@@ -58,7 +79,7 @@ func TestConversationCoordinatorPreservesNormalizedCommandRoot(t *testing.T) {
 func TestConversationCoordinatorCachesResolverMatch(t *testing.T) {
 	root := coordinatorRoot(InteractionOneshot)
 	lookups := 0
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) { lookups++; return "run", nil }, func(*CommandInput) bool { return true }, 2)
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) { lookups++; return RootCommandInput{Text: "run"}, nil }, func(*CommandInput) bool { return true }, 2)
 	input := &CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}
 	for range 2 {
 		if _, err := c.AcceptThreadReply(input); err != nil {
@@ -72,7 +93,10 @@ func TestConversationCoordinatorCachesResolverMatch(t *testing.T) {
 
 func TestConversationCoordinatorCachesResolverNonMatch(t *testing.T) {
 	lookups := 0
-	c := newTestConversationCoordinator(nil, func(ConversationID) (string, error) { lookups++; return "unknown", nil }, func(*CommandInput) bool { return true }, 2)
+	c := newTestConversationCoordinator(nil, func(ConversationID) (RootCommandInput, error) {
+		lookups++
+		return RootCommandInput{Text: "unknown"}, nil
+	}, func(*CommandInput) bool { return true }, 2)
 	input := &CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}
 	if _, err := c.AcceptThreadReply(input); err != nil {
 		t.Fatal(err)
@@ -88,9 +112,9 @@ func TestConversationCoordinatorCachesResolverNonMatch(t *testing.T) {
 func TestConversationCoordinatorEvictsLeastRecentlyUsedRoute(t *testing.T) {
 	root := coordinatorRoot(InteractionOneshot)
 	lookups := 0
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) {
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		lookups++
-		return "run", nil
+		return RootCommandInput{Text: "run"}, nil
 	}, func(*CommandInput) bool { return true }, 2)
 	for _, thread := range []string{"A", "B", "A", "C", "B"} {
 		if _, err := c.AcceptThreadReply(&CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: thread}}); err != nil {
@@ -104,7 +128,10 @@ func TestConversationCoordinatorEvictsLeastRecentlyUsedRoute(t *testing.T) {
 
 func TestConversationCoordinatorDoesNotCacheResolverError(t *testing.T) {
 	lookups := 0
-	c := newTestConversationCoordinator(nil, func(ConversationID) (string, error) { lookups++; return "", errors.New("failed") }, func(*CommandInput) bool { return true }, 2)
+	c := newTestConversationCoordinator(nil, func(ConversationID) (RootCommandInput, error) {
+		lookups++
+		return RootCommandInput{}, errors.New("failed")
+	}, func(*CommandInput) bool { return true }, 2)
 	input := &CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}
 	for range 2 {
 		if _, err := c.AcceptThreadReply(input); err == nil {
@@ -119,7 +146,7 @@ func TestConversationCoordinatorDoesNotCacheResolverError(t *testing.T) {
 func TestConversationCoordinatorRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
 	root := coordinatorRoot(InteractionCommand)
 	var queued *CommandInput
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) { return "run", nil }, func(input *CommandInput) bool { queued = input; return true }, 2)
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) { return RootCommandInput{Text: "run"}, nil }, func(input *CommandInput) bool { queued = input; return true }, 2)
 	result, err := c.AcceptThreadReply(&CommandInput{Text: "reply\nbody", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +169,7 @@ func TestConversationCoordinatorRoutesCommandReplyAndReportsQueueFull(t *testing
 
 func TestConversationCoordinatorIgnoresOneshotReply(t *testing.T) {
 	root := coordinatorRoot(InteractionOneshot)
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) { return "run", nil }, func(*CommandInput) bool { t.Fatal("oneshot reply queued"); return false }, 2)
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) { return RootCommandInput{Text: "run"}, nil }, func(*CommandInput) bool { t.Fatal("oneshot reply queued"); return false }, 2)
 	result, err := c.AcceptThreadReply(&CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}})
 	if err != nil || result != ThreadReplyIgnored {
 		t.Fatalf("result=%v err=%v", result, err)
@@ -225,7 +252,7 @@ func TestConversationCoordinatorKeepsNewestEndpoint(t *testing.T) {
 func TestConversationCoordinatorDropsStdinReplyWithoutEndpoint(t *testing.T) {
 	root := coordinatorRoot(InteractionStdin)
 	queued := false
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) { return "run", nil }, func(*CommandInput) bool { queued = true; return true }, 2)
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) { return RootCommandInput{Text: "run"}, nil }, func(*CommandInput) bool { queued = true; return true }, 2)
 	result, err := c.AcceptThreadReply(&CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}})
 	if err != nil || result != ThreadReplyIgnored || queued {
 		t.Fatalf("result=%v err=%v queued=%v", result, err, queued)
@@ -235,7 +262,7 @@ func TestConversationCoordinatorDropsStdinReplyWithoutEndpoint(t *testing.T) {
 func TestConversationCoordinatorRoutesRawStdinReply(t *testing.T) {
 	root := coordinatorRoot(InteractionStdin)
 	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (string, error) { return "run", nil }, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
+	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) { return RootCommandInput{Text: "run"}, nil }, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
 	reader, writer := io.Pipe()
 	endpoint := NewInteractiveStdin(writer, "", func(error) {})
 	c.Lifecycle(ctx).StdinReady(endpoint)

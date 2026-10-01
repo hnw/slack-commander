@@ -88,9 +88,9 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	coordinator := cmd.NewConversationCoordinator(
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(
 		commands,
-		pubsub.SlackRootTextResolver(smc),
+		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
 		func(input *cmd.CommandInput) bool {
 			select {
 			case commandQueue <- input:
@@ -110,15 +110,19 @@ func run(args []string) int {
 		pubsub.SlackWriter(ctx, smc, outputQueue)
 	}()
 	var listenerWG sync.WaitGroup
+	var listenerErr error
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		pubsub.SlackListener(
+		listenerErr = pubsub.SlackListener(
 			ctx,
 			smc,
 			cfg.PubSubConfig,
 			coordinator,
 		)
+		if listenerErr != nil {
+			stop()
+		}
 	}()
 
 	exitCode := 0
@@ -128,6 +132,10 @@ func run(args []string) int {
 	}
 	stop()
 	listenerWG.Wait()
+	if listenerErr != nil {
+		logger.Error("Slack listener error", "error", listenerErr)
+		exitCode = 1
+	}
 	close(commandQueue)
 	executorWG.Wait()
 	close(outputQueue)

@@ -41,6 +41,7 @@ type RawCommandConfig struct {
 	cmd.RunnerConfig
 	RawExecutorConfig
 	pubsub.ReplyConfig
+	pubsub.ListenerConfig
 	Interaction         string    `toml:"interaction"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
 	Replies             []*RawCommandConfig
@@ -246,9 +247,6 @@ func resolveConfig(cfg *Config) error {
 	if cfg.NumWorkers < 1 {
 		return fmt.Errorf("num_workers must be >= 1 (got %d)", cfg.NumWorkers)
 	}
-	if err := validateOpenAccess(cfg); err != nil {
-		return err
-	}
 	if err := validateReplyConfig(&cfg.ReplyConfig); err != nil {
 		return err
 	}
@@ -261,26 +259,89 @@ func resolveConfig(cfg *Config) error {
 	}
 
 	cfg.commandConfigs = make([]*cmd.CommandConfig, 0, len(cfg.Commands))
+	cfg.ListenerConfigs = make([]pubsub.ListenerConfig, 0)
+	listenerDefaults := pubsub.ListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
+	nextCommandIndex := 0
 	for _, c := range cfg.Commands {
 		resolved, err := resolveCommandConfig(c, outputFlushInterval)
 		if err != nil {
 			return err
 		}
+		nextCommandIndex, err = assignCommandIndexes(c, resolved, listenerDefaults, nextCommandIndex, &cfg.ListenerConfigs)
+		if err != nil {
+			return err
+		}
 		cfg.commandConfigs = append(cfg.commandConfigs, resolved)
+	}
+	if err := validateOpenAccess(cfg); err != nil {
+		return err
 	}
 	return nil
 }
 
+func assignCommandIndexes(raw *RawCommandConfig, resolved *cmd.CommandConfig, inherited pubsub.ListenerConfig, next int, flat *[]pubsub.ListenerConfig) (int, error) {
+	resolved.Index = next
+	listenerConfig := pubsub.ListenerConfig{
+		CommandIndex:   next,
+		AcceptReminder: raw.AcceptReminder,
+	}
+	var err error
+	listenerConfig.AllowedUserIDs, err = resolveAllowedIDs(raw.AllowedUserIDs, inherited.AllowedUserIDs, raw.Keyword, "allowed_user_ids")
+	if err != nil {
+		return next, err
+	}
+	listenerConfig.AllowedChannelIDs, err = resolveAllowedIDs(raw.AllowedChannelIDs, inherited.AllowedChannelIDs, raw.Keyword, "allowed_channel_ids")
+	if err != nil {
+		return next, err
+	}
+	*flat = append(*flat, listenerConfig)
+	next++
+	for i, reply := range raw.Replies {
+		next, err = assignCommandIndexes(reply, resolved.Replies[i], listenerConfig, next, flat)
+		if err != nil {
+			return next, err
+		}
+	}
+	return next, nil
+}
+
+func resolveAllowedIDs(value []string, inherited []string, keyword, name string) ([]string, error) {
+	if len(value) == 0 {
+		return inherited, nil
+	}
+	resolved := append([]string(nil), value...)
+	if len(inherited) == 0 {
+		return resolved, nil
+	}
+	for _, id := range resolved {
+		if !containsString(inherited, id) {
+			return nil, fmt.Errorf("keyword '%s': %s value %q is not allowed by its parent", keyword, name, id)
+		}
+	}
+	return resolved, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func validateOpenAccess(cfg *Config) error {
-	if len(cfg.AllowedUserIDs) == 0 &&
-		len(cfg.AllowedChannelIDs) == 0 &&
-		!cfg.AllowUnsafeOpenAccess {
-		return errors.New(
-			"open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, " +
-				"or set allow_unsafe_open_access=true to keep old behavior",
-		)
+	if len(cfg.AllowedUserIDs) == 0 && len(cfg.AllowedChannelIDs) == 0 && !cfg.AllowUnsafeOpenAccess {
+		return openAccessError()
 	}
 	return nil
+}
+
+func openAccessError() error {
+	return errors.New(
+		"open access is disabled by default: set allowed_user_ids and/or allowed_channel_ids, " +
+			"or set allow_unsafe_open_access=true to keep old behavior",
+	)
 }
 
 func validateReplyConfig(cfg *pubsub.ReplyConfig) error {

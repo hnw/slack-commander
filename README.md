@@ -64,7 +64,7 @@ date
 
 と投稿すると、`date`コマンドの出力がSlackへ返ります。
 
-`allowed_user_ids`と`allowed_channel_ids`を両方空にした構成は、デフォルトでは起動できません。
+トップレベルの`allowed_user_ids`と`allowed_channel_ids`が両方空の場合、デフォルトでは起動できません。コマンド側で制限を追加しても、`allow_unsafe_open_access = true`が必要です。
 
 ### 3. 起動する
 
@@ -301,13 +301,16 @@ icon_emoji = ":alarm_clock:"
 
 ## Slack Reminderから実行する
 
-`accept_reminder = true`を指定すると、Slack Reminderによる投稿も通常のメッセージと同様に`keyword`との照合対象になります。
+コマンドに`accept_reminder = true`を指定すると、Slack Reminderによる投稿も`keyword`との照合対象になります。既定値は`false`で、親コマンドから継承しません。
 
 ```toml
+[[commands]]
+keyword = "date"
+command = "date"
 accept_reminder = true
 ```
 
-Slack側のReminderと組み合わせることで、簡単な定期実行に利用できます。
+Reminderではユーザー許可リストを適用せず、チャンネル許可リストは適用します。トップレベルには設定できません。Slack側のReminderと組み合わせることで、簡単な定期実行に利用できます。
 
 ## Docker
 
@@ -323,14 +326,37 @@ DooDの仕組み、Compose projectのパスに関する注意、credentialやnet
 
 slack-commanderはSlackから外部コマンドやHTTP APIを実行できるため、実行元を制限して利用することを推奨します。
 
-`allowed_user_ids`または`allowed_channel_ids`で利用範囲を制限できます。
+トップレベルの`allowed_user_ids`または`allowed_channel_ids`で最大の利用範囲を設定できます。
 
 ```toml
 allowed_user_ids = ["U0123456789"]
 allowed_channel_ids = ["C0123456789"]
 ```
 
-両方を空にした構成は、デフォルトでは起動できません。
+コマンドと返信はトップレベルまたは親コマンドの許可リストを継承し、さらに範囲を狭められます。親にないIDを追加すると設定エラーになります。空配列も親の値を継承します。
+
+```toml
+allowed_user_ids = ["U0123456789", "U-admin"]
+allowed_channel_ids = ["C0123456789", "C-ops"]
+
+[[commands]]
+keyword = "status"
+command = "status"
+allowed_user_ids = ["U0123456789"]
+allowed_channel_ids = ["C0123456789"]
+
+[[commands]]
+keyword = "deploy"
+command = "deploy"
+allowed_user_ids = ["U-admin"]
+allowed_channel_ids = ["C-ops"]
+```
+
+Reminderではユーザー許可リストを適用せず、チャンネル許可リストは適用します。自身のボットの投稿は常に無視し、それ以外のボット投稿はBot IDを通常のsender IDとして許可リストで判定します。
+
+旧トップレベル`accept_reminder`と`accept_bot_message`は使用できず、設定エラーになります。Reminderを有効にする場合は各commandまたはreplyに`accept_reminder = true`を設定してください。
+
+トップレベルのユーザーとチャンネルの制限が両方ない構成は、コマンド側で制限してもデフォルトでは起動できません。
 
 制限なしでの起動が必要な場合は、
 

@@ -17,6 +17,7 @@ import (
 
 var (
 	userID          string // bot自身のuser ID（注：bot IDではない）
+	ownBotID        string
 	reMentionTarget = regexp.MustCompile(`<@[^>]+>`)
 	reSlackURL      = regexp.MustCompile(`<([^@!|>\s][^|>]*)(?:\|([^>]*))?>`)
 )
@@ -64,14 +65,18 @@ func SlackListener(
 	smc *socketmode.Client,
 	cfg Config,
 	coordinator *cmd.ConversationCoordinator,
-) {
+) error {
+	if err := identifyOwnBot(ctx, smc); err != nil {
+		return err
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case evt, ok := <-smc.Events:
 			if !ok {
-				return
+				return nil
 			}
 			ackSocketModeEvent(smc, evt)
 
@@ -82,16 +87,6 @@ func SlackListener(
 				smc.Debugf("[INFO] Connection failed. Retrying later...")
 			case socketmode.EventTypeConnected:
 				smc.Debugf("[INFO] Connected to Slack with Socket Mode.")
-
-				authTest, authTestErr := smc.AuthTest()
-				if authTestErr != nil {
-					smc.Debugf(
-						"[WARN] AuthTest() failed. Continue without bot user ID: %v",
-						authTestErr,
-					)
-					continue
-				}
-				userID = authTest.UserID
 			case socketmode.EventTypeEventsAPI:
 				eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 				if !ok {
@@ -118,6 +113,18 @@ func SlackListener(
 			}
 		}
 	}
+}
+
+func identifyOwnBot(ctx context.Context, smc *socketmode.Client) error {
+	authTest, err := smc.AuthTestContext(ctx)
+	if err != nil {
+		return fmt.Errorf("slack listener auth.test: %w", err)
+	}
+	if authTest.UserID == "" || authTest.BotID == "" {
+		return fmt.Errorf("slack listener auth.test: UserID and BotID are required")
+	}
+	userID, ownBotID = authTest.UserID, authTest.BotID
+	return nil
 }
 
 func ackSocketModeEvent(smc *socketmode.Client, evt socketmode.Event) {
@@ -160,30 +167,20 @@ func extractEnvelopeID(raw json.RawMessage) (string, bool) {
 	return req.EnvelopeID, true
 }
 
-func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent, cfg Config) bool {
+func shouldIgnoreMessageEvent(ev *slackevents.MessageEvent) bool {
 	switch ev.SubType {
 	case slack.MsgSubTypeMessageChanged, slack.MsgSubTypeMessageDeleted:
 		return true
 	}
-	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
-		return true
-	}
-	if ev.SubType == "bot_message" && (ev.User == userID || !cfg.AcceptBotMessage) {
-		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
-		return true
-	}
-	return false
+	return isOwnBotMessage(ev.User, ev.BotID)
 }
 
-func shouldIgnoreAppMentionEvent(ev *slackevents.AppMentionEvent, cfg Config) bool {
-	if ev.User == "USLACKBOT" && !cfg.AcceptReminder {
-		return true
-	}
-	if ev.BotID != "" && (ev.User == userID || !cfg.AcceptBotMessage) {
-		// botからのメッセージを無視する & AcceptBotMessageがtrueでも自身からのメッセージは無視する
-		return true
-	}
-	return false
+func shouldIgnoreAppMentionEvent(ev *slackevents.AppMentionEvent) bool {
+	return isOwnBotMessage(ev.User, ev.BotID)
+}
+
+func isOwnBotMessage(user, botID string) bool {
+	return (userID != "" && user == userID) || (ownBotID != "" && botID == ownBotID)
 }
 
 func senderIDForEvent(user, botID string) string {
@@ -202,17 +199,30 @@ func extractReminderText(user, text string) (string, bool) {
 	return trimmed, true
 }
 
+func isReminderMessage(user, text string) bool {
+	_, ok := extractReminderText(user, text)
+	return ok
+}
+
 func extractMessageText(ev *slackevents.MessageEvent) string {
-	if text, ok := extractReminderText(ev.User, ev.Text); ok {
+	rawText := messageEventText(ev)
+	if text, ok := extractReminderText(ev.User, rawText); ok {
 		return text
 	}
 	if ev.Message == nil {
-		return ev.Text
+		return rawText
 	}
-	if text := slackMessageText(ev.Text, ev.Message.Attachments); text != "" {
+	if text := slackMessageText(rawText, ev.Message.Attachments); text != "" {
 		return text
 	}
 	return ev.Message.Text
+}
+
+func messageEventText(ev *slackevents.MessageEvent) string {
+	if ev.Text != "" || ev.Message == nil {
+		return ev.Text
+	}
+	return slackMessageText(ev.Message.Text, ev.Message.Attachments)
 }
 
 func extractAppMentionText(ev *slackevents.AppMentionEvent) string {
@@ -269,14 +279,12 @@ func onMessageEvent(
 	cfg Config,
 	coordinator *cmd.ConversationCoordinator,
 ) {
-	if shouldIgnoreMessageEvent(ev, cfg) {
+	if shouldIgnoreMessageEvent(ev) {
 		return
 	}
 	senderID := senderIDForEvent(ev.User, ev.BotID)
-	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
-		return
-	}
 	input := NewSlackInput(ev, extractMessageText(ev))
+	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, messageEventText(ev)))
 	if ev.ThreadTimeStamp != "" {
 		routeThreadReply(smc, input, coordinator)
 		return
@@ -301,14 +309,12 @@ func onAppMentionEvent(
 	cfg Config,
 	coordinator *cmd.ConversationCoordinator,
 ) {
-	if shouldIgnoreAppMentionEvent(ev, cfg) {
+	if shouldIgnoreAppMentionEvent(ev) {
 		return
 	}
 	senderID := senderIDForEvent(ev.User, ev.BotID)
-	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
-		return
-	}
 	input := NewSlackInputFromAppMention(ev, extractAppMentionText(ev))
+	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, ev.Text))
 	if ev.ThreadTimeStamp != "" {
 		routeThreadReply(smc, input, coordinator)
 		return
@@ -363,14 +369,20 @@ func getThreadRoot(smc *socketmode.Client, conversation cmd.ConversationID) (*sl
 	return nil, fmt.Errorf("thread root not found")
 }
 
-// SlackRootTextResolver fetches a thread root and applies Slack-specific text normalization.
-func SlackRootTextResolver(smc *socketmode.Client) cmd.RootTextResolver {
-	return func(conversation cmd.ConversationID) (string, error) {
+// SlackRootInputResolver はcache eviction後も起点投稿者のACLでrouteを再判定する。
+func SlackRootInputResolver(smc *socketmode.Client, cfg Config) cmd.RootInputResolver {
+	return func(conversation cmd.ConversationID) (cmd.RootCommandInput, error) {
 		root, err := getThreadRoot(smc, conversation)
 		if err != nil {
-			return "", err
+			return cmd.RootCommandInput{}, err
 		}
-		return normalizeSlackText(rootMessageText(root)), nil
+		reminder := isReminderMessage(root.User, slackMessageText(root.Text, root.Attachments))
+		senderID := senderIDForEvent(root.User, root.BotID)
+		indexes := filterCommandIndexes(cfg.ListenerConfigs, senderID, conversation.ChannelID, reminder)
+		if isOwnBotMessage(root.User, root.BotID) {
+			indexes = []int{}
+		}
+		return cmd.RootCommandInput{Text: normalizeSlackText(rootMessageText(root)), AllowedCommandIndexes: indexes}, nil
 	}
 }
 
@@ -413,26 +425,31 @@ func normalizeQuotes(message string) string {
 	return replacer.Replace(message)
 }
 
-func isAllowedUser(cfg Config, userID string) bool {
-	if len(cfg.AllowedUserIDs) == 0 {
+func isAllowedID(allowedIDs []string, id string) bool {
+	if len(allowedIDs) == 0 {
 		return true
 	}
-	for _, allowed := range cfg.AllowedUserIDs {
-		if userID == allowed {
+	for _, allowed := range allowedIDs {
+		if id == allowed {
 			return true
 		}
 	}
 	return false
 }
 
-func isAllowedChannel(cfg Config, channelID string) bool {
-	if len(cfg.AllowedChannelIDs) == 0 {
-		return true
-	}
-	for _, allowed := range cfg.AllowedChannelIDs {
-		if channelID == allowed {
-			return true
+func filterCommandIndexes(configs []ListenerConfig, userID, channelID string, reminder bool) []int {
+	allowed := make([]int, 0, len(configs))
+	for _, config := range configs {
+		if reminder && !config.AcceptReminder {
+			continue
 		}
+		if !reminder && !isAllowedID(config.AllowedUserIDs, userID) {
+			continue
+		}
+		if !isAllowedID(config.AllowedChannelIDs, channelID) {
+			continue
+		}
+		allowed = append(allowed, config.CommandIndex)
 	}
-	return false
+	return allowed
 }
