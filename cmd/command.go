@@ -31,6 +31,7 @@ type ExecutorConfig struct {
 // CommandConfig is one fully resolved, validated command definition.
 // Replies forms the resolved configuration tree.
 type CommandConfig struct {
+	Index int
 	MatcherConfig
 	RunnerConfig
 	ExecutorConfig
@@ -94,7 +95,7 @@ func NewCommandSet(commands []*Command) *CommandSet {
 }
 
 // Match returns the first matching command and its runner arguments.
-func (s *CommandSet) Match(input *parsedCommand) (*Command, []string) {
+func (s *CommandSet) Match(input *parsedCommand, allowedIndexes []int) (*Command, []string) {
 	if s == nil || input == nil {
 		return nil, nil
 	}
@@ -102,20 +103,34 @@ func (s *CommandSet) Match(input *parsedCommand) (*Command, []string) {
 		if command == nil {
 			continue
 		}
-		if args := command.match(input.args); len(args) > 0 {
-			return command, args
+		if allowedIndexes != nil && !containsCommandIndex(allowedIndexes, command.config.Index) {
+			continue
 		}
+		args := command.match(input.args)
+		if len(args) == 0 {
+			continue
+		}
+		return command, args
 	}
 	return nil, nil
 }
 
+func containsCommandIndex(indexes []int, index int) bool {
+	for _, candidate := range indexes {
+		if candidate == index {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchSingle matches exactly one complete command line for route ownership.
-func (s *CommandSet) MatchSingle(text string) *Command {
+func (s *CommandSet) MatchSingle(text string, allowedIndexes []int) *Command {
 	cmdMsg, _ := splitCommandInput(text)
 	commands, err := parseCommands(cmdMsg)
 	if err != nil || len(commands) != 1 {
 		return nil
 	}
-	command, _ := s.Match(commands[0])
+	command, _ := s.Match(commands[0], allowedIndexes)
 	return command
 }

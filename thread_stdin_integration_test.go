@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -15,14 +18,18 @@ import (
 )
 
 func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
-	smc := socketmode.New(slack.New("test"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval, ThreadReplyMode: cmd.ThreadReplyStdin}, cmd.NewExecRunner(), nil)
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
-	coordinator := cmd.NewConversationCoordinator(commands, nil, func(input *cmd.CommandInput) bool {
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true
@@ -34,11 +41,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	startWorkers(ctx, 2, requests, coordinator, commands, outputs, &workers)
 	listenerDone := make(chan struct{})
 	go func() {
-		pubsub.SlackListener(ctx, smc, pubsub.Config{
-			AllowedUserIDs: []string{
-				"U",
-			}, AllowedChannelIDs: []string{"C"},
-		}, coordinator)
+		if err := pubsub.SlackListener(ctx, smc, pubsub.Config{
+			AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"},
+			ListenerConfigs: []pubsub.ListenerConfig{{CommandIndex: 0, AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}},
+		}, coordinator); err != nil {
+			t.Errorf("SlackListener() error = %v", err)
+		}
 		close(listenerDone)
 	}()
 	t.Cleanup(func() { cancel(); <-listenerDone; workers.Wait() })

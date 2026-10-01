@@ -3,6 +3,7 @@ package pubsub
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/hnw/slack-commander/cmd"
@@ -10,7 +11,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-func TestSlackRootTextResolverFetchesAndNormalizesRootText(t *testing.T) {
+func TestSlackRootInputResolverFetchesRootTextAndCandidates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/conversations.replies" {
 			t.Fatalf("path = %q", r.URL.Path)
@@ -20,29 +21,31 @@ func TestSlackRootTextResolverFetchesAndNormalizesRootText(t *testing.T) {
 	defer server.Close()
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	resolve := SlackRootTextResolver(smc)
-	text, err := resolve(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
+	resolve := SlackRootInputResolver(smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 7}}})
+	input, err := resolve(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "todo item" {
-		t.Fatalf("text = %q", text)
+	if input.Text != "todo item" || !reflect.DeepEqual(input.AllowedCommandIndexes, []int{7}) {
+		t.Fatalf("input = %+v", input)
 	}
 }
 
-func TestSlackRootTextResolverNormalizesReminderRootText(t *testing.T) {
+func TestSlackRootInputResolverAppliesReminderPolicyToOriginalRoot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"ts":"1","user":"USLACKBOT","text":"Reminder: todo <https://example.com|item>."}]}`))
 	}))
 	defer server.Close()
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	text, err := SlackRootTextResolver(smc)(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
+	input, err := SlackRootInputResolver(smc, Config{ListenerConfigs: []ListenerConfig{
+		{CommandIndex: 1, AllowedUserIDs: []string{"U-only"}, AllowedChannelIDs: []string{"C"}, AcceptReminder: true},
+	}})(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "todo item" {
-		t.Fatalf("text = %q", text)
+	if input.Text != "todo item" || !reflect.DeepEqual(input.AllowedCommandIndexes, []int{1}) {
+		t.Fatalf("input = %+v", input)
 	}
 }
 

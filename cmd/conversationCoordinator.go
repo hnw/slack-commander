@@ -6,8 +6,14 @@ import (
 	"sync"
 )
 
-// RootTextResolver returns Slack-normalized text for a thread root.
-type RootTextResolver func(ConversationID) (string, error)
+// RootInputResolver はroute cache eviction後に起点senderの候補を解決する。
+type RootInputResolver func(ConversationID) (RootCommandInput, error)
+
+// RootCommandInput はroute復元時に起点textと候補indexを保持する。
+type RootCommandInput struct {
+	Text                  string
+	AllowedCommandIndexes []int
+}
 
 // StdinLifecycle receives process stdin availability notifications.
 type StdinLifecycle interface {
@@ -29,22 +35,22 @@ const (
 
 // ConversationCoordinator owns routing and execution state for Slack conversations.
 type ConversationCoordinator struct {
-	commands *CommandSet
-	resolve  RootTextResolver
-	enqueue  func(*CommandInput) bool
-	routes   *conversationRoutes
-	inputs   conversationInputs
-	locks    conversationLocks
+	commands         *CommandSet
+	resolveRootInput RootInputResolver
+	enqueue          func(*CommandInput) bool
+	routes           *conversationRoutes
+	inputs           conversationInputs
+	locks            conversationLocks
 }
 
-// NewConversationCoordinator creates the owner of conversation routing state.
-func NewConversationCoordinator(commands *CommandSet, resolve RootTextResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
-	return &ConversationCoordinator{commands: commands, resolve: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
+// NewConversationCoordinatorWithRootInputResolver はcache miss時に起点senderのACLでrouteを復元する。
+func NewConversationCoordinatorWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
+	return &ConversationCoordinator{commands: commands, resolveRootInput: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
 }
 
 // AcceptRoot queues a root command and records its route after queue acceptance.
 func (c *ConversationCoordinator) AcceptRoot(input *CommandInput) bool {
-	root := c.commands.MatchSingle(input.Text)
+	root := c.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
 	if c.enqueue == nil || !c.enqueue(input) {
 		return false
 	}
@@ -58,23 +64,30 @@ func (c *ConversationCoordinator) AcceptRoot(input *CommandInput) bool {
 func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (ThreadReplyResult, error) {
 	root, found := c.routes.lookup(input.ConversationID)
 	if !found {
-		if c.resolve == nil {
+		if c.resolveRootInput == nil {
 			return ThreadReplyIgnored, nil
 		}
-		text, err := c.resolve(input.ConversationID)
+		var err error
+		root, err = c.resolveRootCommand(input.ConversationID)
 		if err != nil {
 			return ThreadReplyIgnored, err
 		}
-		root = c.commands.MatchSingle(text)
 		c.routes.store(input.ConversationID, root)
 	}
 	if root == nil {
 		return ThreadReplyIgnored, nil
 	}
+	return c.routeThreadReply(root, input)
+}
+
+func (c *ConversationCoordinator) routeThreadReply(root *Command, input *CommandInput) (ThreadReplyResult, error) {
 	switch root.config.ThreadReplyMode {
 	case ThreadReplyIgnore:
 		return ThreadReplyIgnored, nil
 	case ThreadReplyStdin:
+		if input.AllowedCommandIndexes != nil && !containsCommandIndex(input.AllowedCommandIndexes, root.config.Index) {
+			return ThreadReplyIgnored, nil
+		}
 		endpoint := c.inputs.lookup(input.ConversationID)
 		if endpoint == nil {
 			return ThreadReplyIgnored, nil
@@ -94,6 +107,17 @@ func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (Thread
 		return ThreadReplyRouted, nil
 	}
 	return ThreadReplyIgnored, nil
+}
+
+func (c *ConversationCoordinator) resolveRootCommand(conversation ConversationID) (*Command, error) {
+	if c.resolveRootInput == nil {
+		return nil, nil
+	}
+	resolved, err := c.resolveRootInput(conversation)
+	if err != nil {
+		return nil, err
+	}
+	return c.commands.MatchSingle(resolved.Text, resolved.AllowedCommandIndexes), nil
 }
 
 // RunSerialized runs work without overlapping commands in one conversation.

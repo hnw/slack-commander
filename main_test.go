@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -11,6 +12,42 @@ import (
 
 	"github.com/hnw/slack-commander/cmd"
 )
+
+type listenerFailureTransport struct {
+	response string
+}
+
+func (transport listenerFailureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/api/auth.test" {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(transport.response)),
+			Header:     make(http.Header),
+		}, nil
+	}
+	<-request.Context().Done()
+	return nil, request.Context().Err()
+}
+
+func TestRunStopsWhenSlackIdentityCannotBeEstablished(t *testing.T) {
+	config := writeConfigFile(t, "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U']")
+	for _, response := range []string{
+		`{"ok":false,"error":"invalid_auth"}`,
+		`{"ok":true,"bot_id":"B-self"}`,
+		`{"ok":true,"user_id":"U-self"}`,
+	} {
+		t.Run(response, func(t *testing.T) {
+			previousClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: listenerFailureTransport{response: response}}
+			t.Cleanup(func() { http.DefaultClient = previousClient })
+			var exitCode int
+			stderr := captureStderr(t, func() { exitCode = run([]string{"--config-file", config}) })
+			if exitCode != 1 || !strings.Contains(stderr, "Slack listener error") {
+				t.Fatalf("exitCode = %d, stderr = %q, want listener error and exit 1", exitCode, stderr)
+			}
+		})
+	}
+}
 
 func TestRunCheckConfig(t *testing.T) {
 	if got := run([]string{"--help"}); got != 0 {

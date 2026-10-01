@@ -21,6 +21,11 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 		{name: "unknown top-level field", text: "unknown = true", want: []string{"unknown", "field", "1|"}},
 		{name: "unknown command field", text: "[[commands]]\nunknown = true", want: []string{"unknown", "field", "2|"}},
 		{name: "unknown reply field", text: "[[commands]]\n[[commands.replies]]\nunknown = true", want: []string{"unknown", "field", "3|"}},
+		{name: "command index is internal", text: "[[commands]]\ncommand_index = 42", want: []string{"command_index", "field"}},
+		{name: "top-level reminder flag is command-only", text: "accept_reminder = true", want: []string{"accept_reminder", "field"}},
+		{name: "bot message flag is removed", text: "accept_bot_message = true", want: []string{"accept_bot_message", "field"}},
+		{name: "bot message flag is removed from commands", text: "[[commands]]\naccept_bot_message = true", want: []string{"accept_bot_message", "field"}},
+		{name: "bot message flag is removed from replies", text: "[[commands]]\n[[commands.replies]]\naccept_bot_message = true", want: []string{"accept_bot_message", "field"}},
 		{name: "type mismatch", text: "num_workers = 'one'", want: []string{"num_workers", "1|"}},
 		{name: "syntax error", text: "num_workers =", want: []string{"num_workers", "1|"}},
 	}
@@ -38,6 +43,183 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveConfigFlattensCommandListenerPolicies(t *testing.T) {
+	text := `slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+num_workers = 1
+allowed_user_ids = ["U-top", "U-admin"]
+allowed_channel_ids = ["C-top"]
+
+[[commands]]
+keyword = "status"
+command = "status"
+accept_reminder = true
+
+[[commands.replies]]
+keyword = "retry"
+command = "retry"
+allowed_user_ids = []
+
+[[commands.replies]]
+keyword = "cancel"
+command = "cancel"
+allowed_channel_ids = []
+accept_reminder = true
+
+[[commands]]
+keyword = "deploy"
+command = "deploy"
+allowed_user_ids = ["U-admin"]
+allowed_channel_ids = []
+accept_reminder = false
+`
+	var cfg Config
+	if err := decodeConfigString(text, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveConfig(&cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []pubsub.ListenerConfig{
+		{CommandIndex: 0, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true},
+		{CommandIndex: 1, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: false},
+		{CommandIndex: 2, AllowedUserIDs: []string{"U-top", "U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: true},
+		{CommandIndex: 3, AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-top"}, AcceptReminder: false},
+	}
+	if !reflect.DeepEqual(cfg.ListenerConfigs, want) {
+		t.Fatalf("ListenerConfigs = %#v, want %#v", cfg.ListenerConfigs, want)
+	}
+	if cfg.commandConfigs[0].Index != 0 || cfg.commandConfigs[0].Replies[0].Index != 1 || cfg.commandConfigs[0].Replies[1].Index != 2 || cfg.commandConfigs[1].Index != 3 {
+		t.Fatalf("command indexes = root %d, replies %d/%d, second root %d", cfg.commandConfigs[0].Index, cfg.commandConfigs[0].Replies[0].Index, cfg.commandConfigs[0].Replies[1].Index, cfg.commandConfigs[1].Index)
+	}
+	for _, raw := range []*RawCommandConfig{cfg.Commands[0], cfg.Commands[0].Replies[0], cfg.Commands[0].Replies[1], cfg.Commands[1]} {
+		if raw.CommandIndex != 0 {
+			t.Fatalf("raw CommandIndex = %d, want zero", raw.CommandIndex)
+		}
+	}
+}
+
+func TestValidateOpenAccessUsesTopLevelAllowLists(t *testing.T) {
+	makeCommand := func(keyword string, users []string, replies ...*RawCommandConfig) *RawCommandConfig {
+		return &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: keyword}, RunnerConfig: cmd.RunnerConfig{Command: keyword}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: users}, Replies: replies}
+	}
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{name: "command restriction does not replace top-level unsafe gate", config: func() *Config {
+			cfg := validTestConfig(makeCommand("one", []string{"U123"}))
+			cfg.AllowedUserIDs = nil
+			return cfg
+		}(), wantErr: true},
+		{name: "inherited top-level restriction", config: validTestConfig(makeCommand("one", nil))},
+		{name: "no commands and no top-level restriction", config: &Config{PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test"}, NumWorkers: 1}, wantErr: true},
+		{name: "unsafe access permits empty top-level allowlists", config: &Config{PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowUnsafeOpenAccess: true}, NumWorkers: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := resolveConfig(tt.config)
+			if tt.wantErr && err == nil {
+				t.Fatal("resolveConfig() accepted configuration with open command access")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("resolveConfig() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveConfigRejectsACLExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		topIDs    []string
+		rootIDs   []string
+		replyIDs  []string
+		wantError bool
+	}{
+		{name: "root narrows top-level list", rootIDs: []string{"U123"}},
+		{name: "root cannot expand top-level list", rootIDs: []string{"U-other"}, wantError: true},
+		{name: "reply narrows parent list", rootIDs: []string{"U123"}, replyIDs: []string{"U123"}},
+		{name: "reply cannot expand parent list with another top-level ID", topIDs: []string{"U123", "U-other"}, rootIDs: []string{"U123"}, replyIDs: []string{"U-other"}, wantError: true},
+		{name: "empty reply list inherits parent", rootIDs: []string{"U123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: tc.replyIDs}}
+			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
+			cfg := validTestConfig(root)
+			if tc.topIDs != nil {
+				cfg.AllowedUserIDs = tc.topIDs
+			}
+			err := resolveConfig(cfg)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "not allowed by its parent") {
+					t.Fatalf("resolveConfig() error = %v, want parent ACL error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveConfig() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.ListenerConfigs[0].AllowedUserIDs, []string{"U123"}) || !reflect.DeepEqual(cfg.ListenerConfigs[1].AllowedUserIDs, []string{"U123"}) {
+				t.Fatalf("resolved users = %v", cfg.ListenerConfigs)
+			}
+		})
+	}
+}
+
+func TestResolveConfigRejectsChannelACLExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		topIDs    []string
+		rootIDs   []string
+		replyIDs  []string
+		wantError bool
+	}{
+		{name: "root cannot expand top-level channel list", rootIDs: []string{"C-other"}, wantError: true},
+		{name: "reply cannot expand root channel list with another top-level ID", topIDs: []string{"C123", "C-other"}, rootIDs: []string{"C123"}, replyIDs: []string{"C-other"}, wantError: true},
+		{name: "empty reply channel list inherits root", rootIDs: []string{"C123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedChannelIDs: tc.replyIDs}}
+			root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, ListenerConfig: pubsub.ListenerConfig{AllowedChannelIDs: tc.rootIDs}, Replies: []*RawCommandConfig{reply}}
+			cfg := validTestConfig(root)
+			cfg.AllowedChannelIDs = []string{"C123"}
+			if tc.topIDs != nil {
+				cfg.AllowedChannelIDs = tc.topIDs
+			}
+			err := resolveConfig(cfg)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "allowed_channel_ids") {
+					t.Fatalf("resolveConfig() error = %v, want channel ACL error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveConfig() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.ListenerConfigs[0].AllowedChannelIDs, []string{"C123"}) || !reflect.DeepEqual(cfg.ListenerConfigs[1].AllowedChannelIDs, []string{"C123"}) {
+				t.Fatalf("resolved channels = %v", cfg.ListenerConfigs)
+			}
+		})
+	}
+}
+
+func TestResolveConfigAllowsChildRestrictionOfUnrestrictedParent(t *testing.T) {
+	reply := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "reply"}, ListenerConfig: pubsub.ListenerConfig{AllowedUserIDs: []string{"U-other"}}}
+	root := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Replies: []*RawCommandConfig{reply}}
+	cfg := validTestConfig(root)
+	cfg.AllowedUserIDs = nil
+	cfg.AllowedChannelIDs = []string{"C123"}
+	if err := resolveConfig(cfg); err != nil {
+		t.Fatalf("resolveConfig() error = %v", err)
+	}
+	if len(cfg.ListenerConfigs[0].AllowedUserIDs) != 0 || !reflect.DeepEqual(cfg.ListenerConfigs[1].AllowedUserIDs, []string{"U-other"}) {
+		t.Fatalf("resolved users = %v", cfg.ListenerConfigs)
 	}
 }
 

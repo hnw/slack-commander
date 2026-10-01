@@ -10,8 +10,6 @@
 | [`slack_app_token`](#slack_app_token-string)                 | `string`   | —       | Slackのアプリレベルトークン        |
 | [`num_workers`](#num_workers-int)                            | `int`      | `1`     | 外部コマンドの最大同時実行数          |
 | [`output_flush_interval`](#output_flush_interval-duration)   | `duration` | `1s`    | コマンド出力を途中送信する最大待ち時間      |
-| [`accept_reminder`](#accept_reminder-bool)                   | `bool`     | `false` | Slackリマインダーの投稿を受け付ける    |
-| [`accept_bot_message`](#accept_bot_message-bool)             | `bool`     | `false` | ボットによる投稿を受け付ける          |
 | [`allowed_user_ids`](#allowed_user_ids-string)               | `[]string` | 空       | 実行を許可するユーザーID           |
 | [`allowed_channel_ids`](#allowed_channel_ids-string)         | `[]string` | 空       | 実行を許可するチャンネルID          |
 | [`allow_unsafe_open_access`](#allow_unsafe_open_access-bool) | `bool`     | `false` | ユーザー・チャンネル制限なしでの起動を許可する |
@@ -21,6 +19,9 @@
 | 項目                                              | 型                      | 既定値       | 概要                                  |
 | ----------------------------------------------- | ---------------------- | --------- | ----------------------------------- |
 | [`keyword`](#keyword-string)                    | `string`               | —         | Slackへの入力と照合するキーワード                 |
+| [`allowed_user_ids`](#allowed_user_ids-string)   | `[]string`             | 継承      | このコマンドを実行できるユーザーID                |
+| [`allowed_channel_ids`](#allowed_channel_ids-string) | `[]string`          | 継承      | このコマンドを実行できるチャンネルID              |
+| [`accept_reminder`](#accept_reminder-bool)       | `bool`                 | `false`   | Slackリマインダーからの入力を受け付ける            |
 | [`interaction`](#interaction-string)            | `string`               | `oneshot` | スレッド内の追加入力の扱い                       |
 | [`replies`](#replies)                           | `[[commands.replies]]` | —         | `interaction = "command"`で使用する返信用設定 |
 | [`runner`](#runner-string)                      | `string`               | `exec`    | 実行方法                                |
@@ -77,31 +78,39 @@ Slackの管理画面で「General」→「Basic Information」→「App-Level To
 
 `[[commands]]`または`[[commands.replies]]`にも指定でき、トップレベル → command → replyの順に継承します。
 
+### allowed_user_ids `[]string`
+
+コマンドを実行できるユーザーIDの許可リストを指定します。トップレベルで空の場合はユーザーによる制限を行いません。
+
+通常ユーザーの投稿を許可する場合はUser IDを、botの投稿を許可する場合はそのBot IDを指定します。
+bot投稿ではBot IDをsender IDとしてこの許可リストと照合します。
+自身のbot投稿は、許可リストの設定にかかわらず常に除外します。
+
+`[[commands]]`と`[[commands.replies]]`ではトップレベルまたは親コマンドの値を継承します。明示したIDは親の許可リストに含まれる必要があります。親が制限されている場合、親にないIDを含めると設定エラーになります。空配列も親の値を継承し、制限を解除しません。親が空の場合は、子で任意のIDに制限できます。
+
+### allowed_channel_ids `[]string`
+
+コマンドを実行できるチャンネルIDの許可リストを指定します。トップレベルで空の場合はチャンネルによる制限を行いません。
+
+`[[commands]]`と`[[commands.replies]]`ではトップレベルまたは親コマンドの値を継承します。明示したIDは親の許可リストに含まれる必要があります。親が制限されている場合、親にないIDを含めると設定エラーになります。空配列も親の値を継承し、制限を解除しません。親が空の場合は、子で任意のIDに制限できます。
+
+トップレベルのユーザーIDとチャンネルIDの両方が空の場合、`allow_unsafe_open_access = true`がなければ起動時にエラーになります。コマンドごとの制限を追加しても、この条件は変わりません。
+
+### allow_unsafe_open_access `bool`
+
+トップレベルの`allowed_user_ids`と`allowed_channel_ids`の両方が空でも、`true`にすると起動を許可します。
+
+後方互換のための設定です。セキュリティ上の理由から、通常は`false`のまま使用してください。
+
+旧設定のトップレベル`accept_reminder`と、どの階層の`accept_bot_message`も使用できません。これらが残っているとunknown fieldの設定エラーになります。Reminderを使う場合は各コマンドに`accept_reminder = true`を設定してください。
+
+## コマンドごとの設定項目
+
 ### accept_reminder `bool`
 
 Slackのリマインダーによる投稿もキーワードの照合対象にするか指定します。`cron`や`at`の代わりとして利用できます。
 
-### accept_bot_message `bool`
-
-ボットによる投稿もキーワードの照合対象にするか指定します。
-
-### allowed_user_ids `[]string`
-
-コマンドを実行できるユーザーIDの許可リストを指定します。空の場合はユーザーによる制限を行いません。
-
-### allowed_channel_ids `[]string`
-
-コマンドを実行できるチャンネルIDの許可リストを指定します。空の場合はチャンネルによる制限を行いません。
-
-`allowed_user_ids`と`allowed_channel_ids`の両方を空にすると、デフォルトでは起動時にエラーになります。
-
-### allow_unsafe_open_access `bool`
-
-`true`にすると、`allowed_user_ids`と`allowed_channel_ids`の両方が空でも起動を許可します。
-
-後方互換のための設定です。セキュリティ上の理由から、通常は`false`のまま使用してください。
-
-## コマンドごとの設定項目
+`[[commands]]`と`[[commands.replies]]`に指定できます。省略時は`false`です。親から継承しません。ReminderではユーザーIDの許可リストを適用せず、`allowed_channel_ids`は通常どおり適用します。
 
 ### keyword `string`
 
@@ -140,6 +149,8 @@ keyword = "foo * bar *"
 
 複数の`[[commands]]`が同じ入力にマッチする場合は、先に定義したものを使用します。
 
+Slack入力の候補から外れたcommandは存在しないものとして扱います。そのため、定義順で次にある許可済みの同一keywordやwildcardに通常どおり照合が進みます。
+
 ワイルドカードにマッチした内容の使われ方については、[ワイルドカードの展開](#ワイルドカードの展開)を参照してください。
 
 ### interaction `string`
@@ -147,7 +158,7 @@ keyword = "foo * bar *"
 スレッドの起点メッセージにマッチした`[[commands]]`が、その後の入力をどのように扱うかを指定します。省略時は`oneshot`です。
 
 * `oneshot`: 起点メッセージの2行目以降を標準入力へ渡します。スレッドへの返信は無視します。`;`、`&&`、`||`によるコマンドの連結を使用できます。
-* `stdin`: 起点メッセージの2行目以降と、その後のスレッドへの返信を実行中プロセスの標準入力へ渡します。
+* `stdin`: 起点メッセージの2行目以降と、その後のスレッドへの返信を実行中プロセスの標準入力へ渡します。返信する人とチャンネルが起点commandの解決済みallowlistで許可される場合だけ受け付けます。
 * `command`: スレッドへの返信を`[[commands.replies]]`に従って処理します。
 
 `interaction = "command"`では、起点メッセージとスレッドへの返信のどちらについても、`keyword`の末尾が`*`の場合だけ2行目以降を追加のargvとして渡します。1行目と2行目の間の改行も保持します。
@@ -223,6 +234,8 @@ command = "todo-wrapper *"
 * `icon_url`
 * `reply_broadcast`
 * `output_format`
+* `allowed_user_ids`
+* `allowed_channel_ids`
 
 次の項目は継承しません。
 
@@ -233,7 +246,9 @@ command = "todo-wrapper *"
 * `headers`
 * `body`
 
-継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = 0`、`stdin_idle_timeout = 0`、`tty = false`、`output_flush_interval = "0s"`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。
+継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = 0`、`stdin_idle_timeout = 0`、`tty = false`、`output_flush_interval = "0s"`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。`accept_reminder`は返信側の値だけで決まり、親から継承しません。
+
+`allowed_user_ids = []`と`allowed_channel_ids = []`は親の許可リストを継承します。親の制限にないIDを指定すると設定エラーになります。
 
 `interaction`は`[[commands.replies]]`には指定できません。
 

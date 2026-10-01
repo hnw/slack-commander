@@ -68,6 +68,6 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 	return NewCommandSet(commands)
 }
 
-func newTestConversationCoordinator(configs []*testCommandConfig, resolve RootTextResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
-	return NewConversationCoordinator(testCommandSet(configs, nil), resolve, enqueue, routeCapacity)
+func newTestConversationCoordinator(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationCoordinator {
+	return NewConversationCoordinatorWithRootInputResolver(testCommandSet(configs, nil), resolve, enqueue, routeCapacity)
 }

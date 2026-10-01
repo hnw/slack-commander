@@ -14,10 +14,11 @@ import (
 
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
 type CommandInput struct {
-	ConversationID ConversationID
-	MessageID      MessageID
-	Text           string // 起動コマンド平文
-	CommandSet     *CommandSet
+	ConversationID        ConversationID
+	MessageID             MessageID
+	Text                  string // 起動コマンド平文
+	CommandSet            *CommandSet
+	AllowedCommandIndexes []int // nilは従来の直接利用を無制限扱いに保つ。
 }
 
 // ConversationID identifies the Slack thread that receives command output.
@@ -79,7 +80,7 @@ func (e *Executor) Execute(
 	cmdMsg, stdinText := splitCommandInput(input.Text)
 	cmds, parseErr := parseCommands(cmdMsg)
 
-	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, commandSet) {
+	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, commandSet, input.AllowedCommandIndexes) {
 		return
 	}
 
@@ -90,7 +91,7 @@ func (e *Executor) Execute(
 	if len(cmds) == 0 {
 		return
 	}
-	command, _ := commandSet.Match(cmds[0])
+	command, _ := commandSet.Match(cmds[0], input.AllowedCommandIndexes)
 	if command != nil && command.config.InputBodyMode == InputBodyArgument {
 		if stdinText != "" {
 			rawBody = "\n" + stdinText
@@ -115,9 +116,9 @@ func (e *Executor) Execute(
 	)
 }
 
-func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, commandSet *CommandSet) bool {
+func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, commandSet *CommandSet, allowedIndexes []int) bool {
 	for _, command := range cmds {
-		matched, _ := commandSet.Match(command)
+		matched, _ := commandSet.Match(command, allowedIndexes)
 		if matched == nil {
 			continue
 		}
@@ -168,7 +169,7 @@ func executeCommands(
 			continue
 		}
 		ret = -1
-		command, args := commandSet.Match(cmd)
+		command, args := commandSet.Match(cmd, input.AllowedCommandIndexes)
 		if command == nil {
 			if i == 0 {
 				// キーワードにマッチしなかったらparse errorがあっても表示せず終了
