@@ -107,7 +107,7 @@ func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
 			defer cancel()
 			inputs := make(chan *cmd.CommandInput)
 			var workers sync.WaitGroup
-			startWorkers(ctx, 2, inputs, nil, nil, nil, &workers)
+			startWorkers(ctx, 2, inputs, nil, nil, nil, nil, &workers)
 			if closeQueue {
 				close(inputs)
 			} else {

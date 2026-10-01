@@ -64,7 +64,7 @@ func SlackListener(
 	ctx context.Context,
 	smc *socketmode.Client,
 	cfg Config,
-	coordinator *cmd.ConversationCoordinator,
+	router *cmd.ConversationRouter,
 ) error {
 	if err := identifyOwnBot(ctx, smc); err != nil {
 		return err
@@ -98,9 +98,9 @@ func SlackListener(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, cfg, coordinator)
+						onMessageEvent(smc, ev, cfg, router)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, cfg, coordinator)
+						onAppMentionEvent(smc, ev, cfg, router)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -277,7 +277,7 @@ func onMessageEvent(
 	smc *socketmode.Client,
 	ev *slackevents.MessageEvent,
 	cfg Config,
-	coordinator *cmd.ConversationCoordinator,
+	router *cmd.ConversationRouter,
 ) {
 	if shouldIgnoreMessageEvent(ev) {
 		return
@@ -289,11 +289,11 @@ func onMessageEvent(
 	if len(input.AllowedCommandIndexes) == 0 || input.Text == "" {
 		return
 	}
-	if coordinator == nil {
-		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping message event command")
+	if router == nil {
+		smc.Debugf("[WARN] conversation router is unavailable; dropping message event command")
 		return
 	}
-	result, err := coordinator.Accept(input)
+	result, err := router.Accept(input)
 	if err != nil {
 		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return
@@ -309,7 +309,7 @@ func onAppMentionEvent(
 	smc *socketmode.Client,
 	ev *slackevents.AppMentionEvent,
 	cfg Config,
-	coordinator *cmd.ConversationCoordinator,
+	router *cmd.ConversationRouter,
 ) {
 	if shouldIgnoreAppMentionEvent(ev) {
 		return
@@ -321,11 +321,11 @@ func onAppMentionEvent(
 	if len(input.AllowedCommandIndexes) == 0 || input.Text == "" {
 		return
 	}
-	if coordinator == nil {
-		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping app_mention command")
+	if router == nil {
+		smc.Debugf("[WARN] conversation router is unavailable; dropping app_mention command")
 		return
 	}
-	result, err := coordinator.Accept(input)
+	result, err := router.Accept(input)
 	if err != nil {
 		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return

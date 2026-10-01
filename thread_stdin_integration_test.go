@@ -32,23 +32,27 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	var queuedCount atomic.Int64
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
+	queued := make(chan struct{}, 10)
+	stdinStore := &cmd.StdinStore{}
+	conversationLocks := &cmd.ConversationLocks{}
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
 		queuedCount.Add(1)
 		select {
 		case requests <- input:
+			queued <- struct{}{}
 			return true
 		default:
 			return false
 		}
-	}, 1)
+	}, 1, stdinStore)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 2, requests, coordinator, commands, outputs, &workers)
+	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, commands, outputs, &workers)
 	listenerDone := make(chan struct{})
 	go func() {
 		if err := pubsub.SlackListener(ctx, smc, pubsub.Config{
 			AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"},
 			ListenerConfigs: []pubsub.ListenerConfig{{CommandIndex: 0, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 1, IsReply: true, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}},
-		}, coordinator); err != nil {
+		}, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(listenerDone)
@@ -66,11 +70,27 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		}}
 	}
 	send("", "agent\nold")
+	select {
+	case <-queued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("root command was not queued")
+	}
 	awaitThreadStdinReady(t, outputs)
+	send("", "agent\nqueued behind the active command")
+	select {
+	case <-queued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second same-conversation command was not queued")
+	}
 	send("1", "<@BOT> “raw” &amp;")
 	awaitThreadStdinOutput(t, outputs, "old| \"raw\" &\n")
-	if got := queuedCount.Load(); got != 1 {
-		t.Fatalf("queue received %d inputs, want only the root command", got)
+	if got := queuedCount.Load(); got != 2 {
+		t.Fatalf("queue received %d inputs, want only the two root commands", got)
+	}
+	select {
+	case <-queued:
+		t.Fatal("synthetic stdin reply was queued as a command")
+	default:
 	}
 }
 

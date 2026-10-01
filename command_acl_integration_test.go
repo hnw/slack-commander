@@ -46,13 +46,15 @@ timeout = 5
 	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
+	stdinStore := &cmd.StdinStore{}
+	conversationLocks := &cmd.ConversationLocks{}
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
-	}, 10)
+	}, 10, stdinStore)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, coordinator, commands, outputs, &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, commands, outputs, &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -60,7 +62,7 @@ timeout = 5
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	done := make(chan struct{})
 	go func() {
-		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, coordinator); err != nil {
+		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(done)
@@ -154,15 +156,15 @@ accept_reminder = true
 	}))
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
-	}, 0)
+	}, 0, &cmd.StdinStore{})
 	executor := cmd.NewExecutor(commands, make(chan *cmd.CommandOutput, 30))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, coordinator); err != nil {
+		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(done)
