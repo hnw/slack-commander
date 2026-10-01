@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type fakeCall struct {
@@ -82,17 +81,14 @@ func (c *fakeCmd) Run(_ int) int {
 	return c.exitCode
 }
 
-func TestExecutorCommandInteractionSendsBodyOnlyToArgv(t *testing.T) {
-	config := NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)
-	config.Interaction = InteractionCommand
+func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
+	config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *", InputBodyMode: InputBodyArgument})
 	runner := &fakeRunner{}
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
-	rq <- &CommandInput{Text: "todo foo\nbar\n"}
-	close(rq)
-	ExecutorWithRunner(context.Background(), rq, wq, []*CommandConfig{config}, func(*CommandConfig) CommandRunner {
+	executor := NewExecutor(testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
 		return runner
-	})
+	}), wq)
+	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n"}, nil)
 	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
 	}
@@ -101,7 +97,7 @@ func TestExecutorCommandInteractionSendsBodyOnlyToArgv(t *testing.T) {
 	}
 }
 
-func TestExecutorCommandInteractionAppendsBodyOnlyForTrailingWildcard(t *testing.T) {
+func TestExecutorArgumentBodyAppendsOnlyForTrailingWildcard(t *testing.T) {
 	tests := []struct {
 		name    string
 		keyword string
@@ -127,9 +123,8 @@ func TestExecutorCommandInteractionAppendsBodyOnlyForTrailingWildcard(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&Definition{Keyword: tt.keyword, Command: tt.command}, nil)
-			config.Interaction = InteractionCommand
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Command: tt.command, InputBodyMode: InputBodyArgument})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != 1 || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want args %#v", calls, tt.want)
 			}
@@ -137,7 +132,7 @@ func TestExecutorCommandInteractionAppendsBodyOnlyForTrailingWildcard(t *testing
 	}
 }
 
-func TestExecutorCommandInteractionPassesBodyToHTTPOnlyForTrailingWildcard(t *testing.T) {
+func TestExecutorArgumentBodyPassesToHTTPOnlyForTrailingWildcard(t *testing.T) {
 	tests := []struct {
 		name    string
 		keyword string
@@ -166,9 +161,8 @@ func TestExecutorCommandInteractionPassesBodyToHTTPOnlyForTrailingWildcard(t *te
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&Definition{Keyword: tt.keyword, Runner: "http"}, nil)
-			config.Interaction = InteractionCommand
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Runner: "http", InputBodyMode: InputBodyArgument})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != 1 || calls[0].name != "http" || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want HTTP args %#v", calls, tt.want)
 			}
@@ -176,45 +170,44 @@ func TestExecutorCommandInteractionPassesBodyToHTTPOnlyForTrailingWildcard(t *te
 	}
 }
 
-func TestExecutorRejectsChainsContainingNonOneshotCommand(t *testing.T) {
-	newConfig := func(keyword string, interaction string) *CommandConfig {
-		config := NewCommandConfig(&Definition{Keyword: keyword, Command: keyword}, nil)
-		config.Interaction = interaction
+func TestExecutorRejectsChainsContainingDisallowedCommand(t *testing.T) {
+	newConfig := func(keyword string, allowInChain bool) *testCommandConfig {
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: keyword, Command: keyword, AllowInChain: allowInChain})
 		return config
 	}
 	tests := []struct {
 		name      string
 		input     string
-		configs   []*CommandConfig
+		configs   []*testCommandConfig
 		wantCalls int
 	}{
 		{
 			name: "oneshot chain executes", input: "first ; second", wantCalls: 2,
-			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("second", InteractionOneshot)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
 		},
 		{
 			name: "stdin chain rejects", input: "stdin-first ; stdin-second",
-			configs: []*CommandConfig{newConfig("stdin-first", InteractionStdin), newConfig("stdin-second", InteractionStdin)},
+			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("stdin-second", false)},
 		},
 		{
 			name: "command chain rejects", input: "command-first ; command-second",
-			configs: []*CommandConfig{newConfig("command-first", InteractionCommand), newConfig("command-second", InteractionCommand)},
+			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("command-second", false)},
 		},
 		{
 			name: "oneshot then stdin rejects", input: "first ; stdin-second",
-			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("stdin-second", InteractionStdin)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("stdin-second", false)},
 		},
 		{
 			name: "oneshot then command rejects", input: "first ; command-second",
-			configs: []*CommandConfig{newConfig("first", InteractionOneshot), newConfig("command-second", InteractionCommand)},
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("command-second", false)},
 		},
 		{
 			name: "stdin then oneshot rejects", input: "stdin-first ; second",
-			configs: []*CommandConfig{newConfig("stdin-first", InteractionStdin), newConfig("second", InteractionOneshot)},
+			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("second", true)},
 		},
 		{
 			name: "command then oneshot rejects", input: "command-first ; second",
-			configs: []*CommandConfig{newConfig("command-first", InteractionCommand), newConfig("second", InteractionOneshot)},
+			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("second", true)},
 		},
 	}
 
@@ -249,37 +242,24 @@ func drainOutputs(ch chan *CommandOutput) []*CommandOutput {
 func runExecutorOnce(
 	t *testing.T,
 	input string,
-	cfgs []*CommandConfig,
+	cfgs []*testCommandConfig,
 ) ([]fakeCall, []*CommandOutput) {
 	t.Helper()
-	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 20)
 	runner := &fakeRunner{}
-	done := make(chan struct{})
-	go func() {
-		ExecutorWithRunner(context.Background(), rq, wq, cfgs, func(*CommandConfig) CommandRunner {
-			return runner
-		})
-		close(done)
-	}()
-
-	rq <- &CommandInput{Text: input}
-	close(rq)
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("executor did not finish")
-	}
+	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
+		return runner
+	}), wq)
+	executor.Execute(context.Background(), &CommandInput{Text: input}, nil)
 
 	return runner.Calls(), drainOutputs(wq)
 }
 
-func testCommandConfigs() []*CommandConfig {
-	return []*CommandConfig{
-		NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil),
-		NewCommandConfig(&Definition{Keyword: "deploy *", Command: "deploy *"}, nil),
-		NewCommandConfig(&Definition{Keyword: "echo *", Command: "echo *"}, nil),
+func testCommandConfigs() []*testCommandConfig {
+	return []*testCommandConfig{
+		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Keyword: "deploy *", Command: "deploy *", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *", AllowInChain: true}),
 	}
 }
 
@@ -299,32 +279,31 @@ func TestExecutorIntentDetection(t *testing.T) {
 	)
 }
 
-func TestExecutorInteractionInput(t *testing.T) {
+func TestExecutorInputBodyModes(t *testing.T) {
 	tests := []struct {
-		name        string
-		interaction string
-		input       string
-		wantArgs    []string
-		wantCalls   int
+		name          string
+		allowInChain  bool
+		inputBodyMode InputBodyMode
+		input         string
+		wantArgs      []string
+		wantCalls     int
 	}{
-		{name: "oneshot passes body to stdin", input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
-		{name: "stdin passes initial body to stdin", interaction: InteractionStdin, input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1},
-		{name: "command appends raw body with leading newline", interaction: InteractionCommand, input: "todo foo\nbar\n", wantArgs: []string{"foo", "\nbar\n"}, wantCalls: 1},
-		{name: "command appends raw body with leading newline after quoted first line", interaction: InteractionCommand, input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "\nbaz\n"}, wantCalls: 1},
-		{name: "command preserves blank body newlines", interaction: InteractionCommand, input: "todo\n\n", wantArgs: []string{"\n\n"}, wantCalls: 1},
-		{name: "command does not append empty body", interaction: InteractionCommand, input: "todo\n", wantArgs: nil, wantCalls: 1},
-		{name: "command rejects chains", interaction: InteractionCommand, input: "todo one && todo two", wantCalls: 0},
-		{name: "stdin rejects chains", interaction: InteractionStdin, input: "todo one && todo two", wantCalls: 0},
-		{name: "oneshot allows chains", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2},
+		{name: "stdin body", input: "todo foo\nbar\n", wantArgs: []string{"foo"}, wantCalls: 1, inputBodyMode: InputBodyStdin},
+		{name: "argument body", input: "todo foo\nbar\n", wantArgs: []string{"foo", "\nbar\n"}, wantCalls: 1, inputBodyMode: InputBodyArgument},
+		{name: "argument body after quoted command", input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "\nbaz\n"}, wantCalls: 1, inputBodyMode: InputBodyArgument},
+		{name: "argument body preserves blank lines", input: "todo\n\n", wantArgs: []string{"\n\n"}, wantCalls: 1, inputBodyMode: InputBodyArgument},
+		{name: "argument body ignores empty input", input: "todo\n", wantArgs: nil, wantCalls: 1, inputBodyMode: InputBodyArgument},
+		{name: "argument body rejects chains", input: "todo one && todo two", wantCalls: 0, inputBodyMode: InputBodyArgument},
+		{name: "disallowed chain rejects", input: "todo one && todo two", wantCalls: 0, inputBodyMode: InputBodyStdin},
+		{name: "allowed chain executes", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2, allowInChain: true, inputBodyMode: InputBodyStdin},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := NewCommandConfig(&Definition{Keyword: "todo *", Command: "todo *"}, nil)
-			if tt.interaction != "" {
-				config.Interaction = tt.interaction
-			}
-			calls, _ := runExecutorOnce(t, tt.input, []*CommandConfig{config})
+			config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})
+			config.AllowInChain = tt.allowInChain
+			config.InputBodyMode = tt.inputBodyMode
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
 			if len(calls) != tt.wantCalls {
 				t.Fatalf("calls = %#v, want %d calls", calls, tt.wantCalls)
 			}
@@ -335,38 +314,29 @@ func TestExecutorInteractionInput(t *testing.T) {
 	}
 }
 
-func TestExecutorPropagatesConversationContext(t *testing.T) {
-	rq := make(chan *CommandInput, 1)
+func TestExecutorPropagatesConversationID(t *testing.T) {
 	wq := make(chan *CommandOutput, 20)
-	done := make(chan struct{})
-	go func() {
-		ExecutorWithRunner(
-			context.Background(),
-			rq,
-			wq,
-			testCommandConfigs(),
-			func(*CommandConfig) CommandRunner {
-				return contextRunner{}
-			},
-		)
-		close(done)
-	}()
+	executor := NewExecutor(testCommandSet(testCommandConfigs(), func(*testExecutionConfig) CommandRunner {
+		return contextRunner{}
+	}), wq)
 
-	context := ConversationContext{
-		ChannelID:           "C123",
-		RootThreadTimestamp: "1700000000.000100",
+	conversation := ConversationID{
+		ChannelID:     "C123",
+		RootTimestamp: "1700000000.000100",
 	}
-	rq <- &CommandInput{Text: "date", ConversationContext: context}
-	close(rq)
-	<-done
+	message := MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"}
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: conversation, MessageID: message}, nil)
 
 	outputs := drainOutputs(wq)
 	if len(outputs) != 4 {
 		t.Fatalf("expected spawn, stdout, stderr, and finish outputs, got %d", len(outputs))
 	}
 	for _, output := range outputs {
-		if output.ConversationContext != context {
-			t.Fatalf("output context = %+v, want %+v", output.ConversationContext, context)
+		if output.ConversationID != conversation {
+			t.Fatalf("output context = %+v, want %+v", output.ConversationID, conversation)
+		}
+		if output.MessageID != message {
+			t.Fatalf("output message ID = %+v, want %+v", output.MessageID, message)
 		}
 	}
 }
@@ -423,10 +393,10 @@ func testExecutorParseErrorWhenIntentMatches(t *testing.T) {
 func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 	t.Run("parse error uses matched command setting", func(t *testing.T) {
 		systemConfig := &struct{ replyBroadcast bool }{replyBroadcast: false}
-		config := NewCommandConfig(&Definition{Keyword: "echo *", Command: "echo *"}, nil)
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *"})
 		config.SystemReplyConfig = systemConfig
 
-		_, outputs := runExecutorOnce(t, "echo \"hello", []*CommandConfig{config})
+		_, outputs := runExecutorOnce(t, "echo \"hello", []*testCommandConfig{config})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != systemConfig {
@@ -439,8 +409,8 @@ func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 	})
 
 	t.Run("unmatched command keeps default setting", func(t *testing.T) {
-		config := NewCommandConfig(&Definition{Keyword: "date", Command: "date"}, nil)
-		_, outputs := runExecutorOnce(t, "date && missing", []*CommandConfig{config})
+		config := newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true})
+		_, outputs := runExecutorOnce(t, "date && missing", []*testCommandConfig{config})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != nil {

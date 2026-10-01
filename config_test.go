@@ -54,7 +54,7 @@ func writeConfigFile(t *testing.T, text string) string {
 	return path
 }
 
-func validTestConfig(commands ...*CommandConfig) *Config {
+func validTestConfig(commands ...*RawCommandConfig) *Config {
 	return &Config{
 		PubSubConfig: PubSubConfig{
 			SlackBotToken:  "xoxb-test",
@@ -84,12 +84,12 @@ func TestValidateConfigRequiresSlackTokens(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Command: "date"}})
+			cfg := validTestConfig(&RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"}})
 			tc.clear(cfg)
 
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.want)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.want)
 			}
 		})
 	}
@@ -104,23 +104,23 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		{
 			name: "top-level keyword is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Command: "date"}})
+				return validTestConfig(&RawCommandConfig{RunnerConfig: cmd.RunnerConfig{Command: "date"}})
 			},
 			want: "keyword is required",
 		},
 		{
 			name: "top-level keyword is blank",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: " ", Command: "date"}})
+				return validTestConfig(&RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: " "}, RunnerConfig: cmd.RunnerConfig{Command: "date"}})
 			},
 			want: "keyword is required",
 		},
 		{
 			name: "reply keyword is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
-					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Command: "retry"}}},
+				return validTestConfig(&RawCommandConfig{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"},
+					Replies: []*RawCommandConfig{{RunnerConfig: cmd.RunnerConfig{Command: "retry"}}},
 				})
 			},
 			want: "keyword is required",
@@ -128,23 +128,23 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		{
 			name: "exec command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerExec}})
+				return validTestConfig(&RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Runner: cmd.RunnerExec}})
 			},
 			want: "command is required",
 		},
 		{
 			name: "compose command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{Definition: cmd.Definition{Keyword: "date", Runner: cmd.RunnerCompose}})
+				return validTestConfig(&RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Runner: cmd.RunnerCompose}})
 			},
 			want: "command is required",
 		},
 		{
 			name: "reply exec command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
-					Replies:    []*ReplyCommandConfig{{Definition: cmd.Definition{Keyword: "retry"}}},
+				return validTestConfig(&RawCommandConfig{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"},
+					Replies: []*RawCommandConfig{{MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}}},
 				})
 			},
 			want: "command is required",
@@ -152,11 +152,10 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		{
 			name: "reply compose command is missing",
 			config: func() *Config {
-				return validTestConfig(&CommandConfig{
-					Definition: cmd.Definition{Keyword: "date", Command: "date"},
-					Replies: []*ReplyCommandConfig{{
-						Definition: cmd.Definition{Keyword: "retry"},
-						Runner:     cmd.RunnerCompose,
+				return validTestConfig(&RawCommandConfig{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"},
+					Replies: []*RawCommandConfig{{
+						MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Runner: cmd.RunnerCompose},
 					}},
 				})
 			},
@@ -164,9 +163,9 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateConfig(tc.config())
+			err := resolveConfig(tc.config())
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.want)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.want)
 			}
 		})
 	}
@@ -182,19 +181,17 @@ func TestValidateConfigTimeout(t *testing.T) {
 		{name: "zero is allowed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := validTestConfig(&CommandConfig{Definition: cmd.Definition{
-				Keyword: "date", Command: "date", Timeout: tc.timeout,
-			}})
+			cfg := validTestConfig(&RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"}, RawExecutorConfig: RawExecutorConfig{Timeout: &tc.timeout}})
 
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tc.wantErr == "" {
 				if err != nil {
-					t.Fatalf("validateConfig() error = %v", err)
+					t.Fatalf("resolveConfig() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -228,15 +225,11 @@ url = "https://example.com/retry"
 	if cfg.NumWorkers != 1 {
 		t.Fatalf("num_workers = %d, want 1", cfg.NumWorkers)
 	}
-	if cfg.Commands[0].Interaction != cmd.InteractionOneshot || cfg.Commands[0].Runner != cmd.RunnerExec {
-		t.Fatalf("default command = %+v", cfg.Commands[0])
+	if cfg.commandConfigs[0].ThreadReplyMode != cmd.ThreadReplyIgnore || cfg.commandConfigs[0].Runner != cmd.RunnerExec {
+		t.Fatalf("resolved default command = %+v", cfg.commandConfigs[0])
 	}
-	if cfg.Commands[1].Method != "POST" {
-		t.Fatalf("http method = %q, want POST", cfg.Commands[1].Method)
-	}
-	reply := cfg.Commands[1].Replies[0]
-	if reply.Definition.Runner != cmd.RunnerHTTP || reply.ReplyConfig.OutputFormat != pubsub.OutputFormatMarkdown {
-		t.Fatalf("resolved reply = %+v", reply)
+	if cfg.Commands[1].Replies[0].URL != "https://example.com/retry" {
+		t.Fatalf("reply URL = %q", cfg.Commands[1].Replies[0].URL)
 	}
 }
 
@@ -271,8 +264,8 @@ command = "date"
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != time.Second {
-			t.Fatalf("output flush interval = %s, want %s", got, time.Second)
+		if cfg.Commands[0].OutputFlushInterval != nil {
+			t.Fatalf("output flush interval = %v, want unset", cfg.Commands[0].OutputFlushInterval)
 		}
 	})
 
@@ -304,16 +297,16 @@ output_flush_interval = "0s"
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.Commands[0].Definition.OutputFlushInterval; got != 500*time.Millisecond {
-			t.Fatalf("top-level output flush interval = %s, want %s", got, 500*time.Millisecond)
+		if cfg.Commands[0].OutputFlushInterval != nil {
+			t.Fatalf("top-level command output flush interval = %v, want unset", cfg.Commands[0].OutputFlushInterval)
 		}
-		if got := cfg.Commands[1].Definition.OutputFlushInterval; got != 2*time.Second {
+		if got := time.Duration(*cfg.Commands[1].OutputFlushInterval); got != 2*time.Second {
 			t.Fatalf("command output flush interval = %s, want %s", got, 2*time.Second)
 		}
-		if got := cfg.Commands[1].Replies[0].Definition.OutputFlushInterval; got != 2*time.Second {
-			t.Fatalf("inherited reply output flush interval = %s, want %s", got, 2*time.Second)
+		if cfg.Commands[1].Replies[0].OutputFlushInterval != nil {
+			t.Fatalf("inherited reply output flush interval = %v, want unset", cfg.Commands[1].Replies[0].OutputFlushInterval)
 		}
-		if got := cfg.Commands[1].Replies[1].Definition.OutputFlushInterval; got != 0 {
+		if got := time.Duration(*cfg.Commands[1].Replies[1].OutputFlushInterval); got != 0 {
 			t.Fatalf("overridden reply output flush interval = %s, want 0", got)
 		}
 	})
@@ -341,6 +334,107 @@ command = "date"
 			t.Fatal("decodeConfig() accepted invalid duration")
 		}
 	})
+}
+
+func TestLoadConfigResolvesInheritedCommandValues(t *testing.T) {
+	cfg, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+output_flush_interval = "500ms"
+
+[[commands]]
+keyword = "todo"
+command = "todo"
+interaction = "command"
+timeout = 30
+tty = true
+output_flush_interval = "2s"
+
+[[commands.replies]]
+keyword = "retry"
+command = "todo retry"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := cfg.commandConfigs[0]
+	if root.OutputFlushInterval != 2*time.Second || root.ThreadReplyMode != cmd.ThreadReplyCommand || root.AllowInChain {
+		t.Fatalf("resolved root = %+v", root)
+	}
+	if got := root.Replies[0].OutputFlushInterval; got != 2*time.Second {
+		t.Fatalf("inherited reply interval = %s, want 2s", got)
+	}
+	inherited := root.Replies[0]
+	if inherited.AllowInChain != root.AllowInChain ||
+		inherited.InteractiveStdin != root.InteractiveStdin ||
+		inherited.InputBodyMode != root.InputBodyMode ||
+		inherited.Timeout != root.Timeout ||
+		inherited.StdinIdleTimeout != root.StdinIdleTimeout ||
+		inherited.TTY != root.TTY {
+		t.Fatalf("inherited reply executor config = %+v, root = %+v", inherited.ExecutorConfig, root.ExecutorConfig)
+	}
+}
+
+func TestLoadConfigResolvesReplyOverrides(t *testing.T) {
+	cfg, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "todo"
+command = "todo"
+timeout = 30
+tty = true
+
+[[commands.replies]]
+keyword = "notify"
+runner = " http "
+url = "https://example.com/notify"
+tty = false
+
+[[commands.replies]]
+keyword = "stop"
+command = "todo stop"
+timeout = 0
+tty = false
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := cfg.commandConfigs[0]
+	if reply := root.Replies[0]; reply.Runner != cmd.RunnerHTTP || reply.Method != "POST" {
+		t.Fatalf("normalized reply runner = %+v", reply.RunnerConfig)
+	}
+	overridden := root.Replies[1]
+	if overridden.Timeout != 0 || overridden.TTY {
+		t.Fatalf("overridden reply executor config = %+v", overridden.ExecutorConfig)
+	}
+}
+
+func TestLoadConfigResolvesReplyStdinIdleTimeoutZeroOverride(t *testing.T) {
+	cfg, err := loadConfig(writeConfigFile(t, `
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+
+[[commands]]
+keyword = "agent"
+command = "agent"
+stdin_idle_timeout = 30
+
+[[commands.replies]]
+keyword = "stop"
+command = "agent stop"
+stdin_idle_timeout = 0
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.commandConfigs[0].Replies[0].StdinIdleTimeout; got != 0 {
+		t.Fatalf("reply stdin_idle_timeout = %d, want 0", got)
+	}
 }
 
 func TestNormalizeInteraction(t *testing.T) {
@@ -374,6 +468,32 @@ func TestNormalizeInteraction(t *testing.T) {
 	}
 }
 
+func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
+	tests := []struct {
+		interaction string
+		allow       bool
+		liveStdin   bool
+		bodyMode    cmd.InputBodyMode
+		replyMode   cmd.ThreadReplyMode
+	}{
+		{cmd.InteractionOneshot, true, false, cmd.InputBodyStdin, cmd.ThreadReplyIgnore},
+		{cmd.InteractionStdin, false, true, cmd.InputBodyStdin, cmd.ThreadReplyStdin},
+		{cmd.InteractionCommand, false, false, cmd.InputBodyArgument, cmd.ThreadReplyCommand},
+	}
+	for _, tt := range tests {
+		t.Run(tt.interaction, func(t *testing.T) {
+			config := &RawCommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}, Interaction: tt.interaction}
+			resolved, err := resolveCommandConfig(config, cmd.DefaultOutputFlushInterval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.AllowInChain != tt.allow || resolved.InteractiveStdin != tt.liveStdin || resolved.InputBodyMode != tt.bodyMode || resolved.ThreadReplyMode != tt.replyMode {
+				t.Fatalf("resolved config = %+v", resolved)
+			}
+		})
+	}
+}
+
 func TestValidateConfigHTTPInteraction(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -391,21 +511,21 @@ func TestValidateConfigHTTPInteraction(t *testing.T) {
 					AllowedUserIDs: []string{"U123"},
 				},
 				NumWorkers: 1,
-				Commands: []*CommandConfig{{
-					Definition:  cmd.Definition{Keyword: "notify", Runner: cmd.RunnerHTTP, URL: "https://example.com"},
+				Commands: []*RawCommandConfig{{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "notify"}, RunnerConfig: cmd.RunnerConfig{Runner: cmd.RunnerHTTP, URL: "https://example.com"},
 					Interaction: tc.interaction,
 				}},
 			}
 
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tc.wantErr == "" {
 				if err != nil {
-					t.Fatalf("validateConfig() error = %v", err)
+					t.Fatalf("resolveConfig() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -427,16 +547,16 @@ func TestValidateConfigKeywordWildcardCount(t *testing.T) {
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands: []*CommandConfig{{
-					Definition: cmd.Definition{Keyword: tc.keyword, Command: "echo"},
+				Commands: []*RawCommandConfig{{
+					MatcherConfig: cmd.MatcherConfig{Keyword: tc.keyword}, RunnerConfig: cmd.RunnerConfig{Command: "echo"},
 				}},
 			}
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tc.wantErr && err == nil {
-				t.Fatal("validateConfig() accepted multiple wildcards")
+				t.Fatal("resolveConfig() accepted multiple wildcards")
 			}
 			if !tc.wantErr && err != nil {
-				t.Fatalf("validateConfig() error = %v", err)
+				t.Fatalf("resolveConfig() error = %v", err)
 			}
 		})
 	}
@@ -446,15 +566,15 @@ func TestValidateConfigRejectsMultipleWildcardsInReplyKeyword(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
-		Commands: []*CommandConfig{{
-			Definition: cmd.Definition{Keyword: "todo", Command: "todo"},
-			Replies: []*ReplyCommandConfig{{
-				Definition: cmd.Definition{Keyword: "update * again *", Command: "todo"},
+		Commands: []*RawCommandConfig{{
+			MatcherConfig: cmd.MatcherConfig{Keyword: "todo"}, RunnerConfig: cmd.RunnerConfig{Command: "todo"},
+			Replies: []*RawCommandConfig{{
+				MatcherConfig: cmd.MatcherConfig{Keyword: "update * again *"}, RunnerConfig: cmd.RunnerConfig{Command: "todo"},
 			}},
 		}},
 	}
-	if err := validateConfig(cfg); err == nil {
-		t.Fatal("validateConfig() accepted multiple wildcards in a reply keyword")
+	if err := resolveConfig(cfg); err == nil {
+		t.Fatal("resolveConfig() accepted multiple wildcards in a reply keyword")
 	}
 }
 
@@ -477,26 +597,26 @@ func TestValidateConfigTTY(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			definition := cmd.Definition{
-				Keyword: "agent", Command: "cat", Runner: tt.runner, TTY: true, StdinIdleTimeout: tt.idle,
-			}
+			matcher := cmd.MatcherConfig{Keyword: "agent"}
+			runner := cmd.RunnerConfig{Command: "cat", Runner: tt.runner}
+			tty := true
 			if tt.runner == "http" {
-				definition.URL = "http://example.com/hook"
+				runner.URL = "http://example.com/hook"
 			}
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands:     []*CommandConfig{{Definition: definition}},
+				Commands:     []*RawCommandConfig{{MatcherConfig: matcher, RunnerConfig: runner, RawExecutorConfig: RawExecutorConfig{TTY: &tty, StdinIdleTimeout: &tt.idle}}},
 			}
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("validateConfig() error = %v", err)
+					t.Fatalf("resolveConfig() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tt.wantErr)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -522,22 +642,18 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands: []*CommandConfig{{Definition: cmd.Definition{
-					Keyword:          "agent",
-					Command:          "cat",
-					StdinIdleTimeout: tc.timeout,
-				}}},
+				Commands:     []*RawCommandConfig{{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: "cat"}, RawExecutorConfig: RawExecutorConfig{StdinIdleTimeout: &tc.timeout}}},
 			}
 
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tc.wantErr == "" {
 				if err != nil {
-					t.Fatalf("validateConfig() error = %v", err)
+					t.Fatalf("resolveConfig() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -550,12 +666,12 @@ func TestValidateConfigRejectsOpenAccessByDefault(t *testing.T) {
 			SlackAppToken: "xapp-test",
 		},
 		NumWorkers: 1,
-		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+		Commands: []*RawCommandConfig{
+			{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"}},
 		},
 	}
 
-	err := validateConfig(cfg)
+	err := resolveConfig(cfg)
 	if err == nil {
 		t.Fatalf("expected error for open access config")
 	}
@@ -612,28 +728,28 @@ func TestValidateConfigOutputFormat(t *testing.T) {
 			cfg := &Config{
 				PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 				NumWorkers:   1,
-				Commands: []*CommandConfig{{
-					Definition:  cmd.Definition{Keyword: "date", Command: "date"},
+				Commands: []*RawCommandConfig{{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"},
 					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
 				}},
 			}
 			if tc.reply {
 				cfg.Commands[0].OutputFormat = ""
-				cfg.Commands[0].Replies = []*ReplyCommandConfig{{
-					Definition:   cmd.Definition{Keyword: "reply", Command: "date"},
-					OutputFormat: tc.outputFormat,
+				cfg.Commands[0].Replies = []*RawCommandConfig{{
+					MatcherConfig: cmd.MatcherConfig{Keyword: "reply"}, RunnerConfig: cmd.RunnerConfig{Command: "date"},
+					ReplyConfig: pubsub.ReplyConfig{OutputFormat: tc.outputFormat},
 				}}
 			}
 
-			err := validateConfig(cfg)
+			err := resolveConfig(cfg)
 			if tc.wantErr == "" {
 				if err != nil {
-					t.Fatalf("validateConfig() error = %v", err)
+					t.Fatalf("resolveConfig() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("validateConfig() error = %v, want %q", err, tc.wantErr)
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -679,14 +795,7 @@ output_format = "plain"
 	}
 
 	t.Run("inherits parent settings", func(t *testing.T) {
-		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[0])
-		wantDefinition := &cmd.Definition{
-			Keyword: "cancel", Command: "todo-wrapper --cancel", Runner: "compose",
-			Timeout: 3600, StdinIdleTimeout: 300, TTY: true,
-		}
-		if !reflect.DeepEqual(definition, wantDefinition) {
-			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
-		}
+		replyConfig := resolveReplyConfig(cfg.Commands[0].ReplyConfig, cfg.Commands[0].Replies[0])
 		broadcast := true
 		wantReplyConfig := &pubsub.ReplyConfig{
 			Username: "todo bot", IconEmoji: ":memo:", IconURL: "https://example.com/icon.png",
@@ -698,11 +807,7 @@ output_format = "plain"
 	})
 
 	t.Run("overrides parent including explicit zero values", func(t *testing.T) {
-		definition, replyConfig := resolveReplyCommand(cfg.Commands[0], cfg.Commands[0].Replies[1])
-		wantDefinition := &cmd.Definition{Keyword: "stop", Command: "todo-wrapper --stop", Runner: "exec"}
-		if !reflect.DeepEqual(definition, wantDefinition) {
-			t.Fatalf("definition = %+v, want %+v", definition, wantDefinition)
-		}
+		replyConfig := resolveReplyConfig(cfg.Commands[0].ReplyConfig, cfg.Commands[0].Replies[1])
 		broadcast := false
 		wantReplyConfig := &pubsub.ReplyConfig{
 			Username: "stop bot", IconEmoji: ":octagonal_sign:", IconURL: "https://example.com/stop.png",
@@ -718,6 +823,9 @@ func TestConfigRejectsInteractionOnReplyCommand(t *testing.T) {
 	var cfg Config
 	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+num_workers = 1
 
 [[commands]]
 keyword = "todo"
@@ -727,9 +835,12 @@ command = "todo-wrapper"
 keyword = "cancel"
 command = "todo-wrapper --cancel"
 interaction = "command"
-`, &cfg)
-	if err == nil {
-		t.Fatal("reply command interaction was accepted")
+	`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveConfig(&cfg); err == nil || !strings.Contains(err.Error(), "interaction is not allowed on reply commands") {
+		t.Fatalf("resolveConfig() error = %v, want reply interaction error", err)
 	}
 }
 
@@ -737,6 +848,9 @@ func TestConfigRejectsNestedCommandReplies(t *testing.T) {
 	var cfg Config
 	err := decodeConfigString(`
 allowed_user_ids = ["U123"]
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+num_workers = 1
 
 [[commands]]
 keyword = "todo"
@@ -749,9 +863,12 @@ command = "todo-wrapper --cancel"
 [[commands.replies.replies]]
 keyword = "again"
 command = "todo-wrapper"
-`, &cfg)
-	if err == nil {
-		t.Fatal("nested replies were accepted")
+	`, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveConfig(&cfg); err == nil || !strings.Contains(err.Error(), "nested replies are not supported") {
+		t.Fatalf("resolveConfig() error = %v, want nested reply error", err)
 	}
 }
 
@@ -759,16 +876,15 @@ func TestValidateConfigValidatesCommandReplies(t *testing.T) {
 	cfg := &Config{
 		PubSubConfig: PubSubConfig{SlackBotToken: "xoxb-test", SlackAppToken: "xapp-test", AllowedUserIDs: []string{"U123"}},
 		NumWorkers:   1,
-		Commands: []*CommandConfig{{
-			Definition: cmd.Definition{Keyword: "todo", Command: "todo-wrapper"},
-			Replies: []*ReplyCommandConfig{{
-				Definition: cmd.Definition{Keyword: "cancel"},
-				Runner:     "http",
+		Commands: []*RawCommandConfig{{
+			MatcherConfig: cmd.MatcherConfig{Keyword: "todo"}, RunnerConfig: cmd.RunnerConfig{Command: "todo-wrapper"},
+			Replies: []*RawCommandConfig{{
+				MatcherConfig: cmd.MatcherConfig{Keyword: "cancel"}, RunnerConfig: cmd.RunnerConfig{Runner: "http"},
 			}},
 		}},
 	}
-	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "url is required") {
-		t.Fatalf("validateConfig() error = %v, want missing reply URL", err)
+	if err := resolveConfig(cfg); err == nil || !strings.Contains(err.Error(), "url is required") {
+		t.Fatalf("resolveConfig() error = %v, want missing reply URL", err)
 	}
 }
 
@@ -780,12 +896,12 @@ func TestValidateConfigAllowsRestrictedConfig(t *testing.T) {
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,
-		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+		Commands: []*RawCommandConfig{
+			{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"}},
 		},
 	}
 
-	if err := validateConfig(cfg); err != nil {
+	if err := resolveConfig(cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -798,12 +914,12 @@ func TestValidateConfigAllowsExplicitUnsafeOpenAccess(t *testing.T) {
 			AllowUnsafeOpenAccess: true,
 		},
 		NumWorkers: 1,
-		Commands: []*CommandConfig{
-			{Definition: cmd.Definition{Keyword: "date", Command: "date"}},
+		Commands: []*RawCommandConfig{
+			{MatcherConfig: cmd.MatcherConfig{Keyword: "date"}, RunnerConfig: cmd.RunnerConfig{Command: "date"}},
 		},
 	}
 
-	if err := validateConfig(cfg); err != nil {
+	if err := resolveConfig(cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -816,24 +932,19 @@ func TestValidateConfigAllowsHTTPRunner(t *testing.T) {
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,
-		Commands: []*CommandConfig{
+		Commands: []*RawCommandConfig{
 			{
-				Definition: cmd.Definition{
-					Keyword: "notify *",
-					Runner:  "http",
-					Method:  "POST",
-					URL:     "http://example.com/hook",
-					Body:    `{"text":"*"}`,
-				},
+				MatcherConfig: cmd.MatcherConfig{Keyword: "notify *"},
+				RunnerConfig:  cmd.RunnerConfig{Runner: "http", Method: "POST", URL: "http://example.com/hook", Body: `{"text":"*"}`},
 			},
 		},
 	}
 
-	if err := validateConfig(cfg); err != nil {
+	if err := resolveConfig(cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Commands[0].Method != "POST" {
-		t.Fatalf("expected method POST, got %q", cfg.Commands[0].Method)
+	if cfg.commandConfigs[0].Method != "POST" {
+		t.Fatalf("expected resolved method POST, got %q", cfg.commandConfigs[0].Method)
 	}
 }
 
@@ -845,17 +956,14 @@ func TestValidateConfigRejectsHTTPRunnerWithoutURL(t *testing.T) {
 			AllowedUserIDs: []string{"U123"},
 		},
 		NumWorkers: 1,
-		Commands: []*CommandConfig{
+		Commands: []*RawCommandConfig{
 			{
-				Definition: cmd.Definition{
-					Keyword: "notify *",
-					Runner:  "http",
-				},
+				MatcherConfig: cmd.MatcherConfig{Keyword: "notify *"}, RunnerConfig: cmd.RunnerConfig{Runner: "http"},
 			},
 		},
 	}
 
-	if err := validateConfig(cfg); err == nil {
+	if err := resolveConfig(cfg); err == nil {
 		t.Fatalf("expected error for http runner without url")
 	}
 }

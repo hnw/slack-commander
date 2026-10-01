@@ -7,7 +7,7 @@ import (
 
 func newTestOutputWriter(interval time.Duration) (*OutputWriter, chan *CommandOutput) {
 	ch := make(chan *CommandOutput, 10)
-	return newOutputWriter(ch, nil, nil, false, ConversationContext{}, interval), ch
+	return newOutputWriter(ch, nil, false, ConversationID{}, MessageID{}, interval), ch
 }
 
 func receiveOutput(t *testing.T, ch <-chan *CommandOutput, timeout time.Duration) *CommandOutput {

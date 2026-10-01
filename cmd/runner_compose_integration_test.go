@@ -23,8 +23,8 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var registry ThreadInputRegistry
-	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	var registry testThreadRegistry
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(
 		ctx,
 		"app",
@@ -38,15 +38,14 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	command.SetStderr(&stderr)
 	done := make(chan int, 1)
 	go func() {
-		done <- runWithInput(
+		done <- testRunWithInput(
 			command,
 			0,
 			0,
 			"initial",
-			//nolint:staticcheck // ConversationContext may gain fields independently of ThreadKey.
-			ConversationContext{
-				ChannelID:           key.ChannelID,
-				RootThreadTimestamp: key.RootThreadTimestamp,
+			ConversationID{
+				ChannelID:     key.ChannelID,
+				RootTimestamp: key.RootTimestamp,
 			},
 			&registry,
 		)
@@ -55,7 +54,7 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	defer ticker.Stop()
 	var endpoint *InteractiveStdin
 	for endpoint == nil {
-		endpoint = registry.Lookup(key)
+		endpoint = registry.lookup(key)
 		if endpoint != nil {
 			break
 		}
@@ -82,7 +81,7 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("compose command did not finish")
 	}
-	if registry.Lookup(key) != nil {
+	if registry.lookup(key) != nil {
 		t.Fatal("registry entry survived compose exit")
 	}
 }
@@ -142,8 +141,8 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var registry ThreadInputRegistry
-	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	var registry testThreadRegistry
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(ctx, "app", "/bin/sh", "-c", "sleep 30")
 	command.(interface{ SetTTY() }).SetTTY()
 	var output bytes.Buffer
@@ -151,12 +150,12 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 	command.SetStderr(&output)
 	done := make(chan int, 1)
 	go func() {
-		done <- runWithInput(
+		done <- testRunWithInput(
 			command,
 			0,
 			0,
 			"",
-			ConversationContext(key),
+			ConversationID(key),
 			&registry,
 		)
 	}()
@@ -170,7 +169,7 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("TTY compose command was not cancelled")
 	}
-	if registry.Lookup(key) != nil {
+	if registry.lookup(key) != nil {
 		t.Fatal("TTY compose endpoint survived cancellation")
 	}
 }
@@ -187,22 +186,21 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var registry ThreadInputRegistry
-	key := ThreadKey{ChannelID: "C", RootThreadTimestamp: "1"}
+	var registry testThreadRegistry
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewComposeRunner(dir).CommandContext(ctx, "app", "wc", "-l")
 	var output bytes.Buffer
 	command.SetStdout(&output)
 	done := make(chan int, 1)
 	go func() {
-		done <- runWithInput(
+		done <- testRunWithInput(
 			command,
 			0,
 			time.Second,
 			"initial",
-			//nolint:staticcheck // ConversationContext may gain fields independently of ThreadKey.
-			ConversationContext{
-				ChannelID:           key.ChannelID,
-				RootThreadTimestamp: key.RootThreadTimestamp,
+			ConversationID{
+				ChannelID:     key.ChannelID,
+				RootTimestamp: key.RootTimestamp,
 			},
 			&registry,
 		)
@@ -215,7 +213,7 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("compose command did not receive idle EOF")
 	}
-	if registry.Lookup(key) != nil {
+	if registry.lookup(key) != nil {
 		t.Fatal("registry entry survived idle EOF")
 	}
 }

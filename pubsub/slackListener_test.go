@@ -3,14 +3,12 @@ package pubsub
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/hnw/slack-commander/cmd"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
-func TestNewSlackInputSetsConversationContext(t *testing.T) {
+func TestNewSlackInputSetsConversationID(t *testing.T) {
 	tests := []struct {
 		name       string
 		message    *slackevents.MessageEvent
@@ -35,15 +33,18 @@ func TestNewSlackInputSetsConversationContext(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := NewSlackInput(tc.message, "date")
-			if input.ConversationContext.ChannelID != "C123" {
-				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			if input.ConversationID.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationID.ChannelID)
 			}
-			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+			if input.ConversationID.RootTimestamp != tc.wantRootTS {
 				t.Fatalf(
 					"root timestamp = %q, want %q",
-					input.ConversationContext.RootThreadTimestamp,
+					input.ConversationID.RootTimestamp,
 					tc.wantRootTS,
 				)
+			}
+			if input.MessageID.ChannelID != tc.message.Channel || input.MessageID.Timestamp != tc.message.TimeStamp {
+				t.Fatalf("message ID = %+v", input.MessageID)
 			}
 		})
 	}
@@ -78,7 +79,7 @@ func TestExtractMessageTextPreservesFallbackOrder(t *testing.T) {
 	}
 }
 
-func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
+func TestNewSlackInputFromAppMentionSetsConversationID(t *testing.T) {
 	tests := []struct {
 		name       string
 		message    *slackevents.AppMentionEvent
@@ -106,40 +107,45 @@ func TestNewSlackInputFromAppMentionSetsConversationContext(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := NewSlackInputFromAppMention(tc.message, "date")
-			if input.ConversationContext.ChannelID != "C123" {
-				t.Fatalf("channel = %q", input.ConversationContext.ChannelID)
+			if input.ConversationID.ChannelID != "C123" {
+				t.Fatalf("channel = %q", input.ConversationID.ChannelID)
 			}
-			if input.ConversationContext.RootThreadTimestamp != tc.wantRootTS {
+			if input.ConversationID.RootTimestamp != tc.wantRootTS {
 				t.Fatalf(
 					"root timestamp = %q, want %q",
-					input.ConversationContext.RootThreadTimestamp,
+					input.ConversationID.RootTimestamp,
 					tc.wantRootTS,
 				)
+			}
+			if input.MessageID.ChannelID != tc.message.Channel || input.MessageID.Timestamp != tc.message.TimeStamp {
+				t.Fatalf("message ID = %+v", input.MessageID)
 			}
 		})
 	}
 }
 
-func TestEnqueueCommand(t *testing.T) {
-	ch := make(chan *cmd.CommandInput, 1)
-	input := &cmd.CommandInput{Text: "date"}
+func TestShouldIgnoreMessageEventPreservesBotAndReminderHandling(t *testing.T) {
+	previousUserID := userID
+	userID = "U-self"
+	t.Cleanup(func() { userID = previousUserID })
 
-	if ok := enqueueCommand(ch, input); !ok {
-		t.Fatalf("expected enqueue success")
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{AcceptBotMessage: true}) {
+		t.Fatal("accepted bot message was ignored")
 	}
-}
-
-func TestEnqueueCommandQueueFullDoesNotBlock(t *testing.T) {
-	ch := make(chan *cmd.CommandInput, 1)
-	ch <- &cmd.CommandInput{Text: "filled"}
-
-	start := time.Now()
-	ok := enqueueCommand(ch, &cmd.CommandInput{Text: "drop-me"})
-	if ok {
-		t.Fatalf("expected enqueue failure when queue is full")
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeBotMessage, User: "U-other"}, Config{}) {
+		t.Fatal("bot message ignored accept_bot_message=false was accepted")
 	}
-	if d := time.Since(start); d > 100*time.Millisecond {
-		t.Fatalf("enqueue blocked too long: %v", d)
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageChanged}, Config{}) {
+		t.Fatal("message_changed was accepted")
+	}
+	if !shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMessageDeleted}, Config{}) {
+		t.Fatal("message_deleted was accepted")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{SubType: slack.MsgSubTypeMeMessage}, Config{}) {
+		t.Fatal("non-edit subtype was newly ignored")
+	}
+	if shouldIgnoreMessageEvent(&slackevents.MessageEvent{User: "USLACKBOT", Text: "Reminder: todo"}, Config{AcceptReminder: true}) {
+		t.Fatal("accepted reminder was ignored")
 	}
 }
 

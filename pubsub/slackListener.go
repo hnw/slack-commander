@@ -24,37 +24,37 @@ var (
 // NewSlackInput はSlackの入力を元にpubsub.Inputを返す
 func NewSlackInput(msg *slackevents.MessageEvent, text string) *cmd.CommandInput {
 	return &cmd.CommandInput{
-		ReplyInfo: msg,
-		Text:      text,
-		ConversationContext: newConversationContext(
+		ConversationID: newConversationID(
 			msg.Channel,
 			msg.TimeStamp,
 			msg.ThreadTimeStamp,
 		),
+		MessageID: cmd.MessageID{ChannelID: msg.Channel, Timestamp: msg.TimeStamp},
+		Text:      normalizeSlackText(text),
 	}
 }
 
 // NewSlackInputFromAppMention はAppMentionEventを元にpubsub.Inputを返す
 func NewSlackInputFromAppMention(msg *slackevents.AppMentionEvent, text string) *cmd.CommandInput {
 	return &cmd.CommandInput{
-		ReplyInfo: msg,
-		Text:      text,
-		ConversationContext: newConversationContext(
+		ConversationID: newConversationID(
 			msg.Channel,
 			msg.TimeStamp,
 			msg.ThreadTimeStamp,
 		),
+		MessageID: cmd.MessageID{ChannelID: msg.Channel, Timestamp: msg.TimeStamp},
+		Text:      normalizeSlackText(text),
 	}
 }
 
-func newConversationContext(channelID, timestamp, threadTimestamp string) cmd.ConversationContext {
+func newConversationID(channelID, timestamp, threadTimestamp string) cmd.ConversationID {
 	rootTimestamp := timestamp
 	if threadTimestamp != "" {
 		rootTimestamp = threadTimestamp
 	}
-	return cmd.ConversationContext{
-		ChannelID:           channelID,
-		RootThreadTimestamp: rootTimestamp,
+	return cmd.ConversationID{
+		ChannelID:     channelID,
+		RootTimestamp: rootTimestamp,
 	}
 }
 
@@ -62,11 +62,8 @@ func newConversationContext(channelID, timestamp, threadTimestamp string) cmd.Co
 func SlackListener(
 	ctx context.Context,
 	smc *socketmode.Client,
-	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	registry *cmd.ThreadInputRegistry,
-	commands []*cmd.CommandConfig,
-	routeCache *cmd.ThreadRouteCache,
+	coordinator *cmd.ConversationCoordinator,
 ) {
 	for {
 		select {
@@ -106,9 +103,9 @@ func SlackListener(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
+						onMessageEvent(smc, ev, cfg, coordinator)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, commandQueue, cfg, registry, commands, routeCache)
+						onAppMentionEvent(smc, ev, cfg, coordinator)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -258,7 +255,8 @@ func attachmentTextValue(attachments []slack.Attachment) string {
 	return ""
 }
 
-func normalizeCommandText(text string) string {
+// normalizeSlackText converts Slack-specific text into command text at the input boundary.
+func normalizeSlackText(text string) string {
 	text = removeMentionTarget(text)
 	text = normalizeSlackURLs(text)
 	text = normalizeQuotes(unescapeMessage(text))
@@ -268,11 +266,8 @@ func normalizeCommandText(text string) string {
 func onMessageEvent(
 	smc *socketmode.Client,
 	ev *slackevents.MessageEvent,
-	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	registry *cmd.ThreadInputRegistry,
-	commands []*cmd.CommandConfig,
-	routeCache *cmd.ThreadRouteCache,
+	coordinator *cmd.ConversationCoordinator,
 ) {
 	if shouldIgnoreMessageEvent(ev, cfg) {
 		return
@@ -281,31 +276,30 @@ func onMessageEvent(
 	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
+	input := NewSlackInput(ev, extractMessageText(ev))
 	if ev.ThreadTimeStamp != "" {
-		routeThreadReply(smc, NewSlackInput(ev, extractMessageText(ev)), commandQueue, registry, commands, routeCache)
+		routeThreadReply(smc, input, coordinator)
 		return
 	}
-	text := normalizeRootCommandText(extractMessageText(ev), commands)
-	if text == "" {
+	if input.Text == "" {
 		return
 	}
-	input := NewSlackInput(ev, text)
-	if !enqueueCommand(commandQueue, input) {
+	if coordinator == nil {
+		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping message event command")
+		return
+	}
+	if !coordinator.AcceptRoot(input) {
 		smc.Debugf("[WARN] command queue is full; dropping message event command")
 		return
 	}
-	registerRootRoute(routeCache, input, commands)
-	smc.Debugf("[DEBUG]: command = '%s'", text)
+	smc.Debugf("[DEBUG]: command = '%s'", input.Text)
 }
 
 func onAppMentionEvent(
 	smc *socketmode.Client,
 	ev *slackevents.AppMentionEvent,
-	commandQueue chan *cmd.CommandInput,
 	cfg Config,
-	registry *cmd.ThreadInputRegistry,
-	commands []*cmd.CommandConfig,
-	routeCache *cmd.ThreadRouteCache,
+	coordinator *cmd.ConversationCoordinator,
 ) {
 	if shouldIgnoreAppMentionEvent(ev, cfg) {
 		return
@@ -314,94 +308,47 @@ func onAppMentionEvent(
 	if !isAllowedUser(cfg, senderID) || !isAllowedChannel(cfg, ev.Channel) {
 		return
 	}
+	input := NewSlackInputFromAppMention(ev, extractAppMentionText(ev))
 	if ev.ThreadTimeStamp != "" {
-		routeThreadReply(smc, NewSlackInputFromAppMention(ev, extractAppMentionText(ev)), commandQueue, registry, commands, routeCache)
+		routeThreadReply(smc, input, coordinator)
 		return
 	}
-	text := normalizeRootCommandText(extractAppMentionText(ev), commands)
-	if text == "" {
+	if input.Text == "" {
 		return
 	}
-	input := NewSlackInputFromAppMention(ev, text)
-	if !enqueueCommand(commandQueue, input) {
+	if coordinator == nil {
+		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping app_mention command")
+		return
+	}
+	if !coordinator.AcceptRoot(input) {
 		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
 		return
 	}
-	registerRootRoute(routeCache, input, commands)
-	smc.Debugf("[DEBUG]: command = '%s'", text)
+	smc.Debugf("[DEBUG]: command = '%s'", input.Text)
 }
 
 func routeThreadReply(
 	smc *socketmode.Client,
 	input *cmd.CommandInput,
-	commandQueue chan *cmd.CommandInput,
-	registry *cmd.ThreadInputRegistry,
-	commands []*cmd.CommandConfig,
-	routeCache *cmd.ThreadRouteCache,
+	coordinator *cmd.ConversationCoordinator,
 ) {
-	if input.Text == "" || smc == nil {
+	if input.Text == "" || smc == nil || coordinator == nil {
 		return
 	}
-	rootConfig, found := routeCache.Lookup(input.ConversationContext.ThreadKey())
-	if !found {
-		root, err := getThreadRoot(smc, input.ConversationContext)
-		if err != nil {
-			log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, err)
-			return
-		}
-		rootConfig = cmd.MatchSingleCommand(normalizeCommandText(rootMessageText(root)), commands)
-		routeCache.Store(input.ConversationContext.ThreadKey(), rootConfig)
-	}
-	if rootConfig == nil {
+	result, err := coordinator.AcceptThreadReply(input)
+	if err != nil {
+		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return
 	}
-	switch rootConfig.Interaction {
-	case cmd.InteractionOneshot:
-		return
-	case cmd.InteractionStdin:
-		routeThreadInput(registry, input.ConversationContext.ChannelID, input.ConversationContext.RootThreadTimestamp, input.Text)
-		return
-	case cmd.InteractionCommand:
-		if len(rootConfig.Replies) == 0 {
-			return
-		}
-	}
-	input.Text = normalizeCommandFirstLine(input.Text)
-	input.CommandConfigs = rootConfig.Replies
-	input.Interaction = cmd.InteractionCommand
-	if !enqueueCommand(commandQueue, input) {
+	if result == cmd.ThreadReplyQueueFull {
 		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
 	}
 }
 
-func normalizeRootCommandText(text string, commands []*cmd.CommandConfig) string {
-	normalized := normalizeCommandText(text)
-	root := cmd.MatchSingleCommand(normalized, commands)
-	if root == nil || root.Interaction != cmd.InteractionCommand {
-		return normalized
-	}
-	return normalizeCommandFirstLine(text)
-}
-
-func normalizeCommandFirstLine(text string) string {
-	parts := strings.SplitN(text, "\n", 2)
-	first := normalizeCommandText(parts[0])
-	if len(parts) == 1 {
-		return first
-	}
-	return first + "\n" + parts[1]
-}
-
-func registerRootRoute(routeCache *cmd.ThreadRouteCache, input *cmd.CommandInput, commands []*cmd.CommandConfig) {
-	if root := cmd.MatchSingleCommand(input.Text, commands); root != nil {
-		routeCache.Store(input.ConversationContext.ThreadKey(), root)
-	}
-}
-
-func getThreadRoot(smc *socketmode.Client, context cmd.ConversationContext) (*slack.Message, error) {
+func getThreadRoot(smc *socketmode.Client, conversation cmd.ConversationID) (*slack.Message, error) {
 	messages, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
-		ChannelID: context.ChannelID,
-		Timestamp: context.RootThreadTimestamp,
+		ChannelID: conversation.ChannelID,
+		Timestamp: conversation.RootTimestamp,
 		Inclusive: true,
 		Limit:     1,
 	})
@@ -409,35 +356,21 @@ func getThreadRoot(smc *socketmode.Client, context cmd.ConversationContext) (*sl
 		return nil, err
 	}
 	for i := range messages {
-		if messages[i].Timestamp == context.RootThreadTimestamp {
+		if messages[i].Timestamp == conversation.RootTimestamp {
 			return &messages[i], nil
 		}
 	}
 	return nil, fmt.Errorf("thread root not found")
 }
 
-func routeThreadInput(registry *cmd.ThreadInputRegistry, channel, thread, text string) bool {
-	endpoint := registry.Lookup(cmd.ThreadKey{ChannelID: channel, RootThreadTimestamp: thread})
-	if endpoint == nil {
-		return false
-	}
-	if err := endpoint.TrySend(text); err != nil {
-		log.Printf(
-			"[WARN] dropping interactive stdin channel=%s thread=%s: %v",
-			channel,
-			thread,
-			err,
-		)
-	}
-	return true
-}
-
-func enqueueCommand(commandQueue chan *cmd.CommandInput, input *cmd.CommandInput) bool {
-	select {
-	case commandQueue <- input:
-		return true
-	default:
-		return false
+// SlackRootTextResolver fetches a thread root and applies Slack-specific text normalization.
+func SlackRootTextResolver(smc *socketmode.Client) cmd.RootTextResolver {
+	return func(conversation cmd.ConversationID) (string, error) {
+		root, err := getThreadRoot(smc, conversation)
+		if err != nil {
+			return "", err
+		}
+		return normalizeSlackText(rootMessageText(root)), nil
 	}
 }
 

@@ -66,7 +66,8 @@ func run(args []string) int {
 	logger := slog.New(handler)
 	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
-	cmdConfig := commandConfigs(cfg.Commands)
+	runnerFactory := newRunnerFactory()
+	commands := buildCommandSet(cfg.commandConfigs, runnerFactory)
 
 	api := slack.New(
 		cfg.SlackBotToken,
@@ -87,39 +88,21 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	var threadInputs cmd.ThreadInputRegistry
-	threadRoutes := cmd.NewThreadRouteCache(4096)
-	var threadLocks cmd.ThreadLocks
-	var composeRunnerOnce sync.Once
-	var composeRunner cmd.CommandRunner
-	runnerFactory := func(cfg *cmd.CommandConfig) cmd.CommandRunner {
-		if cfg.Runner == cmd.RunnerCompose {
-			composeRunnerOnce.Do(func() {
-				composeRunner = cmd.NewComposeRunner("")
-			})
-			return composeRunner
-		}
-		if cfg.Runner == cmd.RunnerHTTP {
-			return cmd.NewHTTPRunner(cfg)
-		}
-		return cmd.NewExecRunner()
-	}
+	coordinator := cmd.NewConversationCoordinator(
+		commands,
+		pubsub.SlackRootTextResolver(smc),
+		func(input *cmd.CommandInput) bool {
+			select {
+			case commandQueue <- input:
+				return true
+			default:
+				return false
+			}
+		},
+		4096,
+	)
 	var executorWG sync.WaitGroup
-	for i := 0; i < cfg.NumWorkers; i++ {
-		executorWG.Add(1)
-		go func() {
-			defer executorWG.Done()
-			cmd.ExecutorWithThreadInputAndLocks(
-				ctx,
-				commandQueue,
-				outputQueue,
-				cmdConfig,
-				runnerFactory,
-				&threadInputs,
-				&threadLocks,
-			)
-		}()
-	}
+	startWorkers(ctx, cfg.NumWorkers, commandQueue, coordinator, commands, outputQueue, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
 	go func() {
@@ -133,11 +116,8 @@ func run(args []string) int {
 		pubsub.SlackListener(
 			ctx,
 			smc,
-			commandQueue,
 			cfg.PubSubConfig,
-			&threadInputs,
-			cmdConfig,
-			threadRoutes,
+			coordinator,
 		)
 	}()
 
@@ -153,4 +133,49 @@ func run(args []string) int {
 	close(outputQueue)
 	writerWG.Wait()
 	return exitCode
+}
+
+func newRunnerFactory() cmd.RunnerFactory {
+	execRunner := cmd.NewExecRunner()
+	composeRunner := cmd.NewComposeRunner("")
+	return func(config cmd.RunnerConfig) cmd.CommandRunner {
+		if config.Runner == cmd.RunnerCompose {
+			return composeRunner
+		}
+		if config.Runner == cmd.RunnerHTTP {
+			return cmd.NewHTTPRunner(config)
+		}
+		return execRunner
+	}
+}
+
+func startWorkers(
+	ctx context.Context,
+	workers int,
+	inputs <-chan *cmd.CommandInput,
+	coordinator *cmd.ConversationCoordinator,
+	commands *cmd.CommandSet,
+	outputQueue chan *cmd.CommandOutput,
+	wg *sync.WaitGroup,
+) {
+	for range workers {
+		executor := cmd.NewExecutor(commands, outputQueue)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case input, ok := <-inputs:
+					if !ok {
+						return
+					}
+					coordinator.RunSerialized(input.ConversationID, func() {
+						executor.Execute(ctx, input, coordinator.Lifecycle(input.ConversationID))
+					})
+				}
+			}
+		}()
+	}
 }
