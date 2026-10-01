@@ -5,6 +5,7 @@ import "time"
 // testExecutionConfig is a test fixture for constructing runtime Commands.
 // Production configuration is intentionally split across the runtime types.
 type testExecutionConfig struct {
+	Index               int
 	StdinIdleTimeout    int
 	TTY                 bool
 	Timeout             int
@@ -25,8 +26,8 @@ type testExecutionConfig struct {
 
 type testCommandConfig struct {
 	*testExecutionConfig
-	Replies         []*testCommandConfig
-	ThreadReplyMode ThreadReplyMode
+	Replies     []*testCommandConfig
+	ThreadStdin bool
 }
 
 func newTestCommandConfig(config *testExecutionConfig) *testCommandConfig {
@@ -36,6 +37,7 @@ func newTestCommandConfig(config *testExecutionConfig) *testCommandConfig {
 func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Command {
 	return NewCommand(
 		CommandConfig{
+			Index:               config.Index,
 			MatcherConfig:       MatcherConfig{Keyword: config.Keyword},
 			RunnerConfig:        RunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body},
 			ExecutorConfig:      ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin, InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
@@ -60,8 +62,17 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 			runner = factory(definition)
 		}
 		replies := testCommandSet(config.Replies, factory)
+		if config.ThreadStdin {
+			if replies == nil {
+				replies = NewCommandSet(nil)
+			}
+			replies.commands = append(replies.commands, NewCommand(CommandConfig{
+				Index:               1000,
+				MatcherConfig:       MatcherConfig{Keyword: "*"},
+				SyntheticStdinReply: true,
+			}, nil, nil))
+		}
 		command := testRuntimeCommand(definition, runner)
-		command.config.ThreadReplyMode = config.ThreadReplyMode
 		command.replies = replies
 		commands = append(commands, command)
 	}

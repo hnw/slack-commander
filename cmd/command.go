@@ -1,6 +1,9 @@
 package cmd
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // MatcherConfig contains only the data needed to recognize a command.
 type MatcherConfig struct {
@@ -38,7 +41,7 @@ type CommandConfig struct {
 	OutputFlushInterval time.Duration
 	ReplyConfig         interface{}
 	SystemReplyConfig   interface{}
-	ThreadReplyMode     ThreadReplyMode
+	SyntheticStdinReply bool
 	Replies             []*CommandConfig
 }
 
@@ -74,6 +77,9 @@ func (c *Command) match(args []string) []string {
 	if !ok {
 		return nil
 	}
+	if c.config.SyntheticStdinReply {
+		return []string{""}
+	}
 	if c.config.Runner == RunnerHTTP {
 		return buildHTTPArgs(containsWildcard(c.matcher.keywords), wildcard)
 	}
@@ -103,7 +109,7 @@ func (s *CommandSet) Match(input *parsedCommand, allowedIndexes []int) (*Command
 		if command == nil {
 			continue
 		}
-		if allowedIndexes != nil && !containsCommandIndex(allowedIndexes, command.config.Index) {
+		if !slices.Contains(allowedIndexes, command.config.Index) {
 			continue
 		}
 		args := command.match(input.args)
@@ -115,15 +121,6 @@ func (s *CommandSet) Match(input *parsedCommand, allowedIndexes []int) (*Command
 	return nil, nil
 }
 
-func containsCommandIndex(indexes []int, index int) bool {
-	for _, candidate := range indexes {
-		if candidate == index {
-			return true
-		}
-	}
-	return false
-}
-
 // MatchSingle matches exactly one complete command line for route ownership.
 func (s *CommandSet) MatchSingle(text string, allowedIndexes []int) *Command {
 	cmdMsg, _ := splitCommandInput(text)
@@ -133,4 +130,23 @@ func (s *CommandSet) MatchSingle(text string, allowedIndexes []int) *Command {
 	}
 	command, _ := s.Match(commands[0], allowedIndexes)
 	return command
+}
+
+// MatchReply は stdin 本文を chain として分割せず synthetic wildcard に渡す。
+func (s *CommandSet) MatchReply(text string, allowedIndexes []int) *Command {
+	if s == nil {
+		return nil
+	}
+	cmdMsg, _ := splitCommandInput(text)
+	parsed, _ := parseCommands(cmdMsg)
+	if len(parsed) > 0 {
+		if command, _ := s.Match(parsed[0], allowedIndexes); command != nil && !command.config.SyntheticStdinReply {
+			return command
+		}
+	}
+	command, _ := s.Match(&parsedCommand{args: []string{text}}, allowedIndexes)
+	if command != nil && command.config.SyntheticStdinReply {
+		return command
+	}
+	return nil
 }

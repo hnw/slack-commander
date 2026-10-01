@@ -284,19 +284,21 @@ func onMessageEvent(
 	}
 	senderID := senderIDForEvent(ev.User, ev.BotID)
 	input := NewSlackInput(ev, extractMessageText(ev))
-	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, messageEventText(ev)))
-	if ev.ThreadTimeStamp != "" {
-		routeThreadReply(smc, input, coordinator)
-		return
-	}
-	if input.Text == "" {
+	isReply := input.MessageID.Timestamp != input.ConversationID.RootTimestamp
+	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, messageEventText(ev)), isReply)
+	if len(input.AllowedCommandIndexes) == 0 || input.Text == "" {
 		return
 	}
 	if coordinator == nil {
 		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping message event command")
 		return
 	}
-	if !coordinator.AcceptRoot(input) {
+	result, err := coordinator.Accept(input)
+	if err != nil {
+		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
+		return
+	}
+	if result == cmd.AcceptQueueFull {
 		smc.Debugf("[WARN] command queue is full; dropping message event command")
 		return
 	}
@@ -314,41 +316,25 @@ func onAppMentionEvent(
 	}
 	senderID := senderIDForEvent(ev.User, ev.BotID)
 	input := NewSlackInputFromAppMention(ev, extractAppMentionText(ev))
-	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, ev.Text))
-	if ev.ThreadTimeStamp != "" {
-		routeThreadReply(smc, input, coordinator)
-		return
-	}
-	if input.Text == "" {
+	isReply := input.MessageID.Timestamp != input.ConversationID.RootTimestamp
+	input.AllowedCommandIndexes = filterCommandIndexes(cfg.ListenerConfigs, senderID, ev.Channel, isReminderMessage(ev.User, ev.Text), isReply)
+	if len(input.AllowedCommandIndexes) == 0 || input.Text == "" {
 		return
 	}
 	if coordinator == nil {
 		smc.Debugf("[WARN] conversation coordinator is unavailable; dropping app_mention command")
 		return
 	}
-	if !coordinator.AcceptRoot(input) {
-		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
-		return
-	}
-	smc.Debugf("[DEBUG]: command = '%s'", input.Text)
-}
-
-func routeThreadReply(
-	smc *socketmode.Client,
-	input *cmd.CommandInput,
-	coordinator *cmd.ConversationCoordinator,
-) {
-	if input.Text == "" || smc == nil || coordinator == nil {
-		return
-	}
-	result, err := coordinator.AcceptThreadReply(input)
+	result, err := coordinator.Accept(input)
 	if err != nil {
 		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return
 	}
-	if result == cmd.ThreadReplyQueueFull {
-		smc.Debugf("[WARN] command queue is full; dropping thread reply command")
+	if result == cmd.AcceptQueueFull {
+		smc.Debugf("[WARN] command queue is full; dropping app_mention command")
+		return
 	}
+	smc.Debugf("[DEBUG]: command = '%s'", input.Text)
 }
 
 func getThreadRoot(smc *socketmode.Client, conversation cmd.ConversationID) (*slack.Message, error) {
@@ -378,7 +364,7 @@ func SlackRootInputResolver(smc *socketmode.Client, cfg Config) cmd.RootInputRes
 		}
 		reminder := isReminderMessage(root.User, slackMessageText(root.Text, root.Attachments))
 		senderID := senderIDForEvent(root.User, root.BotID)
-		indexes := filterCommandIndexes(cfg.ListenerConfigs, senderID, conversation.ChannelID, reminder)
+		indexes := filterCommandIndexes(cfg.ListenerConfigs, senderID, conversation.ChannelID, reminder, false)
 		if isOwnBotMessage(root.User, root.BotID) {
 			indexes = []int{}
 		}
@@ -437,9 +423,12 @@ func isAllowedID(allowedIDs []string, id string) bool {
 	return false
 }
 
-func filterCommandIndexes(configs []ListenerConfig, userID, channelID string, reminder bool) []int {
+func filterCommandIndexes(configs []ListenerConfig, userID, channelID string, reminder, reply bool) []int {
 	allowed := make([]int, 0, len(configs))
 	for _, config := range configs {
+		if config.IsReply != reply {
+			continue
+		}
 		if reminder && !config.AcceptReminder {
 			continue
 		}

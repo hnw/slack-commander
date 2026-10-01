@@ -92,6 +92,48 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 	}
 }
 
+func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
+	previousUserID, previousBotID := userID, ownBotID
+	userID, ownBotID = "", ""
+	t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
+
+	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}, nil, nil)
+	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
+	resolverCalls, enqueueCalls := 0, 0
+	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{root}), func(cmd.ConversationID) (cmd.RootCommandInput, error) {
+		resolverCalls++
+		return cmd.RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
+	}, func(*cmd.CommandInput) bool {
+		enqueueCalls++
+		return true
+	}, 1)
+
+	for _, tc := range []struct {
+		name string
+		call func(*cmd.ConversationCoordinator)
+	}{
+		{name: "root message", call: func(coordinator *cmd.ConversationCoordinator) {
+			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "run"}, Config{}, coordinator)
+		}},
+		{name: "thread reply", call: func(coordinator *cmd.ConversationCoordinator) {
+			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, Config{}, coordinator)
+		}},
+		{name: "root app mention", call: func(coordinator *cmd.ConversationCoordinator) {
+			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "<@BOT> run"}, Config{}, coordinator)
+		}},
+		{name: "thread app mention", call: func(coordinator *cmd.ConversationCoordinator) {
+			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> retry"}, Config{}, coordinator)
+		}},
+	} {
+		t.Run(tc.name, func(*testing.T) {
+			tc.call(coordinator)
+		})
+	}
+	if resolverCalls != 0 || enqueueCalls != 0 {
+		t.Fatalf("resolver calls = %d, enqueue calls = %d, want both zero", resolverCalls, enqueueCalls)
+	}
+}
+
 func TestNewSlackInputSetsConversationID(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -242,10 +284,11 @@ func TestShouldIgnoreMessageEventIgnoresOwnBotAndKeepsOtherSenders(t *testing.T)
 
 func TestFilterCommandIndexesUsesReminderExceptionAndBotSenderAllowlist(t *testing.T) {
 	configs := []ListenerConfig{
-		{CommandIndex: 0, AllowedUserIDs: []string{"U-normal"}, AllowedChannelIDs: []string{"C-main"}},
-		{CommandIndex: 1, AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-main"}, AcceptReminder: true},
-		{CommandIndex: 2, AllowedUserIDs: []string{}, AllowedChannelIDs: []string{"C-ops"}, AcceptReminder: true},
-		{CommandIndex: 3, AllowedUserIDs: []string{"B-other"}, AllowedChannelIDs: []string{"C-main"}},
+		{CommandIndex: 0, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"U-normal"}, AllowedChannelIDs: []string{"C-main"}}},
+		{CommandIndex: 1, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"U-admin"}, AllowedChannelIDs: []string{"C-main"}, AcceptReminder: true}},
+		{CommandIndex: 2, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{}, AllowedChannelIDs: []string{"C-ops"}, AcceptReminder: true}},
+		{CommandIndex: 3, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"B-other"}, AllowedChannelIDs: []string{"C-main"}}},
+		{CommandIndex: 4, IsReply: true, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"U-normal"}, AllowedChannelIDs: []string{"C-main"}}},
 	}
 	tests := []struct {
 		name     string
@@ -263,10 +306,13 @@ func TestFilterCommandIndexesUsesReminderExceptionAndBotSenderAllowlist(t *testi
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := filterCommandIndexes(configs, tt.user, tt.channel, tt.reminder); !reflect.DeepEqual(got, tt.want) {
+			if got := filterCommandIndexes(configs, tt.user, tt.channel, tt.reminder, false); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("filterCommandIndexes() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+	if got := filterCommandIndexes(configs, "U-normal", "C-main", false, true); !reflect.DeepEqual(got, []int{4}) {
+		t.Fatalf("reply candidates = %v, want only reply index", got)
 	}
 }
 

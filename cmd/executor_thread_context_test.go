@@ -61,7 +61,8 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	executor := NewExecutor(testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner }), wq)
 
 	executor.Execute(context.Background(), &CommandInput{
-		Text: "date",
+		Text:                  "date",
+		AllowedCommandIndexes: []int{0},
 		ConversationID: ConversationID{
 			ChannelID:     "C123",
 			RootTimestamp: "1700000000.000100",

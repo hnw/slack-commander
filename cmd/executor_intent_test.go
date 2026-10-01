@@ -88,7 +88,7 @@ func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 	executor := NewExecutor(testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
 		return runner
 	}), wq)
-	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n"}, nil)
+	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n", AllowedCommandIndexes: []int{0}}, nil)
 	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
 	}
@@ -159,7 +159,7 @@ func TestExecutorArgumentBodyAppendsOnlyForTrailingWildcard(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Command: tt.command, InputBodyMode: InputBodyArgument})
-			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config}, []int{0})
 			if len(calls) != 1 || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want args %#v", calls, tt.want)
 			}
@@ -197,7 +197,7 @@ func TestExecutorArgumentBodyPassesToHTTPOnlyForTrailingWildcard(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestCommandConfig(&testExecutionConfig{Keyword: tt.keyword, Runner: "http", InputBodyMode: InputBodyArgument})
-			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config}, []int{0})
 			if len(calls) != 1 || calls[0].name != "http" || !slices.Equal(calls[0].args, tt.want) {
 				t.Fatalf("calls = %#v, want HTTP args %#v", calls, tt.want)
 			}
@@ -248,7 +248,10 @@ func TestExecutorRejectsChainsContainingDisallowedCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			calls, _ := runExecutorOnce(t, tt.input, tt.configs)
+			for i, config := range tt.configs {
+				config.Index = i
+			}
+			calls, _ := runExecutorOnce(t, tt.input, tt.configs, []int{0, 1})
 			if len(calls) != tt.wantCalls {
 				t.Fatalf("calls = %#v, want %d", calls, tt.wantCalls)
 			}
@@ -278,6 +281,7 @@ func runExecutorOnce(
 	t *testing.T,
 	input string,
 	cfgs []*testCommandConfig,
+	allowedIndexes []int,
 ) ([]fakeCall, []*CommandOutput) {
 	t.Helper()
 	wq := make(chan *CommandOutput, 20)
@@ -285,16 +289,16 @@ func runExecutorOnce(
 	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
 		return runner
 	}), wq)
-	executor.Execute(context.Background(), &CommandInput{Text: input}, nil)
+	executor.Execute(context.Background(), &CommandInput{Text: input, AllowedCommandIndexes: allowedIndexes}, nil)
 
 	return runner.Calls(), drainOutputs(wq)
 }
 
 func testCommandConfigs() []*testCommandConfig {
 	return []*testCommandConfig{
-		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true}),
-		newTestCommandConfig(&testExecutionConfig{Keyword: "deploy *", Command: "deploy *", AllowInChain: true}),
-		newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Index: 0, Keyword: "date", Command: "date", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Index: 1, Keyword: "deploy *", Command: "deploy *", AllowInChain: true}),
+		newTestCommandConfig(&testExecutionConfig{Index: 2, Keyword: "echo *", Command: "echo *", AllowInChain: true}),
 	}
 }
 
@@ -338,7 +342,7 @@ func TestExecutorInputBodyModes(t *testing.T) {
 			config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})
 			config.AllowInChain = tt.allowInChain
 			config.InputBodyMode = tt.inputBodyMode
-			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config})
+			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config}, []int{0})
 			if len(calls) != tt.wantCalls {
 				t.Fatalf("calls = %#v, want %d calls", calls, tt.wantCalls)
 			}
@@ -360,7 +364,7 @@ func TestExecutorPropagatesConversationID(t *testing.T) {
 		RootTimestamp: "1700000000.000100",
 	}
 	message := MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"}
-	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: conversation, MessageID: message}, nil)
+	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: conversation, MessageID: message, AllowedCommandIndexes: []int{0, 1, 2}}, nil)
 
 	outputs := drainOutputs(wq)
 	if len(outputs) != 4 {
@@ -378,7 +382,7 @@ func TestExecutorPropagatesConversationID(t *testing.T) {
 
 func testExecutorSingleCommand(t *testing.T) {
 	t.Helper()
-	calls, _ := runExecutorOnce(t, "date", testCommandConfigs())
+	calls, _ := runExecutorOnce(t, "date", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(calls))
 	}
@@ -392,7 +396,7 @@ func testExecutorSingleCommand(t *testing.T) {
 
 func testExecutorMultipleCommandsWithAnd(t *testing.T) {
 	t.Helper()
-	calls, _ := runExecutorOnce(t, "deploy foo && deploy bar", testCommandConfigs())
+	calls, _ := runExecutorOnce(t, "deploy foo && deploy bar", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(calls))
 	}
@@ -406,7 +410,7 @@ func testExecutorMultipleCommandsWithAnd(t *testing.T) {
 
 func testExecutorParseErrorWhenIntentMatches(t *testing.T) {
 	t.Helper()
-	calls, outputs := runExecutorOnce(t, "echo \"hello", testCommandConfigs())
+	calls, outputs := runExecutorOnce(t, "echo \"hello", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
 	}
@@ -431,7 +435,7 @@ func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 		config := newTestCommandConfig(&testExecutionConfig{Keyword: "echo *", Command: "echo *"})
 		config.SystemReplyConfig = systemConfig
 
-		_, outputs := runExecutorOnce(t, "echo \"hello", []*testCommandConfig{config})
+		_, outputs := runExecutorOnce(t, "echo \"hello", []*testCommandConfig{config}, []int{0})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != systemConfig {
@@ -445,7 +449,7 @@ func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 
 	t.Run("unmatched command keeps default setting", func(t *testing.T) {
 		config := newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", AllowInChain: true})
-		_, outputs := runExecutorOnce(t, "date && missing", []*testCommandConfig{config})
+		_, outputs := runExecutorOnce(t, "date && missing", []*testCommandConfig{config}, []int{0})
 		for _, output := range outputs {
 			if output.IsErrOut {
 				if output.ReplyConfig != nil {
@@ -464,6 +468,7 @@ func testExecutorIgnoreCasualMessageWithURL(t *testing.T) {
 		t,
 		"これ確認お願いします <http://example.com>",
 		testCommandConfigs(),
+		[]int{0, 1, 2},
 	)
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
@@ -475,7 +480,7 @@ func testExecutorIgnoreCasualMessageWithURL(t *testing.T) {
 
 func testExecutorIgnoreCasualMessageStartingWithPrefix(t *testing.T) {
 	t.Helper()
-	calls, outputs := runExecutorOnce(t, "d <http://example.com>", testCommandConfigs())
+	calls, outputs := runExecutorOnce(t, "d <http://example.com>", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
 	}
@@ -486,7 +491,7 @@ func testExecutorIgnoreCasualMessageStartingWithPrefix(t *testing.T) {
 
 func testExecutorIgnoreCasualMessageWithSemicolon(t *testing.T) {
 	t.Helper()
-	calls, outputs := runExecutorOnce(t, "x ; y", testCommandConfigs())
+	calls, outputs := runExecutorOnce(t, "x ; y", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
 	}
@@ -497,7 +502,7 @@ func testExecutorIgnoreCasualMessageWithSemicolon(t *testing.T) {
 
 func testExecutorExecuteValidThenInvalidCommand(t *testing.T) {
 	t.Helper()
-	calls, outputs := runExecutorOnce(t, "date;x", testCommandConfigs())
+	calls, outputs := runExecutorOnce(t, "date;x", testCommandConfigs(), []int{0, 1, 2})
 
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(calls))

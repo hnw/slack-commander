@@ -48,7 +48,10 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 
 	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
 	done := make(chan struct{})
-	go func() { executor.Execute(ctx, &CommandInput{Text: "date"}, nil); close(done) }()
+	go func() {
+		executor.Execute(ctx, &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}, nil)
+		close(done)
+	}()
 
 	select {
 	case <-started:
@@ -88,7 +91,10 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 
 	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
 	done := make(chan struct{})
-	go func() { executor.Execute(context.Background(), &CommandInput{Text: "date"}, nil); close(done) }()
+	go func() {
+		executor.Execute(context.Background(), &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}, nil)
+		close(done)
+	}()
 
 	select {
 	case <-started:

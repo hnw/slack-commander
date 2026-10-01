@@ -22,7 +22,7 @@ Executor は候補外の command を除き、残った定義を順に keyword �
 候補外の specific command から許可された wildcard への fall-through も認める。
 deny の記録や追加の keyword 優先度判定は設けない。
 
-stdin reply には root command の resolved ACL を適用する。
+stdin reply は独立した global command index を持つ synthetic `*` reply として match し、root command の resolved ACL を適用する。explicit reply の `accept_reminder` は従来どおり親から継承しない。
 route cache miss では指定された thread の起点投稿を取得し、その投稿者の情報から root の候補を再現する。
 返信投稿者や最新投稿から root を推測しない。
 

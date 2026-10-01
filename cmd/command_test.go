@@ -10,13 +10,13 @@ func TestCommandSetMatchesSingleRootCommand(t *testing.T) {
 	)
 	set := NewCommandSet([]*Command{command})
 
-	if got := set.MatchSingle("deploy api", nil); got != command {
+	if got := set.MatchSingle("deploy api", []int{0}); got != command {
 		t.Fatalf("MatchSingle() = %v, want command", got)
 	}
-	if got := set.MatchSingle("deploy api && deploy web", nil); got != nil {
+	if got := set.MatchSingle("deploy api && deploy web", []int{0}); got != nil {
 		t.Fatalf("MatchSingle() = %v, want nil for a chain", got)
 	}
-	matched, args := set.Match(newParsedCommand("", []string{"deploy", "api"}), nil)
+	matched, args := set.Match(newParsedCommand("", []string{"deploy", "api"}), []int{0})
 	if matched != command || len(args) != 2 || args[0] != "deploy" || args[1] != "api" {
 		t.Fatalf("Match() = (%v, %v)", matched, args)
 	}
@@ -74,7 +74,7 @@ func TestCommandSetCandidateSemantics(t *testing.T) {
 		allowed []int
 		want    *Command
 	}{
-		{"nil allows all commands", nil, first},
+		{"nil allows no commands", nil, nil},
 		{"empty allows no commands", []int{}, nil},
 		{"zero is a valid index", []int{0}, first},
 		{"only second is allowed", []int{1}, second},

@@ -39,7 +39,7 @@ func TestSlackRootInputResolverAppliesReminderPolicyToOriginalRoot(t *testing.T)
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	input, err := SlackRootInputResolver(smc, Config{ListenerConfigs: []ListenerConfig{
-		{CommandIndex: 1, AllowedUserIDs: []string{"U-only"}, AllowedChannelIDs: []string{"C"}, AcceptReminder: true},
+		{CommandIndex: 1, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"U-only"}, AllowedChannelIDs: []string{"C"}, AcceptReminder: true}},
 	}})(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)

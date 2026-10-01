@@ -21,16 +21,16 @@ type StdinLifecycle interface {
 	StdinClosed(*InteractiveStdin)
 }
 
-// ThreadReplyResult describes how a thread reply was handled.
-type ThreadReplyResult int
+// AcceptResult は入力受付後のrouting結果を表す。
+type AcceptResult int
 
 const (
-	// ThreadReplyIgnored means the reply did not have a routable destination.
-	ThreadReplyIgnored ThreadReplyResult = iota
-	// ThreadReplyRouted means the reply was sent to its selected destination.
-	ThreadReplyRouted
-	// ThreadReplyQueueFull means a command reply was dropped by the queue.
-	ThreadReplyQueueFull
+	// AcceptIgnored は入力に対応する宛先がないことを表す。
+	AcceptIgnored AcceptResult = iota
+	// AcceptRouted は入力が宛先へ渡されたことを表す。
+	AcceptRouted
+	// AcceptQueueFull はqueueが満杯で入力を受け付けなかったことを表す。
+	AcceptQueueFull
 )
 
 // ConversationCoordinator owns routing and execution state for Slack conversations.
@@ -48,65 +48,73 @@ func NewConversationCoordinatorWithRootInputResolver(commands *CommandSet, resol
 	return &ConversationCoordinator{commands: commands, resolveRootInput: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
 }
 
-// AcceptRoot queues a root command and records its route after queue acceptance.
-func (c *ConversationCoordinator) AcceptRoot(input *CommandInput) bool {
-	root := c.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
-	if c.enqueue == nil || !c.enqueue(input) {
-		return false
+// Accept はroot入力とreply入力を共通の入口で受け付ける。
+func (c *ConversationCoordinator) Accept(input *CommandInput) (AcceptResult, error) {
+	if input.MessageID.Timestamp == input.ConversationID.RootTimestamp {
+		return c.acceptRoot(input), nil
 	}
+	return c.acceptThreadReply(input)
+}
+
+func (c *ConversationCoordinator) acceptRoot(input *CommandInput) AcceptResult {
+	root := c.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
+
+	if c.enqueue == nil || !c.enqueue(input) {
+		return AcceptQueueFull
+	}
+
 	if root != nil {
 		c.routes.store(input.ConversationID, root)
 	}
-	return true
+
+	return AcceptRouted
 }
 
-// AcceptThreadReply routes a reply according to its root command policy.
-func (c *ConversationCoordinator) AcceptThreadReply(input *CommandInput) (ThreadReplyResult, error) {
+func (c *ConversationCoordinator) acceptThreadReply(input *CommandInput) (AcceptResult, error) {
 	root, found := c.routes.lookup(input.ConversationID)
 	if !found {
 		if c.resolveRootInput == nil {
-			return ThreadReplyIgnored, nil
+			return AcceptIgnored, nil
 		}
 		var err error
 		root, err = c.resolveRootCommand(input.ConversationID)
 		if err != nil {
-			return ThreadReplyIgnored, err
+			return AcceptIgnored, err
 		}
 		c.routes.store(input.ConversationID, root)
 	}
 	if root == nil {
-		return ThreadReplyIgnored, nil
+		return AcceptIgnored, nil
 	}
 	return c.routeThreadReply(root, input)
 }
 
-func (c *ConversationCoordinator) routeThreadReply(root *Command, input *CommandInput) (ThreadReplyResult, error) {
-	switch root.config.ThreadReplyMode {
-	case ThreadReplyIgnore:
-		return ThreadReplyIgnored, nil
-	case ThreadReplyStdin:
-		if input.AllowedCommandIndexes != nil && !containsCommandIndex(input.AllowedCommandIndexes, root.config.Index) {
-			return ThreadReplyIgnored, nil
-		}
+func (c *ConversationCoordinator) routeThreadReply(root *Command, input *CommandInput) (AcceptResult, error) {
+	if root.replies == nil {
+		return AcceptIgnored, nil
+	}
+	command := root.replies.MatchReply(input.Text, input.AllowedCommandIndexes)
+	if command == nil {
+		return AcceptIgnored, nil
+	}
+	if command.config.SyntheticStdinReply {
 		endpoint := c.inputs.lookup(input.ConversationID)
 		if endpoint == nil {
-			return ThreadReplyIgnored, nil
+			return AcceptIgnored, nil
 		}
 		if err := endpoint.TrySend(input.Text); err != nil {
 			log.Printf("[WARN] dropping interactive stdin channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		}
-		return ThreadReplyRouted, nil
-	case ThreadReplyCommand:
-		if root.replies == nil || len(root.replies.commands) == 0 || c.enqueue == nil {
-			return ThreadReplyIgnored, nil
-		}
-		input.CommandSet = root.replies
-		if !c.enqueue(input) {
-			return ThreadReplyQueueFull, nil
-		}
-		return ThreadReplyRouted, nil
+		return AcceptRouted, nil
 	}
-	return ThreadReplyIgnored, nil
+	if c.enqueue == nil {
+		return AcceptIgnored, nil
+	}
+	input.CommandSet = root.replies
+	if !c.enqueue(input) {
+		return AcceptQueueFull, nil
+	}
+	return AcceptRouted, nil
 }
 
 func (c *ConversationCoordinator) resolveRootCommand(conversation ConversationID) (*Command, error) {
