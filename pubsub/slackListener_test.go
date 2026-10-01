@@ -43,11 +43,11 @@ func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 			close(smc.Events)
 			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
 			queued := 0
-			coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(*cmd.CommandInput) bool {
+			router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(*cmd.CommandInput) bool {
 				queued++
 				return true
-			}, 1)
-			err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, coordinator)
+			}, 1, &cmd.StdinStore{})
+			err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, router)
 			if err == nil {
 				t.Fatal("SlackListener() accepted incomplete identity")
 			}
@@ -80,11 +80,11 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 	close(smc.Events)
 	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
 	var queued []string
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(input *cmd.CommandInput) bool {
 		queued = append(queued, input.MessageID.Timestamp)
 		return true
-	}, 1)
-	if err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, coordinator); err != nil {
+	}, 1, &cmd.StdinStore{})
+	if err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, router); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(queued, []string{"3", "4"}) {
@@ -100,33 +100,33 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}, nil, nil)
 	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
 	resolverCalls, enqueueCalls := 0, 0
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{root}), func(cmd.ConversationID) (cmd.RootCommandInput, error) {
+	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{root}), func(cmd.ConversationID) (cmd.RootCommandInput, error) {
 		resolverCalls++
 		return cmd.RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*cmd.CommandInput) bool {
 		enqueueCalls++
 		return true
-	}, 1)
+	}, 1, &cmd.StdinStore{})
 
 	for _, tc := range []struct {
 		name string
-		call func(*cmd.ConversationCoordinator)
+		call func(*cmd.ConversationRouter)
 	}{
-		{name: "root message", call: func(coordinator *cmd.ConversationCoordinator) {
-			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "run"}, Config{}, coordinator)
+		{name: "root message", call: func(router *cmd.ConversationRouter) {
+			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "run"}, Config{}, router)
 		}},
-		{name: "thread reply", call: func(coordinator *cmd.ConversationCoordinator) {
-			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, Config{}, coordinator)
+		{name: "thread reply", call: func(router *cmd.ConversationRouter) {
+			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, Config{}, router)
 		}},
-		{name: "root app mention", call: func(coordinator *cmd.ConversationCoordinator) {
-			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "<@BOT> run"}, Config{}, coordinator)
+		{name: "root app mention", call: func(router *cmd.ConversationRouter) {
+			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "<@BOT> run"}, Config{}, router)
 		}},
-		{name: "thread app mention", call: func(coordinator *cmd.ConversationCoordinator) {
-			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> retry"}, Config{}, coordinator)
+		{name: "thread app mention", call: func(router *cmd.ConversationRouter) {
+			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> retry"}, Config{}, router)
 		}},
 	} {
 		t.Run(tc.name, func(*testing.T) {
-			tc.call(coordinator)
+			tc.call(router)
 		})
 	}
 	if resolverCalls != 0 || enqueueCalls != 0 {

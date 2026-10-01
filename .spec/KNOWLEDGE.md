@@ -6,7 +6,8 @@
 - `CommandConfig.Replies` は resolved config tree にだけ残す。instantiate 時に `Command.config.Replies` を nil にし、runtime reply tree は `Command.replies *CommandSet` だけで表現する。
 - startup で `CommandSet` とその `Command` / matcher / runner を一度だけ構築し、routing と全 worker の Executor で共有する。matcher / runner は実行ごとの可変状態を持たず、compose runner も同時実行可能であるため worker ごとには生成しない。route cache が保持する command と実行される command は同じ runtime object とする。
 - `ConversationID` は transport 固有の thread 型ではなく、継続した command interaction を識別する単位とする。Slack では channel ID + root timestamp に対応する。
-- conversation 単位の runtime state として、root command の route、active stdin endpoint、実行 lock を管理する。これらは worker 個別の状態にはしない。stdin endpoint は runner が実際の writer を渡した後にだけ公開し、古い endpoint の close は後から登録された endpoint を削除しない。
+- conversation 単位の責務を `ConversationRouter`（root/reply routing と route cache）、`StdinStore`（active stdin endpoint と lifecycle）、`ConversationLocks`（command 実行の直列化）へ分ける。main で各 instance を生成し、Router と全 worker が同じ Store、全 worker が同じ Locks を使う。worker は Lock の unlock 関数を defer し、Executor は直列化を担当しない。
+- stdin endpoint は runner が実際の writer を渡した後にだけ公開し、古い endpoint の close は後から登録された endpoint を削除しない。synthetic stdin reply は Router から Store の endpoint へ直接配送し、worker queue と conversation lock を通らない。
 - `stdin_idle_timeout` は process timeout と独立した EOF の安全弁である。`0` は無効、負値は設定エラーとする。interactive stdin は exec と compose だけに適用し、HTTP には適用しない。
 - Slack 固有の入力表現は `pubsub` で正規化してから `cmd` に渡す。mention 除去や Slack による quote / entity / URL 表現の復元は transport boundary の責務とし、command body や stdin reply も例外扱いしない。reply の末尾には LF を一つ補うが、本文中の改行は保持する。
 - Slack ACLはconfig resolve時にglobal command index付きのflat `ListenerConfig`へ展開する。トップレベルallowlistを最大範囲とし、下位の非空リストは親の部分集合、空リストは継承として解決する。open access判定は従来どおりトップレベルの両allowlistだけを見る。詳しくは [command ACL ADR](../docs/decisions/2026-10-01-command-acl.md)。

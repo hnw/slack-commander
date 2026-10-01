@@ -5,12 +5,11 @@ import (
 	"errors"
 	"io"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
 
-func coordinatorRoot(interaction string) *testCommandConfig {
+func routerRoot(interaction string) *testCommandConfig {
 	root := newTestCommandConfig(&testExecutionConfig{Keyword: "run", Command: "run"})
 	switch interaction {
 	case InteractionStdin:
@@ -25,10 +24,10 @@ func coordinatorRoot(interaction string) *testCommandConfig {
 	return root
 }
 
-func TestConversationCoordinatorCachesOnlyQueuedMatchedRoots(t *testing.T) {
-	root := coordinatorRoot(InteractionOneshot)
+func TestConversationRouterCachesOnlyQueuedMatchedRoots(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
 	queued := false
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, nil, func(*CommandInput) bool { return queued }, 2)
+	c := newTestConversationRouter([]*testCommandConfig{root}, nil, func(*CommandInput) bool { return queued }, 2)
 	input := &CommandInput{Text: "run", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
 	if result, _ := c.Accept(input); result != AcceptQueueFull {
 		t.Fatal("unexpected queue success")
@@ -45,10 +44,10 @@ func TestConversationCoordinatorCachesOnlyQueuedMatchedRoots(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorDoesNotCacheUnmatchedRoot(t *testing.T) {
-	root := coordinatorRoot(InteractionOneshot)
+func TestConversationRouterDoesNotCacheUnmatchedRoot(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
 	queued := false
-	coordinator := newTestConversationCoordinator([]*testCommandConfig{root}, nil, func(*CommandInput) bool {
+	router := newTestConversationRouter([]*testCommandConfig{root}, nil, func(*CommandInput) bool {
 		queued = true
 		return true
 	}, 2)
@@ -58,34 +57,34 @@ func TestConversationCoordinatorDoesNotCacheUnmatchedRoot(t *testing.T) {
 		MessageID:             MessageID{Timestamp: "1"},
 		AllowedCommandIndexes: []int{0},
 	}
-	if coordinator.commands.MatchSingle(input.Text, input.AllowedCommandIndexes) != nil {
+	if router.commands.MatchSingle(input.Text, input.AllowedCommandIndexes) != nil {
 		t.Fatal("test root unexpectedly matched")
 	}
-	if result, err := coordinator.Accept(input); err != nil || result != AcceptRouted {
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v; want routed", result, err)
 	}
 	if !queued {
 		t.Fatal("unmatched root was not queued")
 	}
-	if _, ok := coordinator.routes.lookup(input.ConversationID); ok {
+	if _, ok := router.routes.lookup(input.ConversationID); ok {
 		t.Fatal("unmatched root was cached")
 	}
 }
 
-func TestConversationCoordinatorResolvesEvictedRootWithOriginalCandidates(t *testing.T) {
+func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.T) {
 	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{Keyword: "retry"}, RunnerConfig: RunnerConfig{Command: "retry"}}, nil, nil)})
 	first := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "first"}}, nil, nil)
 	second := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "second"}}, nil, replySet)
 	commands := NewCommandSet([]*Command{first, second})
 	var queued *CommandInput
-	coordinator := NewConversationCoordinatorWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
+	router := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{2}}, nil
-	}, func(input *CommandInput) bool { queued = input; return true }, 0)
+	}, func(input *CommandInput) bool { queued = input; return true }, 0, &StdinStore{})
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	if result, _ := coordinator.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{2}}); result != AcceptRouted {
+	if result, _ := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{2}}); result != AcceptRouted {
 		t.Fatal("AcceptRoot() failed")
 	}
-	if _, err := coordinator.Accept(&CommandInput{Text: "retry", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}}); err != nil {
+	if _, err := router.Accept(&CommandInput{Text: "retry", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}}); err != nil {
 		t.Fatal(err)
 	}
 	if queued == nil || queued.CommandSet != replySet {
@@ -93,10 +92,10 @@ func TestConversationCoordinatorResolvesEvictedRootWithOriginalCandidates(t *tes
 	}
 }
 
-func TestConversationCoordinatorPreservesNormalizedCommandRoot(t *testing.T) {
-	root := coordinatorRoot(InteractionCommand)
+func TestConversationRouterPreservesNormalizedCommandRoot(t *testing.T) {
+	root := routerRoot(InteractionCommand)
 	var queued *CommandInput
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, nil, func(input *CommandInput) bool { queued = input; return true }, 2)
+	c := newTestConversationRouter([]*testCommandConfig{root}, nil, func(input *CommandInput) bool { queued = input; return true }, 2)
 	if result, err := c.Accept(&CommandInput{Text: "run\nbody", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v", result, err)
 	}
@@ -105,10 +104,10 @@ func TestConversationCoordinatorPreservesNormalizedCommandRoot(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorCachesResolverMatch(t *testing.T) {
-	root := coordinatorRoot(InteractionOneshot)
+func TestConversationRouterCachesResolverMatch(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
 	lookups := 0
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		lookups++
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { return true }, 2)
@@ -123,9 +122,9 @@ func TestConversationCoordinatorCachesResolverMatch(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorCachesResolverNonMatch(t *testing.T) {
+func TestConversationRouterCachesResolverNonMatch(t *testing.T) {
 	lookups := 0
-	c := newTestConversationCoordinator(nil, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter(nil, func(ConversationID) (RootCommandInput, error) {
 		lookups++
 		return RootCommandInput{Text: "unknown", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { return true }, 2)
@@ -141,10 +140,10 @@ func TestConversationCoordinatorCachesResolverNonMatch(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorEvictsLeastRecentlyUsedRoute(t *testing.T) {
-	root := coordinatorRoot(InteractionOneshot)
+func TestConversationRouterEvictsLeastRecentlyUsedRoute(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
 	lookups := 0
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		lookups++
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { return true }, 2)
@@ -158,9 +157,9 @@ func TestConversationCoordinatorEvictsLeastRecentlyUsedRoute(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorDoesNotCacheResolverError(t *testing.T) {
+func TestConversationRouterDoesNotCacheResolverError(t *testing.T) {
 	lookups := 0
-	c := newTestConversationCoordinator(nil, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter(nil, func(ConversationID) (RootCommandInput, error) {
 		lookups++
 		return RootCommandInput{}, errors.New("failed")
 	}, func(*CommandInput) bool { return true }, 2)
@@ -175,10 +174,10 @@ func TestConversationCoordinatorDoesNotCacheResolverError(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
-	root := coordinatorRoot(InteractionCommand)
+func TestConversationRouterRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
+	root := routerRoot(InteractionCommand)
 	var queued *CommandInput
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(input *CommandInput) bool { queued = input; return true }, 2)
 	result, err := c.Accept(&CommandInput{Text: "stop && stop\nbody", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{1}})
@@ -201,17 +200,17 @@ func TestConversationCoordinatorRoutesCommandReplyAndReportsQueueFull(t *testing
 	}
 }
 
-func TestConversationCoordinatorQueuesMalformedExplicitReplyForExecutorError(t *testing.T) {
-	root := coordinatorRoot(InteractionCommand)
+func TestConversationRouterQueuesMalformedExplicitReplyForExecutorError(t *testing.T) {
+	root := routerRoot(InteractionCommand)
 	root.Replies[0].Keyword = "stop *"
 	var queued *CommandInput
-	coordinator := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	router := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(input *CommandInput) bool {
 		queued = input
 		return true
 	}, 1)
-	result, err := coordinator.Accept(&CommandInput{
+	result, err := router.Accept(&CommandInput{
 		Text:                  `stop "unbalanced`,
 		ConversationID:        ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		MessageID:             MessageID{Timestamp: "2"},
@@ -221,7 +220,7 @@ func TestConversationCoordinatorQueuesMalformedExplicitReplyForExecutorError(t *
 		t.Fatalf("Accept() = %v, %v; queued = %+v", result, err, queued)
 	}
 	outputs := make(chan *CommandOutput, 10)
-	NewExecutor(coordinator.commands, outputs).Execute(context.Background(), queued, nil)
+	NewExecutor(router.commands, outputs).Execute(context.Background(), queued, nil)
 	var parseError bool
 	for range len(outputs) {
 		output := <-outputs
@@ -234,9 +233,9 @@ func TestConversationCoordinatorQueuesMalformedExplicitReplyForExecutorError(t *
 	}
 }
 
-func TestConversationCoordinatorIgnoresOneshotReply(t *testing.T) {
-	root := coordinatorRoot(InteractionOneshot)
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+func TestConversationRouterIgnoresOneshotReply(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { t.Fatal("oneshot reply queued"); return false }, 2)
 	result, err := c.Accept(&CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{}})
@@ -245,83 +244,10 @@ func TestConversationCoordinatorIgnoresOneshotReply(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorSerializesSameContext(t *testing.T) {
-	c := newTestConversationCoordinator(nil, nil, nil, 1)
-	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	started := make(chan struct{}, 2)
-	release := make(chan struct{}, 2)
-	var wg sync.WaitGroup
-	for range 2 {
-		wg.Add(1)
-		go func() { defer wg.Done(); c.RunSerialized(ctx, func() { started <- struct{}{}; <-release }) }()
-	}
-	<-started
-	select {
-	case <-started:
-		t.Fatal("same context ran concurrently")
-	case <-time.After(50 * time.Millisecond):
-	}
-	release <- struct{}{}
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("second same-context command did not start")
-	}
-	release <- struct{}{}
-	wg.Wait()
-}
-
-func TestConversationCoordinatorRunsDifferentContextsConcurrently(t *testing.T) {
-	c := newTestConversationCoordinator(nil, nil, nil, 1)
-	started := make(chan struct{}, 2)
-	release := make(chan struct{}, 2)
-	var wg sync.WaitGroup
-	for _, thread := range []string{"1", "2"} {
-		wg.Add(1)
-		go func(thread string) {
-			defer wg.Done()
-			c.RunSerialized(ConversationID{ChannelID: "C", RootTimestamp: thread}, func() { started <- struct{}{}; <-release })
-		}(thread)
-	}
-	for range 2 {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("different contexts did not run concurrently")
-		}
-	}
-	release <- struct{}{}
-	release <- struct{}{}
-	wg.Wait()
-}
-
-func TestConversationCoordinatorKeepsNewestEndpoint(t *testing.T) {
-	root := coordinatorRoot(InteractionStdin)
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, nil, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
-	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	c.routes.store(ctx, c.commands.commands[0])
-	_, oldWriter := io.Pipe()
-	_, newWriter := io.Pipe()
-	old := NewInteractiveStdin(oldWriter, "", func(error) {})
-	newEndpoint := NewInteractiveStdin(newWriter, "", func(error) {})
-	lifecycle := c.Lifecycle(ctx)
-	lifecycle.StdinReady(old)
-	lifecycle.StdinReady(newEndpoint)
-	lifecycle.StdinClosed(old)
-	if got := c.inputs.lookup(ctx); got != newEndpoint {
-		t.Fatal("old endpoint close removed new endpoint")
-	}
-	lifecycle.StdinClosed(newEndpoint)
-	old.Close()
-	newEndpoint.Close()
-	_ = oldWriter.Close()
-	_ = newWriter.Close()
-}
-
-func TestConversationCoordinatorDropsStdinReplyWithoutEndpoint(t *testing.T) {
-	root := coordinatorRoot(InteractionStdin)
+func TestConversationRouterDropsStdinReplyWithoutEndpoint(t *testing.T) {
+	root := routerRoot(InteractionStdin)
 	queued := false
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { queued = true; return true }, 2)
 	result, err := c.Accept(&CommandInput{Text: "reply", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{1000}})
@@ -330,15 +256,17 @@ func TestConversationCoordinatorDropsStdinReplyWithoutEndpoint(t *testing.T) {
 	}
 }
 
-func TestConversationCoordinatorRoutesRawStdinReply(t *testing.T) {
-	root := coordinatorRoot(InteractionStdin)
+func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
+	root := routerRoot(InteractionStdin)
 	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	c := newTestConversationCoordinator([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
 	reader, writer := io.Pipe()
 	endpoint := NewInteractiveStdin(writer, "", func(error) {})
-	c.Lifecycle(ctx).StdinReady(endpoint)
+	store := &StdinStore{}
+	c.stdin = store
+	store.Lifecycle(ctx).StdinReady(endpoint)
 	for _, body := range []string{"<@BOT> “raw” &amp;", "hello world", "yes && no", "yes || no", "foo ; bar", `unbalanced "quote`, "first line\nsecond line"} {
 		result, err := c.Accept(&CommandInput{Text: body, ConversationID: ctx, AllowedCommandIndexes: []int{1000}})
 		if err != nil || result != AcceptRouted {

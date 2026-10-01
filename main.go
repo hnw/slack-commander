@@ -88,7 +88,9 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	coordinator := cmd.NewConversationCoordinatorWithRootInputResolver(
+	stdinStore := &cmd.StdinStore{}
+	conversationLocks := &cmd.ConversationLocks{}
+	router := cmd.NewConversationRouterWithRootInputResolver(
 		commands,
 		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
 		func(input *cmd.CommandInput) bool {
@@ -100,9 +102,10 @@ func run(args []string) int {
 			}
 		},
 		4096,
+		stdinStore,
 	)
 	var executorWG sync.WaitGroup
-	startWorkers(ctx, cfg.NumWorkers, commandQueue, coordinator, commands, outputQueue, &executorWG)
+	startWorkers(ctx, cfg.NumWorkers, commandQueue, stdinStore, conversationLocks, commands, outputQueue, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
 	go func() {
@@ -118,7 +121,7 @@ func run(args []string) int {
 			ctx,
 			smc,
 			cfg.PubSubConfig,
-			coordinator,
+			router,
 		)
 		if listenerErr != nil {
 			stop()
@@ -161,7 +164,8 @@ func startWorkers(
 	ctx context.Context,
 	workers int,
 	inputs <-chan *cmd.CommandInput,
-	coordinator *cmd.ConversationCoordinator,
+	stdinStore *cmd.StdinStore,
+	conversationLocks *cmd.ConversationLocks,
 	commands *cmd.CommandSet,
 	outputQueue chan *cmd.CommandOutput,
 	wg *sync.WaitGroup,
@@ -179,9 +183,11 @@ func startWorkers(
 					if !ok {
 						return
 					}
-					coordinator.RunSerialized(input.ConversationID, func() {
-						executor.Execute(ctx, input, coordinator.Lifecycle(input.ConversationID))
-					})
+					func() {
+						unlock := conversationLocks.Lock(input.ConversationID)
+						defer unlock()
+						executor.Execute(ctx, input, stdinStore.Lifecycle(input.ConversationID))
+					}()
 				}
 			}
 		}()
