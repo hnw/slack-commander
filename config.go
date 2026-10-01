@@ -39,28 +39,18 @@ type Config struct {
 type RawCommandConfig struct {
 	cmd.MatcherConfig
 	cmd.RunnerConfig
-	cmd.ExecutorConfig
+	RawExecutorConfig
 	pubsub.ReplyConfig
 	Interaction         string    `toml:"interaction"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
-	Replies             []*RawReplyCommandConfig
+	Replies             []*RawCommandConfig
 }
 
-// RawReplyCommandConfig is a thread-reply command definition.
-// It deliberately has no Replies field: nested reply routing is unsupported.
-type RawReplyCommandConfig struct {
-	cmd.MatcherConfig
-	cmd.RunnerConfig
-	pubsub.ReplyConfig
-	Timeout             *int      `toml:"timeout"`
-	StdinIdleTimeout    *int      `toml:"stdin_idle_timeout"`
-	TTY                 *bool     `toml:"tty"`
-	Username            string    `toml:"username"`
-	IconEmoji           string    `toml:"icon_emoji"`
-	IconURL             string    `toml:"icon_url"`
-	ReplyBroadcast      *bool     `toml:"reply_broadcast"`
-	OutputFormat        string    `toml:"output_format"`
-	OutputFlushInterval *Duration `toml:"output_flush_interval"`
+// RawExecutorConfig preserves whether TOML execution settings were omitted.
+type RawExecutorConfig struct {
+	Timeout          *int  `toml:"timeout"`
+	StdinIdleTimeout *int  `toml:"stdin_idle_timeout"`
+	TTY              *bool `toml:"tty"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -106,7 +96,7 @@ func formatTOMLError(err error) error {
 	return err
 }
 
-func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawReplyCommandConfig) *pubsub.ReplyConfig {
+func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawCommandConfig) *pubsub.ReplyConfig {
 	replyConfig := &pubsub.ReplyConfig{
 		Username:       parent.Username,
 		IconEmoji:      parent.IconEmoji,
@@ -164,7 +154,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	if _, err := normalizeRunner(&runnerConfig, raw.Keyword); err != nil {
 		return nil, err
 	}
-	executorConfig, threadReplyMode := resolveInteraction(interaction, raw.ExecutorConfig)
+	executorConfig, threadReplyMode := resolveInteraction(interaction, resolveExecutorConfig(cmd.ExecutorConfig{}, raw.RawExecutorConfig))
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, inheritedOutputFlushInterval)
 	if err := validateCommandDefinition(raw.MatcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, err
@@ -183,7 +173,13 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	return config, nil
 }
 
-func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawReplyCommandConfig) (*cmd.CommandConfig, error) {
+func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawCommandConfig) (*cmd.CommandConfig, error) {
+	if raw.Interaction != "" {
+		return nil, fmt.Errorf("keyword '%s': interaction is not allowed on reply commands", raw.Keyword)
+	}
+	if len(raw.Replies) > 0 {
+		return nil, fmt.Errorf("keyword '%s': nested replies are not supported", raw.Keyword)
+	}
 	runnerConfig := raw.RunnerConfig
 	if runnerConfig.Runner == "" {
 		runnerConfig.Runner = parent.Runner
@@ -191,16 +187,7 @@ func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawReplyCommandCo
 	if _, err := normalizeRunner(&runnerConfig, raw.Keyword); err != nil {
 		return nil, err
 	}
-	executorConfig := parent.ExecutorConfig
-	if raw.Timeout != nil {
-		executorConfig.Timeout = *raw.Timeout
-	}
-	if raw.StdinIdleTimeout != nil {
-		executorConfig.StdinIdleTimeout = *raw.StdinIdleTimeout
-	}
-	if raw.TTY != nil {
-		executorConfig.TTY = *raw.TTY
-	}
+	executorConfig := resolveExecutorConfig(parent.ExecutorConfig, raw.RawExecutorConfig)
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, parent.OutputFlushInterval)
 	replyConfig, ok := parent.ReplyConfig.(*pubsub.ReplyConfig)
 	if !ok {
@@ -214,6 +201,19 @@ func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawReplyCommandCo
 		return nil, err
 	}
 	return &cmd.CommandConfig{MatcherConfig: raw.MatcherConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast), ThreadReplyMode: cmd.ThreadReplyIgnore}, nil
+}
+
+func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {
+	if raw.Timeout != nil {
+		base.Timeout = *raw.Timeout
+	}
+	if raw.StdinIdleTimeout != nil {
+		base.StdinIdleTimeout = *raw.StdinIdleTimeout
+	}
+	if raw.TTY != nil {
+		base.TTY = *raw.TTY
+	}
+	return base
 }
 
 func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ExecutorConfig, cmd.ThreadReplyMode) {
