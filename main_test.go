@@ -2,19 +2,125 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/hnw/slack-commander/cmd"
+	"github.com/hnw/slack-commander/pubsub"
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/socketmode"
 )
 
 type listenerFailureTransport struct {
 	response string
+}
+
+func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
+	type slackRequest struct {
+		path string
+		form map[string][]string
+	}
+	requests := make(chan slackRequest, 4)
+	httpStarted := make(chan struct{}, 1)
+	releaseHTTP := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			httpStarted <- struct{}{}
+			<-releaseHTTP
+			_, _ = io.WriteString(w, "async-result")
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm() error = %v", err)
+		}
+		requests <- slackRequest{path: r.URL.Path, form: r.Form}
+		_, _ = io.WriteString(w, `{"ok":true,"channel":"C123","ts":"1700000000.000300"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	outputs := make(chan *cmd.CommandOutput, 10)
+	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
+	command := cmd.NewCommand(cmd.CommandConfig{
+		Index:         0,
+		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
+		RunnerConfig:  httpConfig,
+	}, cmd.NewHTTPRunner(httpConfig), nil)
+	commands := cmd.NewCommandSet([]*cmd.Command{command})
+	executor := cmd.NewExecutor(commands, outputs)
+	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
+	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
+	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
+	writerDone := make(chan struct{})
+	writerCtx, cancelWriter := context.WithCancel(context.Background())
+	var outputCloseOnce sync.Once
+	go func() {
+		pubsub.SlackWriter(writerCtx, smc, outputs)
+		close(writerDone)
+	}()
+	t.Cleanup(func() {
+		dispatcher.Close()
+		releaseOnce.Do(func() { close(releaseHTTP) })
+		cancelDispatch()
+		cancelWriter()
+		dispatcher.Wait()
+		outputCloseOnce.Do(func() { close(outputs) })
+		<-writerDone
+	})
+
+	input := &cmd.CommandInput{
+		Text:                  "lookup",
+		ConversationID:        cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1700000000.000100"},
+		MessageID:             cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
+		AllowedCommandIndexes: []int{0},
+	}
+	if result := dispatcher.DispatchRoot(command, input); result != cmd.DispatchAccepted {
+		t.Fatalf("DispatchRoot() = %v, want accepted", result)
+	}
+	select {
+	case <-httpStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("asynchronous HTTP request did not start")
+	}
+	dispatcher.Close()
+	cancelWriter()
+	releaseOnce.Do(func() { close(releaseHTTP) })
+	dispatcher.Wait()
+	outputCloseOnce.Do(func() { close(outputs) })
+	select {
+	case <-writerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SlackWriter did not drain output queue")
+	}
+
+	var reactionNames []string
+	postedBody := false
+	var paths []string
+	for len(requests) > 0 {
+		request := <-requests
+		paths = append(paths, request.path)
+		switch request.path {
+		case "/reactions.add", "/reactions.remove":
+			reactionNames = append(reactionNames, request.form["name"][0])
+		case "/chat.postMessage":
+			encoded, _ := json.Marshal(request.form)
+			postedBody = strings.Contains(string(encoded), "async-result")
+		}
+	}
+	if !slices.Contains(reactionNames, "white_check_mark") || !slices.Contains(reactionNames, "eyes") {
+		t.Fatalf("reaction names = %v, paths = %v, want running and finished reactions", reactionNames, paths)
+	}
+	if !postedBody {
+		t.Fatal("SlackWriter did not post the asynchronous HTTP response body")
+	}
 }
 
 func (transport listenerFailureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -98,6 +204,26 @@ func TestRunCheckConfig(t *testing.T) {
 	if stderr != "keyword is required\n" {
 		t.Fatalf("run(config without keyword) stderr = %q, want %q", stderr, "keyword is required\n")
 	}
+}
+
+func newMainTestDispatcher(
+	ctx context.Context,
+	commands *cmd.CommandSet,
+	outputs chan *cmd.CommandOutput,
+	stdinStore *cmd.StdinStore,
+	conversationLocks *cmd.ConversationLocks,
+	enqueue func(*cmd.CommandInput) bool,
+) *cmd.CommandDispatcher {
+	if outputs == nil {
+		outputs = make(chan *cmd.CommandOutput, 100)
+	}
+	if stdinStore == nil {
+		stdinStore = &cmd.StdinStore{}
+	}
+	if conversationLocks == nil {
+		conversationLocks = &cmd.ConversationLocks{}
+	}
+	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(commands, outputs), stdinStore, conversationLocks, enqueue)
 }
 
 func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {

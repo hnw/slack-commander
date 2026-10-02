@@ -15,6 +15,10 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
+func newSlackTestDispatcher(commands *cmd.CommandSet, enqueue func(*cmd.CommandInput) bool) *cmd.CommandDispatcher {
+	return cmd.NewCommandDispatcher(context.Background(), cmd.NewExecutor(commands, make(chan *cmd.CommandOutput, 100)), &cmd.StdinStore{}, &cmd.ConversationLocks{}, enqueue)
+}
+
 func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -42,8 +46,9 @@ func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 			}}
 			close(smc.Events)
 			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
+			commands := cmd.NewCommandSet([]*cmd.Command{command})
 			queued := 0
-			router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, cmd.NewCommandDispatcher(func(*cmd.CommandInput) bool {
+			router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newSlackTestDispatcher(commands, func(*cmd.CommandInput) bool {
 				queued++
 				return true
 			}), 1)
@@ -80,7 +85,8 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 	close(smc.Events)
 	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
 	var queued []string
-	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
+	commands := cmd.NewCommandSet([]*cmd.Command{command})
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newSlackTestDispatcher(commands, func(input *cmd.CommandInput) bool {
 		queued = append(queued, input.MessageID.Timestamp)
 		return true
 	}), 1)
@@ -99,11 +105,12 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 
 	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}, nil, nil)
 	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
+	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	resolverCalls, enqueueCalls := 0, 0
-	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{root}), func(cmd.ConversationID) (cmd.RootCommandInput, error) {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, func(cmd.ConversationID) (cmd.RootCommandInput, error) {
 		resolverCalls++
 		return cmd.RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
-	}, cmd.NewCommandDispatcher(func(*cmd.CommandInput) bool {
+	}, newSlackTestDispatcher(commands, func(*cmd.CommandInput) bool {
 		enqueueCalls++
 		return true
 	}), 1)

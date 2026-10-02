@@ -4,11 +4,14 @@
 
 - `RawCommandConfig` とその `RawExecutorConfig` は TOML 上の未指定値を保持する decode 用構造とする。root / reply の既定値、継承、制約は `resolveConfig` で一度だけ解決し、後段には resolved `cmd.CommandConfig` だけを渡す。`--check-config` は runner を生成しない。
 - `CommandConfig.Replies` は resolved config tree にだけ残す。instantiate 時に `Command.config.Replies` を nil にし、runtime reply tree は `Command.replies *CommandSet` だけで表現する。
-- startup で `CommandSet` とその `Command` / matcher / runner を一度だけ構築し、routing と全 worker の Executor で共有する。matcher / runner は実行ごとの可変状態を持たず、compose runner も同時実行可能であるため worker ごとには生成しない。route cache が保持する command と実行される command は同じ runtime object とする。
+- startup で `CommandSet` とその `Command` / matcher / runner、および `Executor` を一度だけ構築する。routing と全 worker、および非同期HTTP実行は同じ runtime object を使う。matcher / runner は実行ごとの可変状態を持たず、compose runner も同時実行可能であるため worker ごとには生成しない。
 - runtime `CommandConfig` の入力解析設定は `ParserConfig`、実行時設定は `ExecutorConfig` に分ける。TOMLタグを持つ `cmd.RawMatcherConfig` / `cmd.RawRunnerConfig` はruntimeの `MatcherConfig` / `RunnerConfig` に埋め込んで共有し、field定義を重複させない。raw executor設定はmainに保持する。
 - `ConversationID` は transport 固有の thread 型ではなく、継続した command interaction を識別する単位とする。Slack では channel ID + root timestamp に対応する。
 - conversation 単位の責務を `ConversationRouter`（root/reply routing と route cache）、stdin reply runner（active endpoint への直接配送）、`StdinStore`（active stdin endpoint と lifecycle）、`ConversationLocks`（command 実行の直列化）へ分ける。main で各 instance を生成し、全 worker が同じ Store と Locks を使う。worker は Lock の unlock 関数を defer し、Executor は直列化を担当しない。
-- stdin endpoint は runner が実際の writer を渡した後にだけ公開し、古い endpoint の close は後から登録された endpoint を削除しない。stdin返信は他のCommandと同じ `CommandRunner` / `Cmd` を通し、`DispatchPolicy` はRouterがqueue経由かrunner直接実行かを選ぶ。ConversationIDはstdin runnerがendpointを特定するruntime引数として渡す。
+- stdin endpoint は runner が実際の writer を渡した後にだけ公開し、古い endpoint の close は後から登録された endpoint を削除しない。stdin返信は他のCommandと同じ `CommandRunner` / `Cmd` を通し、`CommandDispatcher` が `DispatchPolicy` に従ってrunnerを直接実行する。ConversationIDはstdin runnerがendpointを特定するruntime引数として渡す。
+- `ConversationRouter` は照合とroot ownership cacheを管理し、`CommandDispatcher` が実行先を選ぶ。単一HTTPはworker外で共有Executorを呼び、chainはqueueへ送る。非同期実行でもworkerと同じConversationLocksを通し、outputQueueとSlackWriterを共有する。
+- DispatcherのCloseと非同期WaitGroupへのAddは同じmutexで保護する。listener終了後にCloseし、workerと非同期実行の完了を待ってからoutputQueueを閉じる。WaitはClose後にだけ呼ぶ。
+- ADR検討: Dispatcherへの責務抽出とHTTPの実行goroutine変更は今回の明示要件であり、永続化や設定契約を変えない可逆な内部変更のため、独立ADRは見送る。HTTP同時実行数の上限とconversation内FIFOは導入しない。
 - `stdin_idle_timeout` は process timeout と独立した EOF の安全弁である。`0` は無効、負値は設定エラーとする。interactive stdin は exec と compose だけに適用し、HTTP には適用しない。
 - Slack 固有の入力表現は `pubsub` で正規化してから `cmd` に渡す。mention 除去や Slack による quote / entity / URL 表現の復元は transport boundary の責務とし、command body や stdin reply も例外扱いしない。reply の末尾には LF を一つ補うが、本文中の改行は保持する。
 - Slack ACLはconfig resolve時にglobal command index付きのflat `ListenerConfig`へ展開する。トップレベルallowlistを最大範囲とし、下位の非空リストは親の部分集合、空リストは継承として解決する。open access判定は従来どおりトップレベルの両allowlistだけを見る。詳しくは [command ACL ADR](../docs/decisions/2026-10-01-command-acl.md)。
