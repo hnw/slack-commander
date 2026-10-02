@@ -46,10 +46,13 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date"}),
 	}
 
-	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
+	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner })
+	executor := NewExecutor(wq)
 	done := make(chan struct{})
 	go func() {
-		executor.Execute(ctx, &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}, nil)
+		input := &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}
+		input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+		executor.Execute(ctx, input, nil)
 		close(done)
 	}()
 
@@ -89,10 +92,13 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", Timeout: 1}),
 	}
 
-	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner }), wq)
+	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner })
+	executor := NewExecutor(wq)
 	done := make(chan struct{})
 	go func() {
-		executor.Execute(context.Background(), &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}, nil)
+		input := &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}
+		input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+		executor.Execute(context.Background(), input, nil)
 		close(done)
 	}()
 

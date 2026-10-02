@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -85,15 +86,43 @@ func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 	config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *", InputBodyMode: InputBodyArgument})
 	runner := &fakeRunner{}
 	wq := make(chan *CommandOutput, 10)
-	executor := NewExecutor(testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
+	commandSet := testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
 		return runner
-	}), wq)
-	executor.Execute(context.Background(), &CommandInput{Text: "todo foo\nbar\n", AllowedCommandIndexes: []int{0}}, nil)
+	})
+	executor := NewExecutor(wq)
+	input := &CommandInput{Text: "todo foo\nbar\n", AllowedCommandIndexes: []int{0}}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	executor.Execute(context.Background(), input, nil)
 	if got := runner.Calls(); len(got) != 1 || !slices.Equal(got[0].args, []string{"foo", "\nbar\n"}) {
 		t.Fatalf("calls = %#v", got)
 	}
 	if got := runner.Inputs(); !slices.Equal(got, []string{""}) {
 		t.Fatalf("stdin = %#v, want empty", got)
+	}
+}
+
+func TestExecutorRejectsUnresolvedInput(t *testing.T) {
+	runner := &fakeRunner{}
+	command := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	}, runner, nil)
+	set := NewCommandSet([]*Command{command})
+	outputs := make(chan *CommandOutput, 10)
+	executor := NewExecutor(outputs)
+	prepared := &CommandInput{Text: "run", AllowedCommandIndexes: []int{0}}
+	prepared.ResolvedInput = set.ResolveInput(prepared.Text, prepared.AllowedCommandIndexes)
+	executor.Execute(context.Background(), prepared, nil)
+	if calls := runner.Calls(); len(calls) != 1 {
+		t.Fatalf("prepared input calls = %#v, want one execution", calls)
+	}
+	drainOutputs(outputs)
+	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil)
+	if calls := runner.Calls(); len(calls) != 1 {
+		t.Fatalf("unprepared input calls = %#v, want unchanged call count", calls)
+	}
+	if got := drainOutputs(outputs); len(got) != 0 {
+		t.Fatalf("unprepared input outputs = %#v, want no output", got)
 	}
 }
 
@@ -105,12 +134,17 @@ func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
 		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
 		ParserConfig:  ParserConfig{AllowInChain: true},
 	}, runner, nil)
-	executor := NewExecutor(NewCommandSet([]*Command{command}), make(chan *CommandOutput, 10))
-	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{}}, nil)
+	set := NewCommandSet([]*Command{command})
+	executor := NewExecutor(make(chan *CommandOutput, 10))
+	input := &CommandInput{Text: "run", AllowedCommandIndexes: []int{}}
+	input.ResolvedInput = set.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	executor.Execute(context.Background(), input, nil)
 	if calls := runner.Calls(); len(calls) != 0 {
 		t.Fatalf("empty candidate set executed commands: %#v", calls)
 	}
-	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{7}}, nil)
+	input = &CommandInput{Text: "run", AllowedCommandIndexes: []int{7}}
+	input.ResolvedInput = set.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	executor.Execute(context.Background(), input, nil)
 	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "run" {
 		t.Fatalf("allowed candidate calls = %#v, want run", calls)
 	}
@@ -118,17 +152,41 @@ func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
 
 func TestExecutorAppliesGlobalIndexesToReplyCommandSet(t *testing.T) {
 	runner := &fakeRunner{}
-	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}}, runner, nil)
-	root := NewCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
-	executor := NewExecutor(NewCommandSet([]*Command{root}), make(chan *CommandOutput, 10))
-	executor.Execute(context.Background(), &CommandInput{Text: "retry", CommandSet: root.replies, AllowedCommandIndexes: []int{12}}, nil)
-	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "retry" {
-		t.Fatalf("reply calls = %#v, want retry", calls)
+	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}, ParserConfig: ParserConfig{AllowInChain: true}}, runner, nil)
+	secondReply := NewCommand(CommandConfig{Index: 13, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "finish"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "finish"}}, ParserConfig: ParserConfig{AllowInChain: true}}, runner, nil)
+	replySet := NewCommandSet([]*Command{reply, secondReply})
+	executor := NewExecutor(make(chan *CommandOutput, 10))
+	input := &CommandInput{Text: "retry ; finish", ResolvedInput: replySet.ResolveInput("retry ; finish", []int{12, 13}), AllowedCommandIndexes: []int{12, 13}}
+	executor.Execute(context.Background(), input, nil)
+	if calls := runner.Calls(); len(calls) != 2 || calls[0].name != "retry" || calls[1].name != "finish" {
+		t.Fatalf("prepared reply calls = %#v, want both reply-set commands", calls)
 	}
 	// The same reply command must be rejected when its global index is absent.
-	executor.Execute(context.Background(), &CommandInput{Text: "retry", CommandSet: root.replies, AllowedCommandIndexes: []int{4}}, nil)
-	if calls := runner.Calls(); len(calls) != 1 {
+	executor.Execute(context.Background(), &CommandInput{Text: "retry", ResolvedInput: replySet.ResolveInput("retry", []int{4}), AllowedCommandIndexes: []int{4}}, nil)
+	if calls := runner.Calls(); len(calls) != 2 {
 		t.Fatalf("disallowed reply executed: %#v", calls)
+	}
+}
+
+func TestExecutorRunsNormalizedQueuedRawInputAsStdin(t *testing.T) {
+	text := `first && second ; third || "unfinished` + "\n  raw body\t"
+	runner := &fakeRunner{}
+	command := NewCommand(CommandConfig{
+		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "capture"}},
+		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
+	}, runner, nil)
+	set := NewCommandSet([]*Command{command})
+	parsed := set.ResolveInput(text, []int{2})
+	wq := make(chan *CommandOutput, 10)
+	NewExecutor(wq).Execute(context.Background(), &CommandInput{
+		Text: text, ResolvedInput: parsed, AllowedCommandIndexes: []int{2},
+	}, nil)
+	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "capture" {
+		t.Fatalf("calls = %#v, want one raw command", calls)
+	}
+	if inputs := runner.Inputs(); len(inputs) != 1 || inputs[0] != text {
+		t.Fatalf("stdin = %#v, want entire raw text", inputs)
 	}
 }
 
@@ -221,6 +279,14 @@ func TestExecutorRejectsChainsContainingDisallowedCommand(t *testing.T) {
 			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
 		},
 		{
+			name: "|| skips second command after success", input: "first || second", wantCalls: 1,
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
+		},
+		{
+			name: "|| still rejects a disallowed skipped command", input: "first || second", wantCalls: 0,
+			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", false)},
+		},
+		{
 			name: "stdin chain rejects", input: "stdin-first ; stdin-second",
 			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("stdin-second", false)},
 		},
@@ -286,10 +352,13 @@ func runExecutorOnce(
 	t.Helper()
 	wq := make(chan *CommandOutput, 20)
 	runner := &fakeRunner{}
-	executor := NewExecutor(testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
+	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
 		return runner
-	}), wq)
-	executor.Execute(context.Background(), &CommandInput{Text: input, AllowedCommandIndexes: allowedIndexes}, nil)
+	})
+	executor := NewExecutor(wq)
+	prepared := &CommandInput{Text: input, AllowedCommandIndexes: allowedIndexes}
+	prepared.ResolvedInput = commandSet.ResolveInput(input, allowedIndexes)
+	executor.Execute(context.Background(), prepared, nil)
 
 	return runner.Calls(), drainOutputs(wq)
 }
@@ -353,18 +422,95 @@ func TestExecutorInputBodyModes(t *testing.T) {
 	}
 }
 
+func TestExecutorUsesResolvedInputAfterTextAndACLChange(t *testing.T) {
+	runner := &fakeRunner{}
+	command := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "todo *"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}},
+		ParserConfig: ParserConfig{InputBodyMode: InputBodyArgument},
+	}, runner, nil)
+	commands := NewCommandSet([]*Command{command})
+	parsed := commands.ResolveInput("todo original\nbody", []int{0})
+	input := &CommandInput{Text: "unmatched replacement", AllowedCommandIndexes: nil, ResolvedInput: parsed}
+	wq := make(chan *CommandOutput, 20)
+	NewExecutor(wq).Execute(context.Background(), input, nil)
+	if calls := runner.Calls(); len(calls) != 1 || !slices.Equal(calls[0].args, []string{"original", "\nbody"}) {
+		t.Fatalf("runner calls = %#v, want prepared args and stdin body", calls)
+	}
+}
+
+func TestExecutorUsesResolvedParseError(t *testing.T) {
+	runner := &fakeRunner{}
+	command := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "todo *"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}},
+	}, runner, nil)
+	commands := NewCommandSet([]*Command{command})
+	parsed := commands.ResolveInput("todo original", []int{0})
+	parsed.ParseErr = errors.New("prepared parse error")
+	wq := make(chan *CommandOutput, 20)
+	NewExecutor(wq).Execute(context.Background(), &CommandInput{
+		Text: "unmatched replacement", AllowedCommandIndexes: nil, ResolvedInput: parsed,
+	}, nil)
+	if calls := runner.Calls(); len(calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no execution after prepared parse error", calls)
+	}
+	var errText string
+	for _, output := range drainOutputs(wq) {
+		if output.IsErrOut {
+			errText = output.Text
+		}
+	}
+	if errText != "prepared parse error" {
+		t.Fatalf("parse error output = %q, want prepared error", errText)
+	}
+}
+
+func TestExecutorUsesMatchesResolvedBeforeChainExecution(t *testing.T) {
+	secondRunner := &fakeRunner{}
+	second := NewCommand(CommandConfig{
+		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second *"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second *"}},
+		ParserConfig: ParserConfig{AllowInChain: true},
+	}, secondRunner, nil)
+	firstRunner := &fakeRunner{}
+	first := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}},
+		ParserConfig: ParserConfig{AllowInChain: true},
+	}, firstRunner, nil)
+	commands := NewCommandSet([]*Command{first, second})
+	wq := make(chan *CommandOutput, 20)
+	input := &CommandInput{Text: "first ; second prepared", AllowedCommandIndexes: []int{0, 1}}
+	input.ResolvedInput = commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	if len(input.ResolvedInput.Commands) != 2 || input.ResolvedInput.Commands[1].Command != second || !slices.Equal(input.ResolvedInput.Commands[1].Args, []string{"second", "prepared"}) {
+		t.Fatalf("resolved chain = %#v, want second command and prepared args", input.ResolvedInput.Commands)
+	}
+	second.matcher.keywords = []string{"changed"}
+	commands.commands = []*Command{first}
+	input.Text = "first ; changed replacement"
+	input.AllowedCommandIndexes = []int{0}
+	NewExecutor(wq).Execute(context.Background(), input, nil)
+	if calls := secondRunner.Calls(); len(calls) != 1 || !slices.Equal(calls[0].args, []string{"prepared"}) {
+		t.Fatalf("second command calls = %#v, want cached match with prepared args", calls)
+	}
+}
+
 func TestExecutorPropagatesConversationID(t *testing.T) {
 	wq := make(chan *CommandOutput, 20)
-	executor := NewExecutor(testCommandSet(testCommandConfigs(), func(*testExecutionConfig) CommandRunner {
+	commandSet := testCommandSet(testCommandConfigs(), func(*testExecutionConfig) CommandRunner {
 		return contextRunner{}
-	}), wq)
+	})
+	executor := NewExecutor(wq)
 
 	conversation := ConversationID{
 		ChannelID:     "C123",
 		RootTimestamp: "1700000000.000100",
 	}
 	message := MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"}
-	executor.Execute(context.Background(), &CommandInput{Text: "date", ConversationID: conversation, MessageID: message, AllowedCommandIndexes: []int{0, 1, 2}}, nil)
+	input := &CommandInput{Text: "date", ConversationID: conversation, MessageID: message, AllowedCommandIndexes: []int{0, 1, 2}}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	executor.Execute(context.Background(), input, nil)
 
 	outputs := drainOutputs(wq)
 	if len(outputs) != 4 {

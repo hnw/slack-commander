@@ -48,13 +48,13 @@ timeout = 5
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), commands, outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(commands, outputs), &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -157,7 +157,7 @@ accept_reminder = true
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	outputs := make(chan *cmd.CommandOutput, 30)
-	executor := cmd.NewExecutor(commands, outputs)
+	executor := cmd.NewExecutor(outputs)
 	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
@@ -243,8 +243,9 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 			for _, config := range configs {
 				commands = append(commands, cmd.NewCommand(config, runner, nil))
 			}
-			executor := cmd.NewExecutor(cmd.NewCommandSet(commands), make(chan *cmd.CommandOutput, 20))
-			executor.Execute(context.Background(), &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed}, nil)
+			commandSet := cmd.NewCommandSet(commands)
+			executor := cmd.NewExecutor(make(chan *cmd.CommandOutput, 20))
+			executor.Execute(context.Background(), &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed, ResolvedInput: commandSet.ResolveInput(tt.text, tt.allowed)}, nil)
 			if !slices.Equal(runner.calls, tt.want) {
 				t.Fatalf("executed = %v, want %v", runner.calls, tt.want)
 			}

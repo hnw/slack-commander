@@ -47,48 +47,36 @@ func NewCommandDispatcher(
 	}
 }
 
-// DispatchRoot はroot inputをqueueまたはHTTP実行へ渡す。
-func (d *CommandDispatcher) DispatchRoot(command *Command, input *CommandInput) DispatchResult {
+// Dispatch routes a prepared input to direct execution, asynchronous execution, or the worker queue.
+func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.closed {
+		d.mu.Unlock()
 		return DispatchIgnored
 	}
-	if isHTTPCommand(command) {
+	parsed := input.ResolvedInput
+	if parsed == nil {
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
+	single := parsed.SingleCommand()
+	if single == nil {
+		defer d.mu.Unlock()
+		if d.enqueue == nil || !d.enqueue(input) {
+			return DispatchQueueFull
+		}
+		return DispatchAccepted
+	}
+	if single.config.DispatchPolicy == DispatchDirect {
+		d.mu.Unlock()
+		return runDirectCommand(single, parsed.Commands[0].Args, input)
+	}
+	defer d.mu.Unlock()
+	if isHTTPCommand(single) {
 		d.startAsyncLocked(input)
 		return DispatchAccepted
 	}
 	if d.enqueue == nil || !d.enqueue(input) {
-		return DispatchQueueFull
-	}
-	return DispatchAccepted
-}
-
-// DispatchReply はdirect replyを実行するか、queued replyをqueueまたはHTTP実行へ渡す。
-func (d *CommandDispatcher) DispatchReply(command *Command, args []string, commands *CommandSet, input *CommandInput) DispatchResult {
-	if command.config.DispatchPolicy == DispatchDirect {
-		d.mu.Lock()
-		closed := d.closed
-		d.mu.Unlock()
-		if closed {
-			return DispatchIgnored
-		}
-		return runDirectReply(command, args, input)
-	}
-	input.CommandSet = commands
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return DispatchIgnored
-	}
-	if isHTTPCommand(command) && commands.MatchSingle(input.Text, input.AllowedCommandIndexes) == command {
-		d.startAsyncLocked(input)
-		return DispatchAccepted
-	}
-	if d.enqueue == nil {
-		return DispatchIgnored
-	}
-	if !d.enqueue(input) {
 		return DispatchQueueFull
 	}
 	return DispatchAccepted
@@ -120,8 +108,11 @@ func isHTTPCommand(command *Command) bool {
 	return command != nil && command.config.Runner == RunnerHTTP
 }
 
-func runDirectReply(command *Command, args []string, input *CommandInput) DispatchResult {
-	runnerArgs := append(args[1:], input.ConversationID.ChannelID, input.ConversationID.RootTimestamp)
+func runDirectCommand(command *Command, args []string, input *CommandInput) DispatchResult {
+	runnerArgs := args[1:]
+	if command.config.Runner == RunnerStdinReply {
+		runnerArgs = append(runnerArgs, input.ConversationID.ChannelID, input.ConversationID.RootTimestamp)
+	}
 	directCmd := command.runner.CommandContext(context.Background(), args[0], runnerArgs...)
 	directCmd.SetStdin(strings.NewReader(input.Text))
 	if directCmd.Run(0) != 0 {

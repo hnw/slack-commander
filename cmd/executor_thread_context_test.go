@@ -58,16 +58,19 @@ func (r *environmentRecordingRunner) Commands() []*environmentRecordingCmd {
 func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	wq := make(chan *CommandOutput, 10)
 	runner := &environmentRecordingRunner{}
-	executor := NewExecutor(testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner }), wq)
+	commandSet := testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner })
+	executor := NewExecutor(wq)
 
-	executor.Execute(context.Background(), &CommandInput{
+	input := &CommandInput{
 		Text:                  "date",
 		AllowedCommandIndexes: []int{0},
 		ConversationID: ConversationID{
 			ChannelID:     "C123",
 			RootTimestamp: "1700000000.000100",
 		},
-	}, nil)
+	}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	executor.Execute(context.Background(), input, nil)
 
 	commands := runner.Commands()
 	if len(commands) != 1 {

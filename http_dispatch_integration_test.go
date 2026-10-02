@@ -41,7 +41,7 @@ func TestSingleHTTPDoesNotOccupyWorkerAndRunsAcrossConversations(t *testing.T) {
 	stdinStore := &cmd.StdinStore{}
 	conversationLocks := &cmd.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
-	executor := cmd.NewExecutor(commands, outputs)
+	executor := cmd.NewExecutor(outputs)
 	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
@@ -174,7 +174,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}))
 	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
 	requests := make(chan *cmd.CommandInput, 10)
-	executor := cmd.NewExecutor(commands, outputs)
+	executor := cmd.NewExecutor(outputs)
 	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
