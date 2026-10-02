@@ -34,11 +34,13 @@ func TestHTTPRunnerPostWithWildcard(t *testing.T) {
 	defer srv.Close()
 
 	cfg := RunnerConfig{
-		Runner:  "http",
-		Method:  "post",
-		URL:     srv.URL + "/hook",
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Body:    `{"text":"*"}`,
+		RawRunnerConfig: RawRunnerConfig{
+			Runner:  "http",
+			Method:  "post",
+			URL:     srv.URL + "/hook",
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    `{"text":"*"}`,
+		},
 	}
 
 	runner := NewHTTPRunner(cfg)
@@ -90,9 +92,11 @@ func TestHTTPRunnerJoinsWildcardArgs(t *testing.T) {
 	defer srv.Close()
 
 	cfg := RunnerConfig{
-		Runner: "http",
-		URL:    srv.URL,
-		Body:   "*",
+		RawRunnerConfig: RawRunnerConfig{
+			Runner: "http",
+			URL:    srv.URL,
+			Body:   "*",
+		},
 	}
 
 	cmd := NewHTTPRunner(cfg).CommandContext(
@@ -132,10 +136,12 @@ func TestHTTPRunnerExpandsAllWildcards(t *testing.T) {
 	defer srv.Close()
 
 	cfg := RunnerConfig{
-		Runner:  "http",
-		URL:     srv.URL + "/users/*/messages/*",
-		Headers: map[string]string{"X-Value": "*:*"},
-		Body:    "*:*",
+		RawRunnerConfig: RawRunnerConfig{
+			Runner:  "http",
+			URL:     srv.URL + "/users/*/messages/*",
+			Headers: map[string]string{"X-Value": "*:*"},
+			Body:    "*:*",
+		},
 	}
 
 	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http", "hello")
@@ -170,10 +176,12 @@ func TestHTTPRunnerLeavesWildcardsWithoutArgs(t *testing.T) {
 	defer srv.Close()
 
 	cfg := RunnerConfig{
-		Runner:  "http",
-		URL:     srv.URL + "/*",
-		Headers: map[string]string{"X-Value": "*"},
-		Body:    "*",
+		RawRunnerConfig: RawRunnerConfig{
+			Runner:  "http",
+			URL:     srv.URL + "/*",
+			Headers: map[string]string{"X-Value": "*"},
+			Body:    "*",
+		},
 	}
 
 	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http")

@@ -5,30 +5,43 @@ import (
 	"time"
 )
 
-// MatcherConfig contains only the data needed to recognize a command.
-type MatcherConfig struct {
+// RawMatcherConfig decodes matcher settings from TOML.
+type RawMatcherConfig struct {
 	Keyword string `toml:"keyword"`
 }
 
-// RunnerConfig contains the runner-specific command definition.
-type RunnerConfig struct {
-	Runner  string `toml:"runner"`
-	Command string `toml:"command"`
+// MatcherConfig contains the settings needed to match a command.
+type MatcherConfig struct {
+	RawMatcherConfig
+}
 
+// ParserConfig contains input parsing policy.
+type ParserConfig struct {
+	AllowInChain  bool
+	InputBodyMode InputBodyMode
+}
+
+// RawRunnerConfig decodes runner settings from TOML.
+type RawRunnerConfig struct {
+	Runner  string            `toml:"runner"`
+	Command string            `toml:"command"`
 	Method  string            `toml:"method"`
 	URL     string            `toml:"url"`
 	Headers map[string]string `toml:"headers"`
 	Body    string            `toml:"body"`
 }
 
+// RunnerConfig contains the runner-specific command definition.
+type RunnerConfig struct {
+	RawRunnerConfig
+}
+
 // ExecutorConfig contains execution policy after a command has matched.
 type ExecutorConfig struct {
-	Timeout          int           `toml:"timeout"`
-	StdinIdleTimeout int           `toml:"stdin_idle_timeout"`
-	TTY              bool          `toml:"tty"`
-	InteractiveStdin bool          `toml:"-"`
-	InputBodyMode    InputBodyMode `toml:"-"`
-	AllowInChain     bool          `toml:"-"`
+	Timeout          int
+	StdinIdleTimeout int
+	TTY              bool
+	InteractiveStdin bool
 }
 
 // CommandConfig is one fully resolved, validated command definition.
@@ -36,14 +49,25 @@ type ExecutorConfig struct {
 type CommandConfig struct {
 	Index int
 	MatcherConfig
+	ParserConfig
 	RunnerConfig
 	ExecutorConfig
 	OutputFlushInterval time.Duration
 	ReplyConfig         interface{}
 	SystemReplyConfig   interface{}
-	SyntheticStdinReply bool
+	DispatchPolicy      DispatchPolicy
 	Replies             []*CommandConfig
 }
+
+// DispatchPolicy controls how a matched reply command is dispatched.
+type DispatchPolicy int
+
+const (
+	// DispatchQueued sends the command through the worker queue.
+	DispatchQueued DispatchPolicy = iota
+	// DispatchDirect invokes the command runner directly.
+	DispatchDirect
+)
 
 // Command is an instantiated runtime command.
 // Config replies are converted to the runtime CommandSet and are not retained.
@@ -77,9 +101,6 @@ func (c *Command) match(args []string) []string {
 	if !ok {
 		return nil
 	}
-	if c.config.SyntheticStdinReply {
-		return []string{""}
-	}
 	if c.config.Runner == RunnerHTTP {
 		return buildHTTPArgs(containsWildcard(c.matcher.keywords), wildcard)
 	}
@@ -105,11 +126,22 @@ func (s *CommandSet) Match(input *parsedCommand, allowedIndexes []int) (*Command
 	if s == nil || input == nil {
 		return nil, nil
 	}
+	return s.match(allowedIndexes, func(*Command) *parsedCommand { return input })
+}
+
+func (s *CommandSet) match(allowedIndexes []int, candidate func(*Command) *parsedCommand) (*Command, []string) {
+	if s == nil || candidate == nil {
+		return nil, nil
+	}
 	for _, command := range s.commands {
 		if command == nil {
 			continue
 		}
 		if !slices.Contains(allowedIndexes, command.config.Index) {
+			continue
+		}
+		input := candidate(command)
+		if input == nil {
 			continue
 		}
 		args := command.match(input.args)
@@ -132,21 +164,26 @@ func (s *CommandSet) MatchSingle(text string, allowedIndexes []int) *Command {
 	return command
 }
 
-// MatchReply は stdin 本文を chain として分割せず synthetic wildcard に渡す。
-func (s *CommandSet) MatchReply(text string, allowedIndexes []int) *Command {
+// MatchReply matches a reply according to each command's InputBodyMode.
+func (s *CommandSet) MatchReply(text string, allowedIndexes []int) (*Command, []string) {
 	if s == nil {
-		return nil
+		return nil, nil
 	}
-	cmdMsg, _ := splitCommandInput(text)
-	parsed, _ := parseCommands(cmdMsg)
-	if len(parsed) > 0 {
-		if command, _ := s.Match(parsed[0], allowedIndexes); command != nil && !command.config.SyntheticStdinReply {
-			return command
+	rawInput := &parsedCommand{args: []string{text}}
+	var commandInput *parsedCommand
+	commandInputResolved := false
+	return s.match(allowedIndexes, func(command *Command) *parsedCommand {
+		if command.config.InputBodyMode == InputBodyRawStdin {
+			return rawInput
 		}
-	}
-	command, _ := s.Match(&parsedCommand{args: []string{text}}, allowedIndexes)
-	if command != nil && command.config.SyntheticStdinReply {
-		return command
-	}
-	return nil
+		if !commandInputResolved {
+			commandInputResolved = true
+			cmdMsg, _ := splitCommandInput(text)
+			parsed, _ := parseCommands(cmdMsg)
+			if len(parsed) > 0 {
+				commandInput = parsed[0]
+			}
+		}
+		return commandInput
+	})
 }

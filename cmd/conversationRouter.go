@@ -2,7 +2,8 @@ package cmd
 
 import (
 	"container/list"
-	"log"
+	"context"
+	"strings"
 	"sync"
 )
 
@@ -33,12 +34,11 @@ type ConversationRouter struct {
 	resolveRootInput RootInputResolver
 	enqueue          func(*CommandInput) bool
 	routes           *conversationRoutes
-	stdin            *StdinStore
 }
 
-// NewConversationRouterWithRootInputResolver はroot input resolverと共有StdinStoreを持つrouterを生成する。
-func NewConversationRouterWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int, stdin *StdinStore) *ConversationRouter {
-	return &ConversationRouter{commands: commands, resolveRootInput: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity), stdin: stdin}
+// NewConversationRouterWithRootInputResolver creates a router with a root input resolver.
+func NewConversationRouterWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
+	return &ConversationRouter{commands: commands, resolveRootInput: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
 }
 
 // Accept はroot入力とthread replyをroutingする。
@@ -83,20 +83,16 @@ func (r *ConversationRouter) routeThreadReply(root *Command, input *CommandInput
 	if root.replies == nil {
 		return AcceptIgnored, nil
 	}
-	command := root.replies.MatchReply(input.Text, input.AllowedCommandIndexes)
+	command, args := root.replies.MatchReply(input.Text, input.AllowedCommandIndexes)
 	if command == nil {
 		return AcceptIgnored, nil
 	}
-	if command.config.SyntheticStdinReply {
-		if r.stdin == nil {
+	if command.config.DispatchPolicy == DispatchDirect {
+		runnerArgs := append(args[1:], input.ConversationID.ChannelID, input.ConversationID.RootTimestamp)
+		directCmd := command.runner.CommandContext(context.Background(), args[0], runnerArgs...)
+		directCmd.SetStdin(strings.NewReader(input.Text))
+		if directCmd.Run(0) != 0 {
 			return AcceptIgnored, nil
-		}
-		endpoint := r.stdin.lookup(input.ConversationID)
-		if endpoint == nil {
-			return AcceptIgnored, nil
-		}
-		if err := endpoint.TrySend(input.Text); err != nil {
-			log.Printf("[WARN] dropping interactive stdin channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		}
 		return AcceptRouted, nil
 	}

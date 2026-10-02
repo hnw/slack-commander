@@ -72,14 +72,14 @@ func TestConversationRouterDoesNotCacheUnmatchedRoot(t *testing.T) {
 }
 
 func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.T) {
-	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{Keyword: "retry"}, RunnerConfig: RunnerConfig{Command: "retry"}}, nil, nil)})
-	first := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "first"}}, nil, nil)
-	second := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "second"}}, nil, replySet)
+	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}}, nil, nil)})
+	first := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
+	second := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}}, nil, replySet)
 	commands := NewCommandSet([]*Command{first, second})
 	var queued *CommandInput
 	router := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{2}}, nil
-	}, func(input *CommandInput) bool { queued = input; return true }, 0, &StdinStore{})
+	}, func(input *CommandInput) bool { queued = input; return true }, 0)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if result, _ := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{2}}); result != AcceptRouted {
 		t.Fatal("AcceptRoot() failed")
@@ -259,13 +259,18 @@ func TestConversationRouterDropsStdinReplyWithoutEndpoint(t *testing.T) {
 func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
 	root := routerRoot(InteractionStdin)
 	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	c := newTestConversationRouter([]*testCommandConfig{root}, func(ConversationID) (RootCommandInput, error) {
+	store := &StdinStore{}
+	commands := testCommandSet([]*testCommandConfig{root}, nil)
+	commands.commands[0].replies.commands[0].runner = NewStdinReplyRunner(store)
+	c := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
 	reader, writer := io.Pipe()
 	endpoint := NewInteractiveStdin(writer, "", func(error) {})
-	store := &StdinStore{}
-	c.stdin = store
+	t.Cleanup(func() {
+		endpoint.Close()
+		_ = reader.Close()
+	})
 	store.Lifecycle(ctx).StdinReady(endpoint)
 	for _, body := range []string{"<@BOT> “raw” &amp;", "hello world", "yes && no", "yes || no", "foo ; bar", `unbalanced "quote`, "first line\nsecond line"} {
 		result, err := c.Accept(&CommandInput{Text: body, ConversationID: ctx, AllowedCommandIndexes: []int{1000}})
@@ -288,6 +293,113 @@ func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
 			t.Fatalf("stdin reply %q was not routed", body)
 		}
 	}
+}
+
+func TestMatchReplyKeepsSpecificBeforeWildcard(t *testing.T) {
+	specific := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "specific *"}}}, nil, nil)
+	wildcard := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "fallback *"}}}, nil, nil)
+	set := NewCommandSet([]*Command{specific, wildcard})
+	got, args := set.MatchReply("retry value", []int{1, 2})
+	if got != specific || len(args) != 2 || args[0] != "specific" || args[1] != "value" {
+		t.Fatalf("MatchReply() = (%v, %v), want specific command before wildcard", got, args)
+	}
+}
+
+func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
+	store := &StdinStore{}
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	stdinReply := NewCommand(CommandConfig{
+		Index:          1,
+		MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
+		ParserConfig:   ParserConfig{InputBodyMode: InputBodyRawStdin},
+		RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
+		DispatchPolicy: DispatchDirect,
+	}, NewStdinReplyRunner(store), nil)
+	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{stdinReply}))
+	queued := 0
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, func(*CommandInput) bool {
+		queued++
+		return true
+	}, 1)
+	if result, err := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
+		t.Fatalf("root command = %v, %v", result, err)
+	}
+	reader, writer := io.Pipe()
+	endpoint := NewInteractiveStdin(writer, "", func(error) {})
+	t.Cleanup(func() {
+		endpoint.Close()
+		_ = reader.Close()
+	})
+	store.Lifecycle(conversation).StdinReady(endpoint)
+	body := "yes && no\nunbalanced \"quote"
+	input := &CommandInput{Text: body, ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted || queued != 1 {
+		t.Fatalf("stdin reply = %v, %v; queue calls=%d", result, err, queued)
+	}
+	want := body + "\n"
+	read := make(chan string, 1)
+	go func() {
+		got := make([]byte, len(want))
+		_, _ = io.ReadFull(reader, got)
+		read <- string(got)
+	}()
+	select {
+	case got := <-read:
+		if got != want {
+			t.Fatalf("stdin reply body = %q; want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stdin reply body was not delivered")
+	}
+}
+
+func TestHTTPReplyIsQueued(t *testing.T) {
+	reply := NewCommand(CommandConfig{
+		Index:         1,
+		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}},
+		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "https://example.invalid/?q=*"}},
+	}, nil, nil)
+	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
+	var queued *CommandInput
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, func(input *CommandInput) bool {
+		queued = input
+		return true
+	}, 1)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	if result, err := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
+		t.Fatalf("root command = %v, %v", result, err)
+	}
+	input := &CommandInput{Text: "lookup value", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted || queued != input || input.CommandSet != root.replies {
+		t.Fatalf("HTTP reply = %v, %v; queued=%p input=%p commandSet=%p", result, err, queued, input, input.CommandSet)
+	}
+}
+
+func TestStdinReplyCommandSucceedsWhenEndpointRejectsInput(t *testing.T) {
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	endpoint := newInteractiveStdinSession("", 0, nil)
+	store := &StdinStore{}
+	store.register(conversation, endpoint)
+	runner := NewStdinReplyRunner(store)
+	if err := endpoint.TrySend("buffered"); err != nil {
+		t.Fatal(err)
+	}
+	if err := endpoint.TrySend("probe"); err != ErrInteractiveStdinBusy {
+		t.Fatalf("second TrySend() error = %v, want full-buffer error", err)
+	}
+	run := func() int {
+		command := runner.CommandContext(context.Background(), "stdin-reply", conversation.ChannelID, conversation.RootTimestamp)
+		command.SetStdin(strings.NewReader("reply"))
+		return command.Run(0)
+	}
+	if got := run(); got != 0 {
+		t.Fatalf("Run() with full endpoint = %d, want success", got)
+	}
 	endpoint.Close()
-	_ = reader.Close()
+	if err := endpoint.TrySend("probe"); err != ErrInteractiveStdinClosed {
+		t.Fatalf("TrySend() after close error = %v, want closed error", err)
+	}
+	if got := run(); got != 0 {
+		t.Fatalf("Run() with closed endpoint = %d, want success", got)
+	}
 }

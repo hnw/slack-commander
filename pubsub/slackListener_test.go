@@ -41,12 +41,12 @@ func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 				}},
 			}}
 			close(smc.Events)
-			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
+			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
 			queued := 0
 			router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(*cmd.CommandInput) bool {
 				queued++
 				return true
-			}, 1, &cmd.StdinStore{})
+			}, 1)
 			err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, router)
 			if err == nil {
 				t.Fatal("SlackListener() accepted incomplete identity")
@@ -78,12 +78,12 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 		}}
 	}
 	close(smc.Events)
-	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, nil)
+	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
 	var queued []string
 	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{command}), nil, func(input *cmd.CommandInput) bool {
 		queued = append(queued, input.MessageID.Timestamp)
 		return true
-	}, 1, &cmd.StdinStore{})
+	}, 1)
 	if err := SlackListener(context.Background(), smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}}}, router); err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +97,8 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	userID, ownBotID = "", ""
 	t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
 
-	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "retry"}, RunnerConfig: cmd.RunnerConfig{Command: "retry"}}, nil, nil)
-	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{Keyword: "run"}, RunnerConfig: cmd.RunnerConfig{Command: "run"}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
+	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}, nil, nil)
+	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
 	resolverCalls, enqueueCalls := 0, 0
 	router := cmd.NewConversationRouterWithRootInputResolver(cmd.NewCommandSet([]*cmd.Command{root}), func(cmd.ConversationID) (cmd.RootCommandInput, error) {
 		resolverCalls++
@@ -106,7 +106,7 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	}, func(*cmd.CommandInput) bool {
 		enqueueCalls++
 		return true
-	}, 1, &cmd.StdinStore{})
+	}, 1)
 
 	for _, tc := range []struct {
 		name string
