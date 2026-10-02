@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"container/list"
-	"context"
-	"strings"
 	"sync"
 )
 
@@ -32,13 +30,13 @@ const (
 type ConversationRouter struct {
 	commands         *CommandSet
 	resolveRootInput RootInputResolver
-	enqueue          func(*CommandInput) bool
+	dispatcher       *CommandDispatcher
 	routes           *conversationRoutes
 }
 
 // NewConversationRouterWithRootInputResolver creates a router with a root input resolver.
-func NewConversationRouterWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
-	return &ConversationRouter{commands: commands, resolveRootInput: resolve, enqueue: enqueue, routes: newConversationRoutes(routeCapacity)}
+func NewConversationRouterWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, dispatcher *CommandDispatcher, routeCapacity int) *ConversationRouter {
+	return &ConversationRouter{commands: commands, resolveRootInput: resolve, dispatcher: dispatcher, routes: newConversationRoutes(routeCapacity)}
 }
 
 // Accept はroot入力とthread replyをroutingする。
@@ -51,8 +49,9 @@ func (r *ConversationRouter) Accept(input *CommandInput) (AcceptResult, error) {
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 	root := r.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
-	if r.enqueue == nil || !r.enqueue(input) {
-		return AcceptQueueFull
+	result := r.acceptDispatchResult(r.dispatcher.DispatchRoot(input))
+	if result != AcceptRouted {
+		return result
 	}
 	if root != nil {
 		r.routes.store(input.ConversationID, root)
@@ -87,23 +86,18 @@ func (r *ConversationRouter) routeThreadReply(root *Command, input *CommandInput
 	if command == nil {
 		return AcceptIgnored, nil
 	}
-	if command.config.DispatchPolicy == DispatchDirect {
-		runnerArgs := append(args[1:], input.ConversationID.ChannelID, input.ConversationID.RootTimestamp)
-		directCmd := command.runner.CommandContext(context.Background(), args[0], runnerArgs...)
-		directCmd.SetStdin(strings.NewReader(input.Text))
-		if directCmd.Run(0) != 0 {
-			return AcceptIgnored, nil
-		}
-		return AcceptRouted, nil
+	return r.acceptDispatchResult(r.dispatcher.DispatchReply(command, args, root.replies, input)), nil
+}
+
+func (r *ConversationRouter) acceptDispatchResult(result DispatchResult) AcceptResult {
+	switch result {
+	case DispatchAccepted:
+		return AcceptRouted
+	case DispatchQueueFull:
+		return AcceptQueueFull
+	default:
+		return AcceptIgnored
 	}
-	if r.enqueue == nil {
-		return AcceptIgnored, nil
-	}
-	input.CommandSet = root.replies
-	if !r.enqueue(input) {
-		return AcceptQueueFull, nil
-	}
-	return AcceptRouted, nil
 }
 
 func (r *ConversationRouter) resolveRootCommand(conversation ConversationID) (*Command, error) {
