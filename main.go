@@ -104,7 +104,8 @@ func run(args []string) int {
 		4096,
 	)
 	var executorWG sync.WaitGroup
-	startWorkers(ctx, cfg.NumWorkers, commandQueue, stdinStore, conversationLocks, commands, outputQueue, &executorWG)
+	executor := cmd.NewExecutor(commands, outputQueue)
+	startWorkers(ctx, cfg.NumWorkers, commandQueue, stdinStore, conversationLocks, executor, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
 	go func() {
@@ -168,12 +169,10 @@ func startWorkers(
 	inputs <-chan *cmd.CommandInput,
 	stdinStore *cmd.StdinStore,
 	conversationLocks *cmd.ConversationLocks,
-	commands *cmd.CommandSet,
-	outputQueue chan *cmd.CommandOutput,
+	executor *cmd.Executor,
 	wg *sync.WaitGroup,
 ) {
 	for range workers {
-		executor := cmd.NewExecutor(commands, outputQueue)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
