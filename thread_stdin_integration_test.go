@@ -46,7 +46,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		}
 	}, 1)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, commands, outputs, &workers)
+	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(commands, outputs), &workers)
 	listenerDone := make(chan struct{})
 	go func() {
 		if err := pubsub.SlackListener(ctx, smc, pubsub.Config{

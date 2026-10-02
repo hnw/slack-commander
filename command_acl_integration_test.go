@@ -54,7 +54,7 @@ timeout = 5
 	}, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, commands, outputs, &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(commands, outputs), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
