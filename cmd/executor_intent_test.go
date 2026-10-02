@@ -100,10 +100,10 @@ func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
 	runner := &fakeRunner{}
 	command := NewCommand(CommandConfig{
-		Index:          7,
-		MatcherConfig:  MatcherConfig{Keyword: "run"},
-		RunnerConfig:   RunnerConfig{Command: "run"},
-		ExecutorConfig: ExecutorConfig{AllowInChain: true},
+		Index:         7,
+		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
+		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+		ParserConfig:  ParserConfig{AllowInChain: true},
 	}, runner, nil)
 	executor := NewExecutor(NewCommandSet([]*Command{command}), make(chan *CommandOutput, 10))
 	executor.Execute(context.Background(), &CommandInput{Text: "run", AllowedCommandIndexes: []int{}}, nil)
@@ -118,8 +118,8 @@ func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
 
 func TestExecutorAppliesGlobalIndexesToReplyCommandSet(t *testing.T) {
 	runner := &fakeRunner{}
-	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{Keyword: "retry"}, RunnerConfig: RunnerConfig{Command: "retry"}}, runner, nil)
-	root := NewCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{Keyword: "run"}, RunnerConfig: RunnerConfig{Command: "run"}}, nil, NewCommandSet([]*Command{reply}))
+	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}}, runner, nil)
+	root := NewCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
 	executor := NewExecutor(NewCommandSet([]*Command{root}), make(chan *CommandOutput, 10))
 	executor.Execute(context.Background(), &CommandInput{Text: "retry", CommandSet: root.replies, AllowedCommandIndexes: []int{12}}, nil)
 	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "retry" {

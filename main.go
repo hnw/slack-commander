@@ -66,7 +66,8 @@ func run(args []string) int {
 	logger := slog.New(handler)
 	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
-	runnerFactory := newRunnerFactory()
+	stdinStore := &cmd.StdinStore{}
+	runnerFactory := newRunnerFactory(stdinStore)
 	commands := buildCommandSet(cfg.commandConfigs, runnerFactory)
 
 	api := slack.New(
@@ -88,7 +89,6 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
-	stdinStore := &cmd.StdinStore{}
 	conversationLocks := &cmd.ConversationLocks{}
 	router := cmd.NewConversationRouterWithRootInputResolver(
 		commands,
@@ -102,7 +102,6 @@ func run(args []string) int {
 			}
 		},
 		4096,
-		stdinStore,
 	)
 	var executorWG sync.WaitGroup
 	startWorkers(ctx, cfg.NumWorkers, commandQueue, stdinStore, conversationLocks, commands, outputQueue, &executorWG)
@@ -146,10 +145,13 @@ func run(args []string) int {
 	return exitCode
 }
 
-func newRunnerFactory() cmd.RunnerFactory {
+func newRunnerFactory(stdinStore *cmd.StdinStore) cmd.RunnerFactory {
 	execRunner := cmd.NewExecRunner()
 	composeRunner := cmd.NewComposeRunner("")
 	return func(config cmd.RunnerConfig) cmd.CommandRunner {
+		if config.Runner == cmd.RunnerStdinReply {
+			return cmd.NewStdinReplyRunner(stdinStore)
+		}
 		if config.Runner == cmd.RunnerCompose {
 			return composeRunner
 		}

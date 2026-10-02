@@ -38,9 +38,10 @@ func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Comm
 	return NewCommand(
 		CommandConfig{
 			Index:               config.Index,
-			MatcherConfig:       MatcherConfig{Keyword: config.Keyword},
-			RunnerConfig:        RunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body},
-			ExecutorConfig:      ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin, InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
+			MatcherConfig:       MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: config.Keyword}},
+			RunnerConfig:        RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body}},
+			ParserConfig:        ParserConfig{InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
+			ExecutorConfig:      ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin},
 			OutputFlushInterval: config.OutputFlushInterval,
 			ReplyConfig:         config.ReplyConfig,
 			SystemReplyConfig:   config.SystemReplyConfig,
@@ -67,10 +68,12 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 				replies = NewCommandSet(nil)
 			}
 			replies.commands = append(replies.commands, NewCommand(CommandConfig{
-				Index:               1000,
-				MatcherConfig:       MatcherConfig{Keyword: "*"},
-				SyntheticStdinReply: true,
-			}, nil, nil))
+				Index:          1000,
+				MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
+				ParserConfig:   ParserConfig{InputBodyMode: InputBodyRawStdin},
+				RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
+				DispatchPolicy: DispatchDirect,
+			}, NewStdinReplyRunner(&StdinStore{}), nil))
 		}
 		command := testRuntimeCommand(definition, runner)
 		command.replies = replies
@@ -80,5 +83,5 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 }
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
-	return NewConversationRouterWithRootInputResolver(testCommandSet(configs, nil), resolve, enqueue, routeCapacity, &StdinStore{})
+	return NewConversationRouterWithRootInputResolver(testCommandSet(configs, nil), resolve, enqueue, routeCapacity)
 }

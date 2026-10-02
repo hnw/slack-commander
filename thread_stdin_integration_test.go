@@ -28,12 +28,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	defer cancel()
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "*"}, SyntheticStdinReply: true}, nil, nil)
-	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{Keyword: "agent"}, RunnerConfig: cmd.RunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
+	stdinStore := &cmd.StdinStore{}
+	stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}}, DispatchPolicy: cmd.DispatchDirect}, cmd.NewStdinReplyRunner(stdinStore), nil)
+	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "agent"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	var queuedCount atomic.Int64
 	queued := make(chan struct{}, 10)
-	stdinStore := &cmd.StdinStore{}
 	conversationLocks := &cmd.ConversationLocks{}
 	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
 		queuedCount.Add(1)
@@ -44,7 +44,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		default:
 			return false
 		}
-	}, 1, stdinStore)
+	}, 1)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, commands, outputs, &workers)
 	listenerDone := make(chan struct{})

@@ -43,15 +43,15 @@ timeout = 5
 	if err := resolveConfig(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	stdinStore := &cmd.StdinStore{}
+	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(stdinStore))
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
-	stdinStore := &cmd.StdinStore{}
 	conversationLocks := &cmd.ConversationLocks{}
 	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
-	}, 10, stdinStore)
+	}, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, commands, outputs, &workers)
@@ -159,7 +159,7 @@ accept_reminder = true
 	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
-	}, 0, &cmd.StdinStore{})
+	}, 0)
 	executor := cmd.NewExecutor(commands, make(chan *cmd.CommandOutput, 30))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -232,10 +232,10 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &aclIntegrationRunner{}
 			configs := []cmd.CommandConfig{
-				{Index: 0, MatcherConfig: cmd.MatcherConfig{Keyword: "status"}, RunnerConfig: cmd.RunnerConfig{Command: "status"}, ExecutorConfig: cmd.ExecutorConfig{AllowInChain: true}},
-				{Index: 1, MatcherConfig: cmd.MatcherConfig{Keyword: "deploy"}, RunnerConfig: cmd.RunnerConfig{Command: "deploy"}, ExecutorConfig: cmd.ExecutorConfig{AllowInChain: true}},
-				{Index: 2, MatcherConfig: cmd.MatcherConfig{Keyword: "*"}, RunnerConfig: cmd.RunnerConfig{Command: "generic *"}, ExecutorConfig: cmd.ExecutorConfig{AllowInChain: true}},
-				{Index: 3, MatcherConfig: cmd.MatcherConfig{Keyword: "interact"}, RunnerConfig: cmd.RunnerConfig{Command: "interact"}},
+				{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "status"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "status"}}},
+				{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "deploy"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "deploy"}}},
+				{Index: 2, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "generic *"}}},
+				{Index: 3, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "interact"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "interact"}}},
 			}
 			commands := make([]*cmd.Command, 0, len(configs))
 			for _, config := range configs {

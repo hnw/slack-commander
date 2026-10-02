@@ -9,7 +9,7 @@ const (
 	InteractionCommand = "command"
 )
 
-// InputBodyMode controls how text after the first input line is consumed.
+// InputBodyMode controls how command input is interpreted.
 type InputBodyMode int
 
 const (
@@ -17,6 +17,8 @@ const (
 	InputBodyStdin InputBodyMode = iota
 	// InputBodyArgument appends the input body to a trailing wildcard argument.
 	InputBodyArgument
+	// InputBodyRawStdin treats the entire input as raw body without parsing it as command syntax.
+	InputBodyRawStdin
 )
 
 const (
@@ -26,4 +28,6 @@ const (
 	RunnerCompose = "compose"
 	// RunnerHTTP sends commands as HTTP requests.
 	RunnerHTTP = "http"
+	// RunnerStdinReply forwards reply input to the active stdin endpoint.
+	RunnerStdinReply = "stdin-reply"
 )
