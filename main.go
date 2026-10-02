@@ -90,21 +90,22 @@ func run(args []string) int {
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	conversationLocks := &cmd.ConversationLocks{}
+	executor := cmd.NewExecutor(commands, outputQueue)
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+		select {
+		case commandQueue <- input:
+			return true
+		default:
+			return false
+		}
+	})
 	router := cmd.NewConversationRouterWithRootInputResolver(
 		commands,
 		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
-		cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
-			select {
-			case commandQueue <- input:
-				return true
-			default:
-				return false
-			}
-		}),
+		dispatcher,
 		4096,
 	)
 	var executorWG sync.WaitGroup
-	executor := cmd.NewExecutor(commands, outputQueue)
 	startWorkers(ctx, cfg.NumWorkers, commandQueue, stdinStore, conversationLocks, executor, &executorWG)
 	var writerWG sync.WaitGroup
 	writerWG.Add(1)
@@ -139,8 +140,10 @@ func run(args []string) int {
 		logger.Error("Slack listener error", "error", listenerErr)
 		exitCode = 1
 	}
+	dispatcher.Close()
 	close(commandQueue)
 	executorWG.Wait()
+	dispatcher.Wait()
 	close(outputQueue)
 	writerWG.Wait()
 	return exitCode

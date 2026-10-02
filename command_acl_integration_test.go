@@ -48,7 +48,7 @@ timeout = 5
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), commands, outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
@@ -156,11 +156,13 @@ accept_reminder = true
 	}))
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
+	outputs := make(chan *cmd.CommandOutput, 30)
+	executor := cmd.NewExecutor(commands, outputs)
+	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
-	}), 0)
-	executor := cmd.NewExecutor(commands, make(chan *cmd.CommandOutput, 30))
+	})
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), dispatcher, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

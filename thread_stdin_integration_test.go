@@ -35,7 +35,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	var queuedCount atomic.Int64
 	queued := make(chan struct{}, 10)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), commands, outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		queuedCount.Add(1)
 		select {
 		case requests <- input:

@@ -49,7 +49,7 @@ func (r *ConversationRouter) Accept(input *CommandInput) (AcceptResult, error) {
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 	root := r.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
-	result := r.acceptDispatchResult(r.dispatcher.DispatchRoot(input))
+	result := r.acceptDispatchResult(r.dispatcher.DispatchRoot(root, input))
 	if result != AcceptRouted {
 		return result
 	}

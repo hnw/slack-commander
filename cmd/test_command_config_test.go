@@ -1,6 +1,9 @@
 package cmd
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // testExecutionConfig is a test fixture for constructing runtime Commands.
 // Production configuration is intentionally split across the runtime types.
@@ -83,5 +86,10 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 }
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
-	return NewConversationRouterWithRootInputResolver(testCommandSet(configs, nil), resolve, NewCommandDispatcher(enqueue), routeCapacity)
+	commands := testCommandSet(configs, nil)
+	return NewConversationRouterWithRootInputResolver(commands, resolve, newTestDispatcher(commands, enqueue), routeCapacity)
+}
+
+func newTestDispatcher(commands *CommandSet, enqueue func(*CommandInput) bool) *CommandDispatcher {
+	return NewCommandDispatcher(context.Background(), NewExecutor(commands, make(chan *CommandOutput, 100)), &StdinStore{}, &ConversationLocks{}, enqueue)
 }
