@@ -48,10 +48,10 @@ timeout = 5
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
-	}, 10)
+	}), 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(commands, outputs), &workers)
@@ -156,10 +156,10 @@ accept_reminder = true
 	}))
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
-	}, 0)
+	}), 0)
 	executor := cmd.NewExecutor(commands, make(chan *cmd.CommandOutput, 30))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

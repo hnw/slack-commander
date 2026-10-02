@@ -79,7 +79,7 @@ func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.
 	var queued *CommandInput
 	router := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{2}}, nil
-	}, func(input *CommandInput) bool { queued = input; return true }, 0)
+	}, NewCommandDispatcher(func(input *CommandInput) bool { queued = input; return true }), 0)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if result, _ := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{2}}); result != AcceptRouted {
 		t.Fatal("AcceptRoot() failed")
@@ -193,7 +193,7 @@ func TestConversationRouterRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
 	if queued.CommandSet != c.commands.commands[0].replies || queued.Text != "stop && stop\nbody" {
 		t.Fatalf("queued=%+v", queued)
 	}
-	c.enqueue = func(*CommandInput) bool { return false }
+	c.dispatcher = NewCommandDispatcher(func(*CommandInput) bool { return false })
 	result, err = c.Accept(&CommandInput{Text: "stop", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{1}})
 	if err != nil || result != AcceptQueueFull {
 		t.Fatalf("result=%v err=%v", result, err)
@@ -264,7 +264,7 @@ func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
 	commands.commands[0].replies.commands[0].runner = NewStdinReplyRunner(store)
 	c := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
-	}, func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }, 2)
+	}, NewCommandDispatcher(func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }), 2)
 	reader, writer := io.Pipe()
 	endpoint := NewInteractiveStdin(writer, "", func(error) {})
 	t.Cleanup(func() {
@@ -317,10 +317,10 @@ func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
 	}, NewStdinReplyRunner(store), nil)
 	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{stdinReply}))
 	queued := 0
-	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, func(*CommandInput) bool {
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, NewCommandDispatcher(func(*CommandInput) bool {
 		queued++
 		return true
-	}, 1)
+	}), 1)
 	if result, err := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 		t.Fatalf("root command = %v, %v", result, err)
 	}
@@ -353,6 +353,62 @@ func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
 	}
 }
 
+func TestDispatcherKeepsRootAndReplyQueueUnavailableResultsDistinct(t *testing.T) {
+	reply := NewCommand(CommandConfig{
+		Index:         1,
+		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
+		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+	}, nil, nil)
+	root := NewCommand(CommandConfig{
+		Index:         0,
+		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
+		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	}, nil, NewCommandSet([]*Command{reply}))
+	commands := NewCommandSet([]*Command{root})
+	dispatcher := NewCommandDispatcher(nil)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+
+	rootRouter := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	if result, _ := rootRouter.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); result != AcceptQueueFull {
+		t.Fatalf("root Accept() = %v, want queue full", result)
+	}
+
+	replyRouter := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
+		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
+	}, dispatcher, 1)
+	if result, err := replyRouter.Accept(&CommandInput{Text: "stop", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != AcceptIgnored {
+		t.Fatalf("reply Accept() = %v, %v; want ignored", result, err)
+	}
+}
+
+type dispatcherExitCodeRunner int
+
+func (r dispatcherExitCodeRunner) CommandContext(context.Context, string, ...string) Cmd {
+	return &fakeCmd{exitCode: int(r)}
+}
+
+func TestDispatcherIgnoresFailedDirectReply(t *testing.T) {
+	reply := NewCommand(CommandConfig{
+		Index:          1,
+		MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
+		RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+		DispatchPolicy: DispatchDirect,
+	}, dispatcherExitCodeRunner(1), nil)
+	root := NewCommand(CommandConfig{
+		Index:         0,
+		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
+		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	}, nil, NewCommandSet([]*Command{reply}))
+	queued := false
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), func(ConversationID) (RootCommandInput, error) {
+		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
+	}, NewCommandDispatcher(func(*CommandInput) bool { queued = true; return true }), 1)
+	result, err := router.Accept(&CommandInput{Text: "stop", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}})
+	if err != nil || result != AcceptIgnored || queued {
+		t.Fatalf("direct reply = %v, %v; queued=%v, want ignored without queueing", result, err, queued)
+	}
+}
+
 func TestHTTPReplyIsQueued(t *testing.T) {
 	reply := NewCommand(CommandConfig{
 		Index:         1,
@@ -361,10 +417,10 @@ func TestHTTPReplyIsQueued(t *testing.T) {
 	}, nil, nil)
 	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
 	var queued *CommandInput
-	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, func(input *CommandInput) bool {
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), nil, NewCommandDispatcher(func(input *CommandInput) bool {
 		queued = input
 		return true
-	}, 1)
+	}), 1)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if result, err := router.Accept(&CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 		t.Fatalf("root command = %v, %v", result, err)

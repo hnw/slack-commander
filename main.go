@@ -93,14 +93,14 @@ func run(args []string) int {
 	router := cmd.NewConversationRouterWithRootInputResolver(
 		commands,
 		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
-		func(input *cmd.CommandInput) bool {
+		cmd.NewCommandDispatcher(func(input *cmd.CommandInput) bool {
 			select {
 			case commandQueue <- input:
 				return true
 			default:
 				return false
 			}
-		},
+		}),
 		4096,
 	)
 	var executorWG sync.WaitGroup

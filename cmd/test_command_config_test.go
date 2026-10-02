@@ -83,5 +83,5 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 }
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
-	return NewConversationRouterWithRootInputResolver(testCommandSet(configs, nil), resolve, enqueue, routeCapacity)
+	return NewConversationRouterWithRootInputResolver(testCommandSet(configs, nil), resolve, NewCommandDispatcher(enqueue), routeCapacity)
 }
