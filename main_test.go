@@ -55,7 +55,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		RunnerConfig:  httpConfig,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
-	executor := cmd.NewExecutor(commands, outputs)
+	executor := cmd.NewExecutor(outputs)
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
 	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
@@ -82,8 +82,9 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		MessageID:             cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		AllowedCommandIndexes: []int{0},
 	}
-	if result := dispatcher.DispatchRoot(command, input); result != cmd.DispatchAccepted {
-		t.Fatalf("DispatchRoot() = %v, want accepted", result)
+	input.ResolvedInput = commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	if result := dispatcher.Dispatch(input); result != cmd.DispatchAccepted {
+		t.Fatalf("Dispatch() = %v, want accepted", result)
 	}
 	select {
 	case <-httpStarted:
@@ -208,7 +209,6 @@ func TestRunCheckConfig(t *testing.T) {
 
 func newMainTestDispatcher(
 	ctx context.Context,
-	commands *cmd.CommandSet,
 	outputs chan *cmd.CommandOutput,
 	stdinStore *cmd.StdinStore,
 	conversationLocks *cmd.ConversationLocks,
@@ -223,7 +223,7 @@ func newMainTestDispatcher(
 	if conversationLocks == nil {
 		conversationLocks = &cmd.ConversationLocks{}
 	}
-	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(commands, outputs), stdinStore, conversationLocks, enqueue)
+	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), stdinStore, conversationLocks, enqueue)
 }
 
 func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
@@ -233,7 +233,7 @@ func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
 			defer cancel()
 			inputs := make(chan *cmd.CommandInput)
 			var workers sync.WaitGroup
-			startWorkers(ctx, 2, inputs, nil, nil, cmd.NewExecutor(nil, nil), &workers)
+			startWorkers(ctx, 2, inputs, nil, nil, cmd.NewExecutor(nil), &workers)
 			if closeQueue {
 				close(inputs)
 			} else {

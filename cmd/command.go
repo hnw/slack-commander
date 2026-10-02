@@ -111,9 +111,31 @@ func (c *Command) hasTrailingWildcard() bool {
 	return c.matcher.hasTrailingWildcard()
 }
 
-// CommandSet is the runtime matching unit shared by execution and routing.
+// CommandSet groups runtime commands that may match the same input.
 type CommandSet struct {
 	commands []*Command
+}
+
+// ResolvedCommand contains a command-line part and its resolved runtime command.
+type ResolvedCommand struct {
+	Part    *commandPart
+	Command *Command
+	Args    []string
+}
+
+// ResolvedInput contains the parsed input and resolved commands.
+type ResolvedInput struct {
+	Commands  []ResolvedCommand
+	ParseErr  error
+	StdinText string
+}
+
+// SingleCommand returns the command when the input is a valid single command.
+func (p *ResolvedInput) SingleCommand() *Command {
+	if p == nil || p.ParseErr != nil || len(p.Commands) != 1 {
+		return nil
+	}
+	return p.Commands[0].Command
 }
 
 // NewCommandSet groups commands that may be matched against the same input.
@@ -122,14 +144,48 @@ func NewCommandSet(commands []*Command) *CommandSet {
 }
 
 // Match returns the first matching command and its runner arguments.
-func (s *CommandSet) Match(input *parsedCommand, allowedIndexes []int) (*Command, []string) {
+func (s *CommandSet) Match(input *commandPart, allowedIndexes []int) (*Command, []string) {
 	if s == nil || input == nil {
 		return nil, nil
 	}
-	return s.match(allowedIndexes, func(*Command) *parsedCommand { return input })
+	return s.match(allowedIndexes, func(*Command) *commandPart { return input })
 }
 
-func (s *CommandSet) match(allowedIndexes []int, candidate func(*Command) *parsedCommand) (*Command, []string) {
+// ResolveInput parses the input and resolves each command before dispatch.
+func (s *CommandSet) ResolveInput(text string, allowedIndexes []int) *ResolvedInput {
+	cmdMsg, stdinText := splitCommandInput(text)
+	commands, parseErr := parseCommands(cmdMsg)
+	input := &ResolvedInput{ParseErr: parseErr, StdinText: stdinText}
+	rawInput := &commandPart{args: []string{text}}
+	firstCommand, firstArgs := s.match(allowedIndexes, func(command *Command) *commandPart {
+		if command.config.InputBodyMode == InputBodyRawStdin {
+			return rawInput
+		}
+		if len(commands) == 0 {
+			return nil
+		}
+		return commands[0]
+	})
+	if firstCommand != nil && firstCommand.config.InputBodyMode == InputBodyRawStdin {
+		input.Commands = []ResolvedCommand{{Part: rawInput, Command: firstCommand, Args: firstArgs}}
+		input.ParseErr = nil
+		input.StdinText = text
+		return input
+	}
+	input.Commands = make([]ResolvedCommand, len(commands))
+	for i, part := range commands {
+		resolved := ResolvedCommand{Part: part}
+		if i == 0 {
+			resolved.Command, resolved.Args = firstCommand, firstArgs
+		} else {
+			resolved.Command, resolved.Args = s.Match(part, allowedIndexes)
+		}
+		input.Commands[i] = resolved
+	}
+	return input
+}
+
+func (s *CommandSet) match(allowedIndexes []int, candidate func(*Command) *commandPart) (*Command, []string) {
 	if s == nil || candidate == nil {
 		return nil, nil
 	}
@@ -151,39 +207,4 @@ func (s *CommandSet) match(allowedIndexes []int, candidate func(*Command) *parse
 		return command, args
 	}
 	return nil, nil
-}
-
-// MatchSingle matches exactly one complete command line for route ownership.
-func (s *CommandSet) MatchSingle(text string, allowedIndexes []int) *Command {
-	cmdMsg, _ := splitCommandInput(text)
-	commands, err := parseCommands(cmdMsg)
-	if err != nil || len(commands) != 1 {
-		return nil
-	}
-	command, _ := s.Match(commands[0], allowedIndexes)
-	return command
-}
-
-// MatchReply matches a reply according to each command's InputBodyMode.
-func (s *CommandSet) MatchReply(text string, allowedIndexes []int) (*Command, []string) {
-	if s == nil {
-		return nil, nil
-	}
-	rawInput := &parsedCommand{args: []string{text}}
-	var commandInput *parsedCommand
-	commandInputResolved := false
-	return s.match(allowedIndexes, func(command *Command) *parsedCommand {
-		if command.config.InputBodyMode == InputBodyRawStdin {
-			return rawInput
-		}
-		if !commandInputResolved {
-			commandInputResolved = true
-			cmdMsg, _ := splitCommandInput(text)
-			parsed, _ := parseCommands(cmdMsg)
-			if len(parsed) > 0 {
-				commandInput = parsed[0]
-			}
-		}
-		return commandInput
-	})
 }

@@ -35,7 +35,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	var queuedCount atomic.Int64
 	queued := make(chan struct{}, 10)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), commands, outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		queuedCount.Add(1)
 		select {
 		case requests <- input:
@@ -46,7 +46,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 		}
 	}), 1)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(commands, outputs), &workers)
+	startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
 	listenerDone := make(chan struct{})
 	go func() {
 		if err := pubsub.SlackListener(ctx, smc, pubsub.Config{

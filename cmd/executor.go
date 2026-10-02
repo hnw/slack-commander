@@ -17,7 +17,7 @@ type CommandInput struct {
 	ConversationID        ConversationID
 	MessageID             MessageID
 	Text                  string // 起動コマンド平文
-	CommandSet            *CommandSet
+	ResolvedInput         *ResolvedInput
 	AllowedCommandIndexes []int
 }
 
@@ -51,16 +51,12 @@ type RunnerFactory func(config RunnerConfig) CommandRunner
 
 // Executor executes individual command inputs.
 type Executor struct {
-	commands    *CommandSet
 	outputQueue chan *CommandOutput
 }
 
-// NewExecutor creates an executor with initialized matchers and runners.
-func NewExecutor(commands *CommandSet, outputQueue chan *CommandOutput) *Executor {
-	return &Executor{
-		commands:    commands,
-		outputQueue: outputQueue,
-	}
+// NewExecutor creates an executor for prepared command inputs.
+func NewExecutor(outputQueue chan *CommandOutput) *Executor {
+	return &Executor{outputQueue: outputQueue}
 }
 
 // Execute processes one command input without queue or conversation ownership.
@@ -72,17 +68,11 @@ func (e *Executor) Execute(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	commandSet := e.commands
-	if input.CommandSet != nil {
-		commandSet = input.CommandSet
-	}
-
-	cmdMsg, stdinText := splitCommandInput(input.Text)
-	cmds, parseErr := parseCommands(cmdMsg)
-
-	if len(cmds) > 1 && !chainUsesOnlyAllowedCommands(cmds, commandSet, input.AllowedCommandIndexes) {
+	parsed := input.ResolvedInput
+	if parsed == nil {
 		return
 	}
+	cmds, parseErr, stdinText := parsed.Commands, parsed.ParseErr, parsed.StdinText
 
 	rawBody := ""
 	initialStdin := stdinText
@@ -91,7 +81,10 @@ func (e *Executor) Execute(
 	if len(cmds) == 0 {
 		return
 	}
-	command, _ := commandSet.Match(cmds[0], input.AllowedCommandIndexes)
+	if len(cmds) > 1 && !allCommandsAllowedInChain(cmds) {
+		return
+	}
+	command := cmds[0].Command
 	if command != nil && command.config.InputBodyMode == InputBodyArgument {
 		if stdinText != "" {
 			rawBody = "\n" + stdinText
@@ -110,19 +103,17 @@ func (e *Executor) Execute(
 		initialStdin,
 		rawBody,
 		input,
-		commandSet,
 		e.outputQueue,
 		inputLifecycle,
 	)
 }
 
-func chainUsesOnlyAllowedCommands(cmds []*parsedCommand, commandSet *CommandSet, allowedIndexes []int) bool {
-	for _, command := range cmds {
-		matched, _ := commandSet.Match(command, allowedIndexes)
-		if matched == nil {
+func allCommandsAllowedInChain(commands []ResolvedCommand) bool {
+	for _, resolved := range commands {
+		if resolved.Command == nil {
 			continue
 		}
-		if !matched.config.AllowInChain {
+		if !resolved.Command.config.AllowInChain {
 			return false
 		}
 	}
@@ -140,13 +131,13 @@ func splitCommandInput(text string) (string, string) {
 	return cmdMsg, stdinText
 }
 
-func parseCommands(cmdMsg string) ([]*parsedCommand, error) {
+func parseCommands(cmdMsg string) ([]*commandPart, error) {
 	cmds, err := parse(cmdMsg)
 	// パースに完全に失敗した場合のフォールバック（クォーテーション忘れ等）
 	if len(cmds) == 0 {
 		fields := strings.Fields(cmdMsg)
 		if len(fields) > 0 {
-			cmds = append(cmds, newParsedCommand("", fields))
+			cmds = append(cmds, newCommandPart("", fields))
 		}
 	}
 	return cmds, err
@@ -154,28 +145,27 @@ func parseCommands(cmdMsg string) ([]*parsedCommand, error) {
 
 func executeCommands(
 	ctx context.Context,
-	cmds []*parsedCommand,
+	cmds []ResolvedCommand,
 	parseErr error,
 	stdinText string,
 	rawBody string,
 	input *CommandInput,
-	commandSet *CommandSet,
 	wq chan *CommandOutput,
 	lifecycle StdinLifecycle,
 ) int {
 	ret := 0
-	for i, cmd := range cmds {
-		if shouldSkipCommand(cmd, ret) {
+	for i, resolved := range cmds {
+		if shouldSkipCommand(resolved.Part, ret) {
 			continue
 		}
 		ret = -1
-		command, args := commandSet.Match(cmd, input.AllowedCommandIndexes)
+		command, args := resolved.Command, resolved.Args
 		if command == nil {
 			if i == 0 {
 				// キーワードにマッチしなかったらparse errorがあっても表示せず終了
 				return 0
 			}
-			ret = writeCommandNotFound(wq, input, cmd)
+			ret = writeCommandNotFound(wq, input, resolved.Part)
 			continue
 		}
 		if i == 0 {
@@ -209,7 +199,7 @@ func executeCommands(
 	return ret
 }
 
-func shouldSkipCommand(cmd *parsedCommand, ret int) bool {
+func shouldSkipCommand(cmd *commandPart, ret int) bool {
 	if ret == 0 && cmd.skipIfSucceeded {
 		return true
 	}
@@ -223,7 +213,7 @@ func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error
 	return 2
 }
 
-func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *parsedCommand) int {
+func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *commandPart) int {
 	syserr := newErrWriter(wq, nil, input.ConversationID, input.MessageID, DefaultOutputFlushInterval)
 	_, _ = fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
 	_ = syserr.Flush()
@@ -327,13 +317,13 @@ func runWithLifecycleInputWithLineEnding(
 	})
 }
 
-type parsedCommand struct {
+type commandPart struct {
 	skipIfSucceeded bool
 	skipIfFailed    bool
 	args            []string
 }
 
-func newParsedCommand(op string, args []string) *parsedCommand {
+func newCommandPart(op string, args []string) *commandPart {
 	skipIfSucceeded := false
 	skipIfFailed := false
 	switch op {
@@ -342,17 +332,17 @@ func newParsedCommand(op string, args []string) *parsedCommand {
 	case "||":
 		skipIfSucceeded = true
 	}
-	return &parsedCommand{
+	return &commandPart{
 		skipIfSucceeded: skipIfSucceeded,
 		skipIfFailed:    skipIfFailed,
 		args:            args,
 	}
 }
 
-func parse(line string) ([]*parsedCommand, error) {
+func parse(line string) ([]*commandPart, error) {
 	parser := shellwords.NewParser()
 	prevOperator := "" // 「;」相当
-	cmds := make([]*parsedCommand, 0)
+	cmds := make([]*commandPart, 0)
 
 	for {
 		args, err := parser.Parse(line)
@@ -369,7 +359,7 @@ func parse(line string) ([]*parsedCommand, error) {
 		if err != nil {
 			return cmds, err
 		}
-		cmds = append(cmds, newParsedCommand(prevOperator, args))
+		cmds = append(cmds, newCommandPart(prevOperator, args))
 		if parser.Position < 0 {
 			// 文字列末尾までparseした
 			return cmds, nil

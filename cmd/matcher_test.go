@@ -116,18 +116,6 @@ func TestMatcher(t *testing.T) {
 	}
 }
 
-func TestMatchSingleCommandRejectsChains(t *testing.T) {
-	set := testCommandSet([]*testCommandConfig{newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})}, nil)
-	if got := set.MatchSingle("todo first", []int{0}); got != set.commands[0] {
-		t.Fatalf("MatchSingle() = %v, want configured command", got)
-	}
-	for _, text := range []string{"todo first && todo second", "todo first || todo second", "todo first ; todo second"} {
-		if got := set.MatchSingle(text, []int{0}); got != nil {
-			t.Fatalf("MatchSingle(%q) = %v, want nil", text, got)
-		}
-	}
-}
-
 func TestMatcherExpandsAllWildcards(t *testing.T) {
 	command := testRuntimeCommand(&testExecutionConfig{Keyword: "echo *", Command: "echo * *"}, nil)
 	if got, want := command.match([]string{"echo", "foo bar"}), []string{"echo", "foo bar", "foo bar"}; !reflect.DeepEqual(got, want) {

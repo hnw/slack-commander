@@ -48,8 +48,9 @@ func (r *ConversationRouter) Accept(input *CommandInput) (AcceptResult, error) {
 }
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
-	root := r.commands.MatchSingle(input.Text, input.AllowedCommandIndexes)
-	result := r.acceptDispatchResult(r.dispatcher.DispatchRoot(root, input))
+	input.ResolvedInput = r.commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	root := input.ResolvedInput.SingleCommand()
+	result := r.acceptDispatchResult(r.dispatcher.Dispatch(input))
 	if result != AcceptRouted {
 		return result
 	}
@@ -82,11 +83,11 @@ func (r *ConversationRouter) routeThreadReply(root *Command, input *CommandInput
 	if root.replies == nil {
 		return AcceptIgnored, nil
 	}
-	command, args := root.replies.MatchReply(input.Text, input.AllowedCommandIndexes)
-	if command == nil {
+	input.ResolvedInput = root.replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	if len(input.ResolvedInput.Commands) == 0 || input.ResolvedInput.Commands[0].Command == nil {
 		return AcceptIgnored, nil
 	}
-	return r.acceptDispatchResult(r.dispatcher.DispatchReply(command, args, root.replies, input)), nil
+	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
 }
 
 func (r *ConversationRouter) acceptDispatchResult(result DispatchResult) AcceptResult {
@@ -108,7 +109,8 @@ func (r *ConversationRouter) resolveRootCommand(conversation ConversationID) (*C
 	if err != nil {
 		return nil, err
 	}
-	return r.commands.MatchSingle(resolved.Text, resolved.AllowedCommandIndexes), nil
+	parsed := r.commands.ResolveInput(resolved.Text, resolved.AllowedCommandIndexes)
+	return parsed.SingleCommand(), nil
 }
 
 type conversationRoutes struct {

@@ -355,11 +355,16 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	cfg.AllowInChain = false
 	cfg.InteractiveStdin = true
 	cfg.InputBodyMode = InputBodyStdin
-	rq <- &CommandInput{
+	commandSet := testCommandSet([]*testCommandConfig{cfg}, func(*testExecutionConfig) CommandRunner {
+		return singleCmdRunner{c}
+	})
+	input := &CommandInput{
 		Text:                  "agent\ninitial",
 		ConversationID:        ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		AllowedCommandIndexes: []int{0},
 	}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	rq <- input
 	close(rq)
 	done := make(chan struct{})
 	go func() {
@@ -367,10 +372,6 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 			ctx,
 			rq,
 			wq,
-			[]*testCommandConfig{cfg},
-			func(*testExecutionConfig) CommandRunner {
-				return singleCmdRunner{c}
-			},
 			&registry,
 		)
 		close(done)
@@ -431,13 +432,16 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	rq := make(chan *CommandInput, 1)
 	wq := make(chan *CommandOutput, 10)
 	cfg := newTestCommandConfig(&testExecutionConfig{Keyword: "agent", Command: "agent"})
-	rq <- &CommandInput{Text: "agent\ninitial", ConversationID: key, AllowedCommandIndexes: []int{0}}
+	commandSet := testCommandSet([]*testCommandConfig{cfg}, func(*testExecutionConfig) CommandRunner {
+		return singleCmdRunner{probe}
+	})
+	input := &CommandInput{Text: "agent\ninitial", ConversationID: key, AllowedCommandIndexes: []int{0}}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	rq <- input
 	close(rq)
 	done := make(chan struct{})
 	go func() {
-		testExecutorWithLifecycle(context.Background(), rq, wq, []*testCommandConfig{cfg}, func(*testExecutionConfig) CommandRunner {
-			return singleCmdRunner{probe}
-		}, &registry)
+		testExecutorWithLifecycle(context.Background(), rq, wq, &registry)
 		close(done)
 	}()
 	<-probe.started
