@@ -455,14 +455,8 @@ func TestExecutorUsesResolvedParseError(t *testing.T) {
 	if calls := runner.Calls(); len(calls) != 0 {
 		t.Fatalf("runner calls = %#v, want no execution after prepared parse error", calls)
 	}
-	var errText string
-	for _, output := range drainOutputs(wq) {
-		if output.IsErrOut {
-			errText = output.Text
-		}
-	}
-	if errText != "prepared parse error" {
-		t.Fatalf("parse error output = %q, want prepared error", errText)
+	if outputs := drainOutputs(wq); len(outputs) != 0 {
+		t.Fatalf("Executor outputs = %#v, want parse error handled before execution", outputs)
 	}
 }
 
@@ -560,18 +554,8 @@ func testExecutorParseErrorWhenIntentMatches(t *testing.T) {
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
 	}
-	var errText string
-	for _, out := range outputs {
-		if out.IsErrOut {
-			errText = out.Text
-			break
-		}
-	}
-	if errText == "" {
-		t.Fatal("expected parse error output")
-	}
-	if !strings.Contains(errText, "Parse error") {
-		t.Fatalf("expected parse error output, got %q", errText)
+	if len(outputs) != 0 {
+		t.Fatalf("Executor outputs = %#v, want no output for parse error", outputs)
 	}
 }
 
@@ -582,15 +566,9 @@ func TestExecutorSystemMessageReplyConfig(t *testing.T) {
 		config.SystemReplyConfig = systemConfig
 
 		_, outputs := runExecutorOnce(t, "echo \"hello", []*testCommandConfig{config}, []int{0})
-		for _, output := range outputs {
-			if output.IsErrOut {
-				if output.ReplyConfig != systemConfig {
-					t.Fatalf("system ReplyConfig = %#v, want %#v", output.ReplyConfig, systemConfig)
-				}
-				return
-			}
+		if len(outputs) != 0 {
+			t.Fatalf("Executor outputs = %#v, want parse error to be handled before execution", outputs)
 		}
-		t.Fatal("expected parse error output")
 	})
 
 	t.Run("unmatched command keeps default setting", func(t *testing.T) {

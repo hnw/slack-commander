@@ -91,7 +91,7 @@ func run(args []string) int {
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
 	conversationLocks := &cmd.ConversationLocks{}
 	executor := cmd.NewExecutor(outputQueue)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputQueue, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		select {
 		case commandQueue <- input:
 			return true

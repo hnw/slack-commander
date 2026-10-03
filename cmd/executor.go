@@ -33,7 +33,7 @@ type MessageID struct {
 	Timestamp string
 }
 
-// CommandOutput はExecutorからの実行結果を引き渡してPubSubに書き出すための構造体
+// CommandOutput carries execution output and input errors through the output queue.
 type CommandOutput struct {
 	ReplyConfig    interface{}
 	ConversationID ConversationID
@@ -72,7 +72,10 @@ func (e *Executor) Execute(
 	if parsed == nil {
 		return
 	}
-	cmds, parseErr, stdinText := parsed.Commands, parsed.ParseErr, parsed.StdinText
+	if parsed.ParseErr != nil {
+		return
+	}
+	cmds, stdinText := parsed.Commands, parsed.StdinText
 
 	rawBody := ""
 	initialStdin := stdinText
@@ -99,7 +102,6 @@ func (e *Executor) Execute(
 	_ = executeCommands(
 		ctx,
 		cmds,
-		parseErr,
 		initialStdin,
 		rawBody,
 		input,
@@ -146,7 +148,6 @@ func parseCommands(cmdMsg string) ([]*commandPart, error) {
 func executeCommands(
 	ctx context.Context,
 	cmds []ResolvedCommand,
-	parseErr error,
 	stdinText string,
 	rawBody string,
 	input *CommandInput,
@@ -185,12 +186,6 @@ func executeCommands(
 				}
 			}()
 		}
-		if parseErr != nil {
-			// parse errorありで1つ目のコマンドがキーワードマッチした場合
-			// エラー表示して処理全体を終了
-			ret = writeParseError(wq, input, parseErr, command)
-			return ret
-		}
 		if rawBody != "" && command.hasTrailingWildcard() {
 			args = append(args, rawBody)
 		}
@@ -204,13 +199,6 @@ func shouldSkipCommand(cmd *commandPart, ret int) bool {
 		return true
 	}
 	return ret != 0 && cmd.skipIfFailed
-}
-
-func writeParseError(wq chan *CommandOutput, input *CommandInput, parseErr error, command *Command) int {
-	syserr := newErrWriter(wq, command.config.SystemReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
-	_, _ = fmt.Fprintf(syserr, "%v", parseErr)
-	_ = syserr.Flush()
-	return 2
 }
 
 func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *commandPart) int {

@@ -55,18 +55,34 @@ type CommandConfig struct {
 	OutputFlushInterval time.Duration
 	ReplyConfig         interface{}
 	SystemReplyConfig   interface{}
-	DispatchPolicy      DispatchPolicy
+	Dispatch            CommandDispatch
 	Replies             []*CommandConfig
 }
 
-// DispatchPolicy controls how a matched reply command is dispatched.
-type DispatchPolicy int
+// CommandDispatch defines how a matched command is dispatched.
+type CommandDispatch int
 
 const (
-	// DispatchQueued sends the command through the worker queue.
-	DispatchQueued DispatchPolicy = iota
-	// DispatchDirect invokes the command runner directly.
-	DispatchDirect
+	// CommandDispatchQueue routes the input through the worker queue to the Executor.
+	CommandDispatchQueue CommandDispatch = iota
+	// CommandDispatchExecutor bypasses the worker queue and routes the input to the Executor.
+	CommandDispatchExecutor
+	// CommandDispatchRunner bypasses the Executor and invokes the runner directly.
+	CommandDispatchRunner
+)
+
+// DispatchTarget identifies the dispatch destination for a resolved input.
+type DispatchTarget int
+
+const (
+	// DispatchNone indicates that the resolved input has no matched commands to dispatch.
+	DispatchNone DispatchTarget = iota
+	// DispatchQueue routes the input through the worker queue to the Executor.
+	DispatchQueue
+	// DispatchExecutor bypasses the worker queue and routes the input to the Executor.
+	DispatchExecutor
+	// DispatchRunner bypasses the Executor and invokes the runner directly.
+	DispatchRunner
 )
 
 // Command is an instantiated runtime command.
@@ -136,6 +152,36 @@ func (p *ResolvedInput) SingleCommand() *Command {
 		return nil
 	}
 	return p.Commands[0].Command
+}
+
+// DispatchTarget returns the aggregate dispatch destination of the matched commands.
+func (p *ResolvedInput) DispatchTarget() (DispatchTarget, bool) {
+	if p == nil {
+		return DispatchNone, false
+	}
+	target := DispatchNone
+	for _, resolved := range p.Commands {
+		if resolved.Command == nil {
+			continue
+		}
+		current := resolved.Command.config.Dispatch
+		switch current {
+		case CommandDispatchQueue:
+			target = DispatchQueue
+		case CommandDispatchExecutor:
+			if target != DispatchQueue {
+				target = DispatchExecutor
+			}
+		case CommandDispatchRunner:
+			if len(p.Commands) != 1 {
+				return DispatchNone, false
+			}
+			return DispatchRunner, true
+		default:
+			return DispatchNone, false
+		}
+	}
+	return target, true
 }
 
 // NewCommandSet groups commands that may be matched against the same input.

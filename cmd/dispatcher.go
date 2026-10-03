@@ -24,6 +24,7 @@ type CommandDispatcher struct {
 	closed            bool
 	ctx               context.Context
 	executor          *Executor
+	outputQueue       chan *CommandOutput
 	stdinStore        *StdinStore
 	conversationLocks *ConversationLocks
 	enqueue           func(*CommandInput) bool
@@ -34,6 +35,7 @@ type CommandDispatcher struct {
 func NewCommandDispatcher(
 	ctx context.Context,
 	executor *Executor,
+	outputQueue chan *CommandOutput,
 	stdinStore *StdinStore,
 	conversationLocks *ConversationLocks,
 	enqueue func(*CommandInput) bool,
@@ -41,16 +43,17 @@ func NewCommandDispatcher(
 	return &CommandDispatcher{
 		ctx:               ctx,
 		executor:          executor,
+		outputQueue:       outputQueue,
 		stdinStore:        stdinStore,
 		conversationLocks: conversationLocks,
 		enqueue:           enqueue,
 	}
 }
 
-// Dispatch routes a prepared input to direct execution, asynchronous execution, or the worker queue.
+// Dispatch routes a resolved input according to its dispatch target.
 func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 	d.mu.Lock()
-	if d.closed {
+	if d.closed || input == nil {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
@@ -59,42 +62,70 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
-	single := parsed.SingleCommand()
-	if single == nil {
-		defer d.mu.Unlock()
+	if parsed.ParseErr != nil {
+		if len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
+			d.mu.Unlock()
+			return DispatchIgnored
+		}
+		output := &CommandOutput{
+			ReplyConfig:    parsed.Commands[0].Command.config.SystemReplyConfig,
+			ConversationID: input.ConversationID,
+			MessageID:      input.MessageID,
+			Text:           parsed.ParseErr.Error(),
+			IsErrOut:       true,
+			ExitCode:       2,
+		}
+		d.asyncWG.Add(1)
+		go func() {
+			defer d.asyncWG.Done()
+			d.outputQueue <- output
+		}()
+		d.mu.Unlock()
+		return DispatchAccepted
+	}
+	target, ok := parsed.DispatchTarget()
+	if !ok {
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
+	switch target {
+	case DispatchNone:
+		d.mu.Unlock()
+		return DispatchIgnored
+	case DispatchRunner:
+		command, args := parsed.Commands[0].Command, parsed.Commands[0].Args
+		d.mu.Unlock()
+		return runDirectCommand(command, args, input)
+	case DispatchExecutor:
+		d.startExecutorLocked(input)
+		d.mu.Unlock()
+		return DispatchAccepted
+	case DispatchQueue:
 		if d.enqueue == nil || !d.enqueue(input) {
+			d.mu.Unlock()
 			return DispatchQueueFull
 		}
-		return DispatchAccepted
-	}
-	if single.config.DispatchPolicy == DispatchDirect {
 		d.mu.Unlock()
-		return runDirectCommand(single, parsed.Commands[0].Args, input)
-	}
-	defer d.mu.Unlock()
-	if isHTTPCommand(single) {
-		d.startAsyncLocked(input)
 		return DispatchAccepted
+	default:
+		d.mu.Unlock()
+		return DispatchIgnored
 	}
-	if d.enqueue == nil || !d.enqueue(input) {
-		return DispatchQueueFull
-	}
-	return DispatchAccepted
 }
 
-// Close は以後のdispatchを拒否し、queueへの新しい送信も止める。
+// Close prevents subsequent dispatches from accepting new work.
 func (d *CommandDispatcher) Close() {
 	d.mu.Lock()
 	d.closed = true
 	d.mu.Unlock()
 }
 
-// Wait はClose後に開始済みのHTTP実行が終わるまで待つ。
+// Wait blocks until all asynchronous work accepted before Close has completed.
 func (d *CommandDispatcher) Wait() {
 	d.asyncWG.Wait()
 }
 
-func (d *CommandDispatcher) startAsyncLocked(input *CommandInput) {
+func (d *CommandDispatcher) startExecutorLocked(input *CommandInput) {
 	d.asyncWG.Add(1)
 	go func() {
 		defer d.asyncWG.Done()
@@ -102,10 +133,6 @@ func (d *CommandDispatcher) startAsyncLocked(input *CommandInput) {
 		defer unlock()
 		d.executor.Execute(d.ctx, input, d.stdinStore.Lifecycle(input.ConversationID))
 	}()
-}
-
-func isHTTPCommand(command *Command) bool {
-	return command != nil && command.config.Runner == RunnerHTTP
 }
 
 func runDirectCommand(command *Command, args []string, input *CommandInput) DispatchResult {

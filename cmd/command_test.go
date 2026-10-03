@@ -89,6 +89,49 @@ func TestResolveInputKeepsUnmatchedChainPosition(t *testing.T) {
 	}
 }
 
+func TestResolvedInputDispatchTarget(t *testing.T) {
+	if CommandDispatchQueue != 0 {
+		t.Fatalf("CommandDispatchQueue = %d, want zero value", CommandDispatchQueue)
+	}
+	queue := NewCommand(CommandConfig{Dispatch: CommandDispatchQueue}, nil, nil)
+	executor := NewCommand(CommandConfig{Dispatch: CommandDispatchExecutor}, nil, nil)
+	runner := NewCommand(CommandConfig{Dispatch: CommandDispatchRunner}, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		input  *ResolvedInput
+		want   DispatchTarget
+		wantOK bool
+	}{
+		{name: "empty", input: &ResolvedInput{}, want: DispatchNone, wantOK: true},
+		{name: "single queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}}}, want: DispatchQueue, wantOK: true},
+		{name: "single executor", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}}}, want: DispatchExecutor, wantOK: true},
+		{name: "executor chain", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}, {Command: executor}}}, want: DispatchExecutor, wantOK: true},
+		{name: "unmatched ignored", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}, {}}}, want: DispatchExecutor, wantOK: true},
+		{name: "unmatched then executor", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {Command: executor}}}, want: DispatchExecutor, wantOK: true},
+		{name: "queue then unmatched", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}, {}}}, want: DispatchQueue, wantOK: true},
+		{name: "unmatched then queue", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {Command: queue}}}, want: DispatchQueue, wantOK: true},
+		{name: "queue chain", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}, {Command: queue}}}, want: DispatchQueue, wantOK: true},
+		{name: "runner", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}}}, want: DispatchRunner, wantOK: true},
+		{name: "multiple runners", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {Command: runner}}}},
+		{name: "runner mixed", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {Command: queue}}}},
+		{name: "runner with unmatched", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {}}}},
+		{name: "unmatched with runner", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {Command: runner}}}},
+		{name: "unmatched only", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {}}}, want: DispatchNone, wantOK: true},
+		{name: "zero dispatch is queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{}, nil, nil)}}}, want: DispatchQueue, wantOK: true},
+		{name: "unknown dispatch invalid", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{Dispatch: 99}, nil, nil)}}}},
+		{name: "queue and executor", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}, {Command: executor}}}, want: DispatchQueue, wantOK: true},
+		{name: "executor and queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}, {Command: queue}}}, want: DispatchQueue, wantOK: true},
+		{name: "nil input"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tc.input.DispatchTarget()
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("DispatchTarget() = (%v, %v), want (%v, %v)", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestNewCommandDropsConfigReplies(t *testing.T) {
 	command := NewCommand(
 		CommandConfig{Replies: []*CommandConfig{{}}},

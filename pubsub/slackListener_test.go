@@ -16,7 +16,8 @@ import (
 )
 
 func newSlackTestDispatcher(enqueue func(*cmd.CommandInput) bool) *cmd.CommandDispatcher {
-	return cmd.NewCommandDispatcher(context.Background(), cmd.NewExecutor(make(chan *cmd.CommandOutput, 100)), &cmd.StdinStore{}, &cmd.ConversationLocks{}, enqueue)
+	outputs := make(chan *cmd.CommandOutput, 100)
+	return cmd.NewCommandDispatcher(context.Background(), cmd.NewExecutor(outputs), outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, enqueue)
 }
 
 func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
