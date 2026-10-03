@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net/http"
@@ -44,11 +45,11 @@ timeout = 5
 		t.Fatal(err)
 	}
 	stdinStore := &cmd.StdinStore{}
-	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(stdinStore))
+	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
@@ -84,6 +85,178 @@ timeout = 5
 	send("U-stdin", "1", "denied")
 	send("U-root", "1", "accepted")
 	awaitThreadStdinOutput(t, outputs, "accepted\n")
+}
+
+func TestThreadStdinChainReplyACLTracksActiveCommand(t *testing.T) {
+	var cfg Config
+	if err := decodeConfigString(`
+slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+num_workers = 1
+allowed_user_ids = ["U-root", "U-a", "U-b"]
+allowed_channel_ids = ["C"]
+output_flush_interval = "0s"
+
+[[commands]]
+keyword = "stdin-a"
+command = "stdin-a"
+interaction = "stdin"
+allowed_user_ids = ["U-root", "U-a"]
+
+[[commands]]
+keyword = "stdin-b"
+command = "stdin-b"
+interaction = "stdin"
+allowed_user_ids = ["U-root", "U-b"]
+`, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveConfig(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	runner := &aclSwitchRunner{started: make(chan string, 2), delivered: make(chan string, 4), release: map[string]chan struct{}{
+		"stdin-a": make(chan struct{}, 1),
+		"stdin-b": make(chan struct{}, 1),
+	}}
+	stdinStore := &cmd.StdinStore{}
+	commands := buildCommandSet(cfg.commandConfigs, func(config cmd.RunnerConfig) cmd.CommandRunner {
+		if config.Runner == cmd.RunnerStdinReply {
+			return cmd.NewStdinReplyRunner()
+		}
+		return runner.forCommand(config.Command)
+	})
+	requests := make(chan *cmd.CommandInput, 10)
+	outputs := make(chan *cmd.CommandOutput, 30)
+	conversationLocks := &cmd.ConversationLocks{}
+	ctx, cancel := context.WithCancel(context.Background())
+	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+		requests <- input
+		return true
+	})
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 0)
+	var workers sync.WaitGroup
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
+	}))
+	defer server.Close()
+	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
+	listenerDone := make(chan struct{})
+	go func() {
+		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
+			t.Errorf("SlackListener() error = %v", err)
+		}
+		close(listenerDone)
+	}()
+	t.Cleanup(func() {
+		for _, name := range []string{"stdin-a", "stdin-b"} {
+			select {
+			case runner.release[name] <- struct{}{}:
+			default:
+			}
+		}
+		cancel()
+		<-listenerDone
+		dispatcher.Close()
+		dispatcher.Wait()
+		workers.Wait()
+	})
+	send := func(user, timestamp, text string) {
+		t.Helper()
+		threadTimestamp := "1"
+		if timestamp == "1" {
+			threadTimestamp = ""
+		}
+		smc.Events <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: slackevents.EventsAPIEvent{
+			Type: slackevents.CallbackEvent, InnerEvent: slackevents.EventsAPIInnerEvent{Data: &slackevents.MessageEvent{
+				User: user, Channel: "C", TimeStamp: timestamp, ThreadTimeStamp: threadTimestamp, Text: text,
+			}},
+		}}
+	}
+	waitStarted := func(want string) {
+		t.Helper()
+		select {
+		case got := <-runner.started:
+			if got != want {
+				t.Fatalf("active command = %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("command %q did not start", want)
+		}
+	}
+	waitDelivered := func(want string) {
+		t.Helper()
+		select {
+		case got := <-runner.delivered:
+			if got != want+"\n" {
+				t.Fatalf("stdin line = %q, want %q", got, want+"\n")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("reply %q was not delivered", want)
+		}
+	}
+	send("U-root", "1", "stdin-a ; stdin-b")
+	waitStarted("stdin-a")
+	send("U-b", "2", "denied-by-a")
+	send("U-root", "3", "accepted-root-by-a")
+	waitDelivered("accepted-root-by-a")
+	send("U-a", "4", "accepted-by-a")
+	waitDelivered("accepted-by-a")
+	runner.release["stdin-a"] <- struct{}{}
+	waitStarted("stdin-b")
+	send("U-a", "5", "denied-by-b")
+	send("U-root", "6", "accepted-root-by-b")
+	waitDelivered("accepted-root-by-b")
+	send("U-b", "7", "accepted-by-b")
+	waitDelivered("accepted-by-b")
+	runner.release["stdin-b"] <- struct{}{}
+}
+
+type aclSwitchRunner struct {
+	started   chan string
+	delivered chan string
+	release   map[string]chan struct{}
+}
+
+func (r *aclSwitchRunner) forCommand(name string) cmd.CommandRunner {
+	return aclSwitchCommandRunner{runner: r, name: name}
+}
+
+type aclSwitchCommandRunner struct {
+	runner *aclSwitchRunner
+	name   string
+}
+
+func (r aclSwitchCommandRunner) CommandContext(context.Context, string, ...string) cmd.Cmd {
+	return aclSwitchCommand(r)
+}
+
+type aclSwitchCommand struct {
+	runner *aclSwitchRunner
+	name   string
+}
+
+func (aclSwitchCommand) SetStdin(io.Reader)  {}
+func (aclSwitchCommand) SetStdout(io.Writer) {}
+func (aclSwitchCommand) SetStderr(io.Writer) {}
+func (aclSwitchCommand) Run(int) int         { return 0 }
+func (c aclSwitchCommand) RunWithStdin(_ int, start func(io.WriteCloser)) int {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close(); _ = writer.Close() }()
+	start(writer)
+	c.runner.started <- c.name
+	go func() {
+		input := bufio.NewReader(reader)
+		for {
+			line, err := input.ReadString('\n')
+			if err != nil {
+				return
+			}
+			c.runner.delivered <- line
+		}
+	}()
+	<-c.runner.release[c.name]
+	return 0
 }
 
 func (r *aclIntegrationRunner) CommandContext(_ context.Context, name string, _ ...string) cmd.Cmd {
@@ -158,11 +331,12 @@ accept_reminder = true
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	outputs := make(chan *cmd.CommandOutput, 30)
 	executor := cmd.NewExecutor(outputs)
-	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+	stdinStore := &cmd.StdinStore{}
+	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, outputs, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
 	})
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), dispatcher, 0)
+	router := cmd.NewConversationRouter(stdinStore, commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), dispatcher, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

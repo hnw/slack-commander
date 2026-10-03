@@ -49,7 +49,7 @@ func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
 			commands := cmd.NewCommandSet([]*cmd.Command{command})
 			queued := 0
-			router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newSlackTestDispatcher(func(*cmd.CommandInput) bool {
+			router := cmd.NewConversationRouter(nil, commands, nil, newSlackTestDispatcher(func(*cmd.CommandInput) bool {
 				queued++
 				return true
 			}), 1)
@@ -87,7 +87,7 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
 	var queued []string
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, newSlackTestDispatcher(func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouter(nil, commands, nil, newSlackTestDispatcher(func(input *cmd.CommandInput) bool {
 		queued = append(queued, input.MessageID.Timestamp)
 		return true
 	}), 1)
@@ -108,7 +108,7 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	resolverCalls, enqueueCalls := 0, 0
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, func(cmd.ConversationID) (cmd.RootCommandInput, error) {
+	router := cmd.NewConversationRouter(nil, commands, func(cmd.ConversationID) (cmd.RootCommandInput, error) {
 		resolverCalls++
 		return cmd.RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, newSlackTestDispatcher(func(*cmd.CommandInput) bool {

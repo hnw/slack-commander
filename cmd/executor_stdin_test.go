@@ -338,6 +338,191 @@ type singleCmdRunner struct{ command Cmd }
 
 func (r singleCmdRunner) CommandContext(context.Context, string, ...string) Cmd { return r.command }
 
+type lifecycleSwitchRunner struct {
+	started  chan struct{}
+	finish   chan struct{}
+	exitCode int
+}
+
+func (r *lifecycleSwitchRunner) CommandContext(context.Context, string, ...string) Cmd {
+	return lifecycleSwitchCmd{runner: r}
+}
+
+type lifecycleSwitchCmd struct{ runner *lifecycleSwitchRunner }
+
+func (lifecycleSwitchCmd) SetStdin(io.Reader)  {}
+func (lifecycleSwitchCmd) SetStdout(io.Writer) {}
+func (lifecycleSwitchCmd) SetStderr(io.Writer) {}
+func (lifecycleSwitchCmd) Run(int) int         { return 0 }
+func (c lifecycleSwitchCmd) RunWithStdin(_ int, start func(io.WriteCloser)) int {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close(); _ = writer.Close() }()
+	start(writer)
+	close(c.runner.started)
+	select {
+	case <-c.runner.finish:
+		return c.runner.exitCode
+	case <-time.After(5 * time.Second):
+		return 124
+	}
+}
+
+func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
+	store := &StdinStore{}
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
+	secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
+	makeReply := func(index int) *Command {
+		return NewCommand(CommandConfig{
+			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
+			ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
+			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
+			Dispatch:     DispatchQueue,
+		}, nil, nil)
+	}
+	firstReply, secondReply := makeReply(2), makeReply(3)
+	first := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
+		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue,
+	}, firstRunner, NewCommandSet([]*Command{firstReply}))
+	second := NewCommand(CommandConfig{
+		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}},
+		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue,
+	}, secondRunner, NewCommandSet([]*Command{secondReply}))
+	commands := NewCommandSet([]*Command{first, second})
+	var replies []*CommandInput
+	router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(input *CommandInput) bool {
+		if input.MessageID.Timestamp != conversation.RootTimestamp {
+			replies = append(replies, input)
+		}
+		return true
+	}), 2)
+	root := &CommandInput{Text: "first ; unknown ; second", ConversationID: conversation, MessageID: MessageID{Timestamp: conversation.RootTimestamp}, AllowedCommandIndexes: []int{0, 1}}
+	if result, err := router.Accept(root); err != nil || result != AcceptRouted {
+		t.Fatalf("root = %v, %v; want routed", result, err)
+	}
+	done := make(chan struct{})
+	go func() {
+		NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+		close(done)
+	}()
+	waitForLifecycleSignal(t, firstRunner.started, "stdin command did not start")
+	assertActiveReplyCommand(t, store, conversation, firstReply)
+	if got := acceptStdinReply(t, router, conversation, 2, "reply-a"); got != AcceptRouted {
+		t.Fatalf("first reply ACL = %v, want routed", got)
+	}
+	if got := acceptStdinReply(t, router, conversation, 3, "reply-b-denied"); got != AcceptIgnored {
+		t.Fatalf("second reply ACL while first is active = %v, want ignored", got)
+	}
+	close(firstRunner.finish)
+	waitForLifecycleSignal(t, secondRunner.started, "second stdin command did not start")
+	assertActiveReplyCommand(t, store, conversation, secondReply)
+	if got := acceptStdinReply(t, router, conversation, 2, "reply-a-denied"); got != AcceptIgnored {
+		t.Fatalf("first reply ACL while second is active = %v, want ignored", got)
+	}
+	if got := acceptStdinReply(t, router, conversation, 3, "reply-b"); got != AcceptRouted {
+		t.Fatalf("second reply ACL = %v, want routed", got)
+	}
+	close(secondRunner.finish)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not finish")
+	}
+	if len(replies) != 2 || replies[0].ResolvedInput.Commands[0].Command != firstReply || replies[1].ResolvedInput.Commands[0].Command != secondReply {
+		t.Fatalf("routed reply commands = %+v, want first then second", replies)
+	}
+}
+
+func waitForLifecycleSignal(t *testing.T, signal <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal(failure)
+	}
+}
+
+func assertActiveReplyCommand(t *testing.T, store *StdinStore, conversation ConversationID, want *Command) {
+	t.Helper()
+	entry, ok := store.lookup(conversation)
+	if !ok || entry.implicitReplyCommand != want {
+		t.Fatalf("active entry = (%+v,%v), want reply %p", entry, ok, want)
+	}
+}
+
+func acceptStdinReply(t *testing.T, router *ConversationRouter, conversation ConversationID, index int, timestamp string) AcceptResult {
+	t.Helper()
+	input := &CommandInput{Text: "body", ConversationID: conversation, MessageID: MessageID{Timestamp: timestamp}, AllowedCommandIndexes: []int{index}}
+	result, err := router.Accept(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		chain    string
+		exitCode int
+	}{
+		{name: "failed and skips second", chain: "first && second", exitCode: 1},
+		{name: "successful or skips second", chain: "first || second", exitCode: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &StdinStore{}
+			conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+			firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{}), exitCode: tc.exitCode}
+			secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
+			makeReply := func(index int) *Command {
+				return NewCommand(CommandConfig{Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin-reply"}}, Dispatch: DispatchQueue}, nil, nil)
+			}
+			first := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue}, firstRunner, NewCommandSet([]*Command{makeReply(2)}))
+			second := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue}, secondRunner, NewCommandSet([]*Command{makeReply(3)}))
+			commands := NewCommandSet([]*Command{first, second})
+			router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
+			root := &CommandInput{Text: tc.chain, ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0, 1}}
+			if result, err := router.Accept(root); err != nil || result != AcceptRouted {
+				t.Fatalf("root = %v, %v", result, err)
+			}
+			done := make(chan struct{})
+			go func() {
+				NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+				close(done)
+			}()
+			select {
+			case <-firstRunner.started:
+			case <-time.After(time.Second):
+				t.Fatal("first stdin command did not start")
+			}
+			assertActiveReplyCommand(t, store, conversation, first.replies.commands[0])
+			if result := acceptStdinReply(t, router, conversation, 2, "reply-first"); result != AcceptRouted {
+				t.Fatalf("active first reply ACL = %v, want routed", result)
+			}
+			if result := acceptStdinReply(t, router, conversation, 3, "reply-skipped"); result != AcceptIgnored {
+				t.Fatalf("skipped second reply ACL while first is active = %v, want ignored", result)
+			}
+			firstRunner.finish <- struct{}{}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				close(secondRunner.finish)
+				t.Fatal("executor did not finish after skipped command")
+			}
+			if _, ok := store.lookup(conversation); ok {
+				t.Fatal("skipped stdin command left an active endpoint")
+			}
+			result, err := router.Accept(&CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}})
+			if err != nil || result != AcceptIgnored {
+				t.Fatalf("reply matching skipped command ACL = %v, %v; want ignored", result, err)
+			}
+		})
+	}
+}
+
 func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	c := &stdinTestCmd{
 		started: make(chan struct{}),
@@ -450,4 +635,54 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	}
 	close(probe.finish)
 	<-done
+}
+
+func TestExecutorPublishesLifecycleOnlyForInteractiveChainCommand(t *testing.T) {
+	stdinProbe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
+	oneshotProbe := &endpointProbeCmd{started: make(chan struct{}), finish: make(chan struct{})}
+	var registry testThreadRegistry
+	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	configs := []*testCommandConfig{
+		newTestCommandConfig(&testExecutionConfig{Index: 0, Keyword: "stdin", Command: "stdin", AllowInChain: true, InteractiveStdin: true}),
+		newTestCommandConfig(&testExecutionConfig{Index: 1, Keyword: "oneshot", Command: "oneshot", AllowInChain: true}),
+	}
+	commandSet := testCommandSet(configs, func(config *testExecutionConfig) CommandRunner {
+		if config.Keyword == "stdin" {
+			return singleCmdRunner{stdinProbe}
+		}
+		return singleCmdRunner{oneshotProbe}
+	})
+	input := &CommandInput{Text: "stdin ; oneshot", ConversationID: key, AllowedCommandIndexes: []int{0, 1}}
+	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	rq := make(chan *CommandInput, 1)
+	rq <- input
+	close(rq)
+	done := make(chan struct{})
+	go func() {
+		testExecutorWithLifecycle(context.Background(), rq, make(chan *CommandOutput, 10), &registry)
+		close(done)
+	}()
+	select {
+	case <-stdinProbe.started:
+	case <-time.After(time.Second):
+		t.Fatal("stdin command did not start")
+	}
+	if registry.lookup(key) == nil {
+		t.Fatal("interactive command did not publish its endpoint")
+	}
+	close(stdinProbe.finish)
+	select {
+	case <-oneshotProbe.started:
+	case <-time.After(time.Second):
+		t.Fatal("oneshot command did not start after stdin")
+	}
+	if registry.lookup(key) != nil {
+		t.Fatal("oneshot command published a stdin endpoint")
+	}
+	close(oneshotProbe.finish)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("chain did not finish")
+	}
 }

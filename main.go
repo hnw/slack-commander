@@ -67,7 +67,7 @@ func run(args []string) int {
 	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
 	stdinStore := &cmd.StdinStore{}
-	runnerFactory := newRunnerFactory(stdinStore)
+	runnerFactory := newRunnerFactory()
 	commands := buildCommandSet(cfg.commandConfigs, runnerFactory)
 
 	api := slack.New(
@@ -99,7 +99,8 @@ func run(args []string) int {
 			return false
 		}
 	})
-	router := cmd.NewConversationRouterWithRootInputResolver(
+	router := cmd.NewConversationRouter(
+		stdinStore,
 		commands,
 		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
 		dispatcher,
@@ -149,12 +150,12 @@ func run(args []string) int {
 	return exitCode
 }
 
-func newRunnerFactory(stdinStore *cmd.StdinStore) cmd.RunnerFactory {
+func newRunnerFactory() cmd.RunnerFactory {
 	execRunner := cmd.NewExecRunner()
 	composeRunner := cmd.NewComposeRunner("")
 	return func(config cmd.RunnerConfig) cmd.CommandRunner {
 		if config.Runner == cmd.RunnerStdinReply {
-			return cmd.NewStdinReplyRunner(stdinStore)
+			return cmd.NewStdinReplyRunner()
 		}
 		if config.Runner == cmd.RunnerCompose {
 			return composeRunner

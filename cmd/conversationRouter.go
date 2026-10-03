@@ -29,14 +29,15 @@ const (
 // ConversationRouter はroot commandとthread replyをroutingする。
 type ConversationRouter struct {
 	commands         *CommandSet
+	stdinStore       *StdinStore
 	resolveRootInput RootInputResolver
 	dispatcher       *CommandDispatcher
 	routes           *conversationRoutes
 }
 
-// NewConversationRouterWithRootInputResolver creates a router with a root input resolver.
-func NewConversationRouterWithRootInputResolver(commands *CommandSet, resolve RootInputResolver, dispatcher *CommandDispatcher, routeCapacity int) *ConversationRouter {
-	return &ConversationRouter{commands: commands, resolveRootInput: resolve, dispatcher: dispatcher, routes: newConversationRoutes(routeCapacity)}
+// NewConversationRouter creates a router with a root input resolver.
+func NewConversationRouter(stdinStore *StdinStore, commands *CommandSet, resolve RootInputResolver, dispatcher *CommandDispatcher, routeCapacity int) *ConversationRouter {
+	return &ConversationRouter{commands: commands, stdinStore: stdinStore, resolveRootInput: resolve, dispatcher: dispatcher, routes: newConversationRoutes(routeCapacity)}
 }
 
 // Accept はroot入力とthread replyをroutingする。
@@ -54,13 +55,19 @@ func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 		return result
 	}
 	if resolvedInputExecutable(input.ResolvedInput) {
-		r.routes.store(input.ConversationID, replyCommand(input.ResolvedInput))
+		r.routes.store(input.ConversationID, explicitReplyCommand(input.ResolvedInput))
 	}
 	return AcceptRouted
 }
 
 func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResult, error) {
-	reply, found := r.routes.lookup(input.ConversationID)
+	if entry, found := r.stdinStore.lookup(input.ConversationID); found {
+		if entry.implicitReplyCommand == nil {
+			return AcceptIgnored, nil
+		}
+		return r.routeThreadReply(NewCommandSet([]*Command{entry.implicitReplyCommand}), entry.endpoint, input)
+	}
+	explicitReply, found := r.routes.lookup(input.ConversationID)
 	if !found {
 		if r.resolveRootInput == nil {
 			return AcceptIgnored, nil
@@ -74,17 +81,20 @@ func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResul
 			r.routes.store(input.ConversationID, nil)
 			return AcceptIgnored, nil
 		}
-		reply = replyCommand(root)
-		r.routes.store(input.ConversationID, reply)
+		explicitReply = explicitReplyCommand(root)
+		r.routes.store(input.ConversationID, explicitReply)
 	}
-	if reply == nil {
+	if explicitReply == nil {
 		return AcceptIgnored, nil
 	}
-	return r.routeThreadReply(reply, input)
+	return r.routeThreadReply(explicitReply.replies, nil, input)
 }
 
-func (r *ConversationRouter) routeThreadReply(replyCommand *Command, input *CommandInput) (AcceptResult, error) {
-	input.ResolvedInput = replyCommand.replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
+func (r *ConversationRouter) routeThreadReply(replyCommands *CommandSet, stdinTarget *InteractiveStdin, input *CommandInput) (AcceptResult, error) {
+	input.ResolvedInput = replyCommands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	if stdinTarget != nil && resolvedInputExecutable(input.ResolvedInput) {
+		input.stdinTarget = stdinTarget
+	}
 	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
 }
 
@@ -107,8 +117,8 @@ type conversationRoutes struct {
 }
 
 type conversationRoute struct {
-	key          ConversationID
-	replyCommand *Command
+	key                  ConversationID
+	explicitReplyCommand *Command
 }
 
 func newConversationRoutes(capacity int) *conversationRoutes {
@@ -126,10 +136,10 @@ func (r *conversationRoutes) lookup(conversation ConversationID) (*Command, bool
 		return nil, false
 	}
 	r.lru.MoveToFront(element)
-	return element.Value.(conversationRoute).replyCommand, true
+	return element.Value.(conversationRoute).explicitReplyCommand, true
 }
 
-func (r *conversationRoutes) store(conversation ConversationID, replyCommand *Command) {
+func (r *conversationRoutes) store(conversation ConversationID, explicitReplyCommand *Command) {
 	if r.capacity <= 0 {
 		return
 	}
@@ -140,11 +150,11 @@ func (r *conversationRoutes) store(conversation ConversationID, replyCommand *Co
 		r.lru = list.New()
 	}
 	if element := r.entries[conversation]; element != nil {
-		element.Value = conversationRoute{key: conversation, replyCommand: replyCommand}
+		element.Value = conversationRoute{key: conversation, explicitReplyCommand: explicitReplyCommand}
 		r.lru.MoveToFront(element)
 		return
 	}
-	element := r.lru.PushFront(conversationRoute{key: conversation, replyCommand: replyCommand})
+	element := r.lru.PushFront(conversationRoute{key: conversation, explicitReplyCommand: explicitReplyCommand})
 	r.entries[conversation] = element
 	if r.lru.Len() <= r.capacity {
 		return
@@ -154,12 +164,12 @@ func (r *conversationRoutes) store(conversation ConversationID, replyCommand *Co
 	r.lru.Remove(oldest)
 }
 
-func replyCommand(parsed *ResolvedInput) *Command {
+func explicitReplyCommand(parsed *ResolvedInput) *Command {
 	if parsed == nil || len(parsed.Commands) != 1 {
 		return nil
 	}
 	command := parsed.Commands[0].Command
-	if command == nil || command.replies == nil {
+	if command == nil || command.config.InteractiveStdin || command.replies == nil {
 		return nil
 	}
 	return command

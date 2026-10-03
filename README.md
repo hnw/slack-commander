@@ -194,7 +194,7 @@ echo hello world
 
 ### 標準入力へ送る
 
-`interaction = "stdin"`を指定すると、同じSlackスレッドへの返信を実行中プロセスの標準入力へ渡します。
+`interaction = "stdin"`を指定すると、同じSlackスレッドへの返信を実行中プロセスの標準入力へ渡します。stdin commandは`;`、`&&`、`||`でつなぐchain内でも使用できます。返信は、その時点で実行中のstdin commandの許可リストと本文設定に従って照合します。実行中のstdin commandがなければ返信は無視します。
 
 ```toml
 [[commands]]
@@ -222,7 +222,7 @@ y
 
 起点メッセージの2行目以降も、最初の標準入力として利用できます。
 
-`interaction = "stdin"`は`exec`と`compose`で利用できます。`http`では利用できません。
+`interaction = "stdin"`は`exec`と`compose`で利用できます。`http`では利用できません。`interaction = "command"`を含むchainは使用できません。
 
 ### 返信に応じてコマンドを実行する
 

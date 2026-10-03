@@ -245,7 +245,7 @@ func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (
 	parserConfig := cmd.ParserConfig{}
 	switch interaction {
 	case cmd.InteractionStdin:
-		parserConfig.AllowInChain = false
+		parserConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = true
 		parserConfig.InputBodyMode = cmd.InputBodyStdin
 		return parserConfig, executorConfig

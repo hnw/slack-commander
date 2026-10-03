@@ -81,7 +81,7 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
 				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
 				Dispatch:      DispatchRunner,
-			}, NewStdinReplyRunner(&StdinStore{}), nil))
+			}, NewStdinReplyRunner(), nil))
 		}
 		command := testRuntimeCommand(definition, runner)
 		command.replies = replies
@@ -92,7 +92,7 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
 	commands := testCommandSet(configs, nil)
-	return NewConversationRouterWithRootInputResolver(commands, resolve, newTestDispatcher(enqueue), routeCapacity)
+	return NewConversationRouter(&StdinStore{}, commands, resolve, newTestDispatcher(enqueue), routeCapacity)
 }
 
 func newTestDispatcher(enqueue func(*CommandInput) bool) *CommandDispatcher {
