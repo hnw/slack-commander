@@ -12,15 +12,18 @@ func TestStdinStoreKeepsNewestEndpoint(t *testing.T) {
 	_, newWriter := io.Pipe()
 	old := NewInteractiveStdin(oldWriter, "", func(error) {})
 	newEndpoint := NewInteractiveStdin(newWriter, "", func(error) {})
+	oldReply := &Command{}
+	newReply := &Command{}
 	lifecycle := store.Lifecycle(conversation)
-	lifecycle.StdinReady(old)
-	lifecycle.StdinReady(newEndpoint)
+	lifecycle.StdinReady(old, oldReply)
+	lifecycle.StdinReady(newEndpoint, newReply)
 	lifecycle.StdinClosed(old)
-	if store.lookup(conversation) != newEndpoint {
+	entry, ok := store.lookup(conversation)
+	if !ok || entry.endpoint != newEndpoint || entry.implicitReplyCommand != newReply {
 		t.Fatal("old endpoint close removed the new endpoint")
 	}
 	lifecycle.StdinClosed(newEndpoint)
-	if store.lookup(conversation) != nil {
+	if _, ok := store.lookup(conversation); ok {
 		t.Fatal("closed endpoint remained registered")
 	}
 	old.Close()
@@ -38,8 +41,8 @@ func TestStdinStoreRejectsInvalidAndClosedEndpoints(t *testing.T) {
 	_, writer := io.Pipe()
 	endpoint := NewInteractiveStdin(writer, "", func(error) {})
 	endpoint.Close()
-	store.Lifecycle(conversation).StdinReady(endpoint)
-	if store.lookup(conversation) != nil {
+	store.Lifecycle(conversation).StdinReady(endpoint, nil)
+	if _, ok := store.lookup(conversation); ok {
 		t.Fatal("closed endpoint was registered")
 	}
 	_ = writer.Close()

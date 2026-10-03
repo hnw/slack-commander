@@ -44,7 +44,7 @@ type testLifecycle struct {
 	conversation ConversationID
 }
 
-func (l testLifecycle) StdinReady(input *InteractiveStdin) {
+func (l testLifecycle) StdinReady(input *InteractiveStdin, _ *Command) {
 	l.registry.register(l.conversation, input)
 }
 
@@ -54,9 +54,9 @@ func (l testLifecycle) StdinClosed(input *InteractiveStdin) {
 
 func testRunWithInput(command Cmd, timeout int, idle time.Duration, initial string, conversation ConversationID, registry *testThreadRegistry) int {
 	if registry == nil || conversation.ChannelID == "" || conversation.RootTimestamp == "" {
-		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil)
+		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil, nil)
 	}
-	return runWithLifecycleInput(command, timeout, idle, initial, conversation, testLifecycle{registry: registry, conversation: conversation})
+	return runWithLifecycleInput(command, timeout, idle, initial, conversation, testLifecycle{registry: registry, conversation: conversation}, nil)
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, registry *testThreadRegistry) {

@@ -52,7 +52,7 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 			return false
 		}
 	})
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 10)
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, executor, &workers)
 	var queueClose sync.Once
@@ -284,7 +284,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 			return false
 		}
 	})
-	router := cmd.NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 10)
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, locks, executor, &workers)
 	var queueClose sync.Once

@@ -224,7 +224,7 @@ func TestResolveConfigBuildsRawStdinReplyWithResolvedRootACL(t *testing.T) {
 	if rawReply.Index == resolved.Index {
 		t.Fatalf("stdin reply = %+v", rawReply)
 	}
-	if rawReply.ParserConfig != (cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}) || rawReply.ExecutorConfig != resolved.ExecutorConfig {
+	if rawReply.ParserConfig != (cmd.ParserConfig{AllowInChain: true, InputBodyMode: cmd.InputBodyRawStdin}) || rawReply.ExecutorConfig != resolved.ExecutorConfig {
 		t.Fatalf("stdin reply parser/executor config = %+v/%+v, root executor = %+v", rawReply.ParserConfig, rawReply.ExecutorConfig, resolved.ExecutorConfig)
 	}
 	if len(cfg.ListenerConfigs) != 2 {
@@ -239,9 +239,9 @@ func TestResolveConfigBuildsRawStdinReplyWithResolvedRootACL(t *testing.T) {
 func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	cfg, resolved, rawReply := resolveStdinReplyTestConfig(t)
 	stdinStore := &cmd.StdinStore{}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(stdinStore))
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	queued := false
-	router := cmd.NewConversationRouterWithRootInputResolver(runtime, nil, newMainTestDispatcher(context.Background(), nil, stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
+	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), nil, stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
 	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{resolved.Index}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)
@@ -249,7 +249,14 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	queued = false
 	reader, writer := io.Pipe()
 	endpoint := cmd.NewInteractiveStdin(writer, "", func(error) {})
-	stdinStore.Lifecycle(conversation).StdinReady(endpoint)
+	implicitReply := cmd.NewCommand(cmd.CommandConfig{
+		Index:         rawReply.Index,
+		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}},
+		ParserConfig:  cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin},
+		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
+		Dispatch:      cmd.DispatchRunner,
+	}, cmd.NewStdinReplyRunner(), nil)
+	stdinStore.Lifecycle(conversation).StdinReady(endpoint, implicitReply)
 	for _, indexes := range [][]int{{resolved.Index}, {}} {
 		result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
 		if err != nil || result != cmd.AcceptIgnored || queued {
@@ -281,9 +288,9 @@ func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
 	if len(cfg.commandConfigs[0].Replies) != 0 || len(cfg.ListenerConfigs) != 1 {
 		t.Fatalf("oneshot resolved replies/listener candidates = %d/%+v, want none", len(cfg.commandConfigs[0].Replies), cfg.ListenerConfigs)
 	}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(nil))
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	queued := false
-	router := cmd.NewConversationRouterWithRootInputResolver(runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
+	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)
@@ -847,7 +854,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 		bodyMode    cmd.InputBodyMode
 	}{
 		{cmd.InteractionOneshot, true, false, cmd.InputBodyStdin},
-		{cmd.InteractionStdin, false, true, cmd.InputBodyStdin},
+		{cmd.InteractionStdin, true, true, cmd.InputBodyStdin},
 		{cmd.InteractionCommand, false, false, cmd.InputBodyArgument},
 	}
 	for _, tt := range tests {

@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,7 +65,7 @@ func TestAsyncHTTPUsesExecutorOutputPipelineForFailuresAndCancellation(t *testin
 			}, NewHTTPRunner(config), nil)
 			commands := NewCommandSet([]*Command{command})
 			dispatcher := NewCommandDispatcher(ctx, NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, nil)
-			router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+			router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 			conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 			if result, err := router.Accept(&CommandInput{Text: "lookup", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 				t.Fatalf("Accept() = %v, %v; want routed", result, err)
@@ -168,7 +167,7 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 				queued = input
 				return true
 			})
-			router := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
+			router := NewConversationRouter(&StdinStore{}, commands, func(ConversationID) (RootCommandInput, error) {
 				return RootCommandInput{Text: "agent", AllowedCommandIndexes: []int{0}}, nil
 			}, dispatcher, 1)
 			input := &CommandInput{Text: tc.text, ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1, 2}}
@@ -200,7 +199,7 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 	}
 }
 
-func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
+func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
 	httpCommand := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
@@ -216,7 +215,7 @@ func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 		queued = input
 		return true
 	})
-	router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 	defer func() { dispatcher.Close(); dispatcher.Wait() }()
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	input := &CommandInput{
@@ -229,8 +228,8 @@ func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 	if got := input.ResolvedInput; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
 		t.Fatalf("ResolvedInput = %#v, want two commands with HTTP first match", got)
 	}
-	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{httpCommand, second}) {
-		t.Fatalf("cached root commands = %v, %v; want both commands in input order", got, ok)
+	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
+		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
 	}
 	reply := &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{0}}
 	if result, err := router.Accept(reply); err != nil || result != AcceptIgnored {
@@ -238,7 +237,7 @@ func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 	}
 }
 
-func TestRootChainCachesMatchedCommandsBeforeTrailingUnknown(t *testing.T) {
+func TestRootChainWithTrailingUnknownCachesNoReplyCommand(t *testing.T) {
 	foo := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "foo"}},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "foo"}},
@@ -246,14 +245,14 @@ func TestRootChainCachesMatchedCommandsBeforeTrailingUnknown(t *testing.T) {
 	}, nil, nil)
 	commands := NewCommandSet([]*Command{foo})
 	dispatcher := newTestCommandDispatcher(context.Background(), 10, func(*CommandInput) bool { return true })
-	router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	input := &CommandInput{Text: "foo ; unknown", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
 	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v; want routed", result, err)
 	}
-	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{foo}) {
-		t.Fatalf("cached commands = %v, %v; want matched foo only", got, ok)
+	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
+		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
 	}
 }
 
@@ -740,7 +739,7 @@ func runHTTPParseErrorCase(t *testing.T, isReply bool, timestamp string) {
 	} else {
 		commands = NewCommandSet([]*Command{httpCommand})
 	}
-	router := NewConversationRouterWithRootInputResolver(commands, func(ConversationID) (RootCommandInput, error) {
+	router := NewConversationRouter(&StdinStore{}, commands, func(ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "agent", AllowedCommandIndexes: []int{0}}, nil
 	}, dispatcher, 1)
 	input := &CommandInput{Text: "lookup '", ConversationID: conversation, MessageID: message, AllowedCommandIndexes: []int{1}}
@@ -792,7 +791,7 @@ func TestHTTPReplyUsesTheSingleNormalMatchWhenRawCandidateMisses(t *testing.T) {
 				queued = append(queued, input)
 				return true
 			})
-			router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+			router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 			defer func() { dispatcher.Close(); dispatcher.Wait() }()
 			conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 			if result, err := router.Accept(&CommandInput{Text: "agent", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
@@ -852,7 +851,7 @@ func TestSameConversationHTTPChainRunsSeriallyWithReplies(t *testing.T) {
 		queued <- input
 		return true
 	})
-	router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 	t.Cleanup(func() {
 		dispatcher.Close()
 		releaseFirstOnce.Do(func() { close(releaseFirst) })
@@ -948,7 +947,7 @@ func TestDispatcherCloseRejectsNewWorkAndWaitsForOutputDrain(t *testing.T) {
 			<-writerDone
 		})
 	})
-	router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 	if result, err := router.Accept(&CommandInput{Text: "lookup ; lookup", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 		t.Fatalf("HTTP Accept() = %v, %v", result, err)
 	}

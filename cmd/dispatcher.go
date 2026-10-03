@@ -154,10 +154,14 @@ func (d *CommandDispatcher) startExecutorLocked(input *CommandInput) {
 
 func runDirectCommand(command *Command, args []string, input *CommandInput) DispatchResult {
 	runnerArgs := args[1:]
-	if command.config.Runner == RunnerStdinReply {
-		runnerArgs = append(runnerArgs, input.ConversationID.ChannelID, input.ConversationID.RootTimestamp)
-	}
 	directCmd := command.runner.CommandContext(context.Background(), args[0], runnerArgs...)
+	if command.config.Runner == RunnerStdinReply {
+		setter, ok := directCmd.(interface{ SetStdinTarget(*InteractiveStdin) })
+		if !ok || input.stdinTarget == nil {
+			return DispatchIgnored
+		}
+		setter.SetStdinTarget(input.stdinTarget)
+	}
 	directCmd.SetStdin(strings.NewReader(input.Text))
 	if directCmd.Run(0) != 0 {
 		return DispatchIgnored

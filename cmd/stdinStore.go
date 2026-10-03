@@ -4,14 +4,19 @@ import "sync"
 
 // StdinLifecycle はstdin endpointの利用開始と終了をStoreへ通知する。
 type StdinLifecycle interface {
-	StdinReady(*InteractiveStdin)
+	StdinReady(*InteractiveStdin, *Command)
 	StdinClosed(*InteractiveStdin)
 }
 
 // StdinStore はconversationごとのactive stdin endpointを保持する。
 type StdinStore struct {
 	mu     sync.Mutex
-	inputs map[ConversationID]*InteractiveStdin
+	inputs map[ConversationID]stdinEntry
+}
+
+type stdinEntry struct {
+	endpoint             *InteractiveStdin
+	implicitReplyCommand *Command
 }
 
 // Lifecycle はconversationに紐づくendpoint lifecycleを返す。
@@ -27,15 +32,15 @@ type stdinLifecycle struct {
 	conversation ConversationID
 }
 
-func (l stdinLifecycle) StdinReady(endpoint *InteractiveStdin) {
-	l.store.register(l.conversation, endpoint)
+func (l stdinLifecycle) StdinReady(endpoint *InteractiveStdin, implicitReplyCommand *Command) {
+	l.store.register(l.conversation, endpoint, implicitReplyCommand)
 }
 
 func (l stdinLifecycle) StdinClosed(endpoint *InteractiveStdin) {
 	l.store.unregister(l.conversation, endpoint)
 }
 
-func (s *StdinStore) register(conversation ConversationID, endpoint *InteractiveStdin) {
+func (s *StdinStore) register(conversation ConversationID, endpoint *InteractiveStdin, implicitReplyCommand *Command) {
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
 	if endpoint.closed {
@@ -44,21 +49,25 @@ func (s *StdinStore) register(conversation ConversationID, endpoint *Interactive
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputs == nil {
-		s.inputs = make(map[ConversationID]*InteractiveStdin)
+		s.inputs = make(map[ConversationID]stdinEntry)
 	}
-	s.inputs[conversation] = endpoint
+	s.inputs[conversation] = stdinEntry{endpoint: endpoint, implicitReplyCommand: implicitReplyCommand}
 }
 
-func (s *StdinStore) lookup(conversation ConversationID) *InteractiveStdin {
+func (s *StdinStore) lookup(conversation ConversationID) (stdinEntry, bool) {
+	if s == nil {
+		return stdinEntry{}, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.inputs[conversation]
+	entry, ok := s.inputs[conversation]
+	return entry, ok
 }
 
 func (s *StdinStore) unregister(conversation ConversationID, endpoint *InteractiveStdin) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputs[conversation] == endpoint {
+	if entry, ok := s.inputs[conversation]; ok && entry.endpoint == endpoint {
 		delete(s.inputs, conversation)
 	}
 }

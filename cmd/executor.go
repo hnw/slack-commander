@@ -19,6 +19,7 @@ type CommandInput struct {
 	Text                  string // 起動コマンド平文
 	ResolvedInput         *ResolvedInput
 	AllowedCommandIndexes []int
+	stdinTarget           *InteractiveStdin
 }
 
 // ConversationID identifies the Slack thread that receives command output.
@@ -79,7 +80,6 @@ func (e *Executor) Execute(
 
 	rawBody := ""
 	initialStdin := stdinText
-	inputLifecycle := lifecycle
 
 	if len(cmds) == 0 {
 		return
@@ -92,10 +92,6 @@ func (e *Executor) Execute(
 		initialStdin = ""
 	}
 
-	if command == nil || !command.config.InteractiveStdin {
-		inputLifecycle = nil
-	}
-
 	_ = executeCommands(
 		ctx,
 		cmds,
@@ -103,7 +99,7 @@ func (e *Executor) Execute(
 		rawBody,
 		input,
 		e.outputQueue,
-		inputLifecycle,
+		lifecycle,
 	)
 }
 
@@ -170,7 +166,11 @@ func executeCommands(
 		if rawBody != "" && command.hasTrailingWildcard() {
 			args = append(args, rawBody)
 		}
-		ret = runMatchedCommand(ctx, command, args, stdinText, input, wq, lifecycle)
+		commandLifecycle := lifecycle
+		if !command.config.InteractiveStdin {
+			commandLifecycle = nil
+		}
+		ret = runMatchedCommand(ctx, command, args, stdinText, input, wq, commandLifecycle)
 	}
 	return ret
 }
@@ -228,6 +228,7 @@ func runMatchedCommand(
 			stdinText,
 			input.ConversationID,
 			lifecycle,
+			implicitStdinReplyCommand(command),
 			"\r",
 		)
 		_ = terminal.Flush()
@@ -235,7 +236,7 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, command.config.Timeout, time.Duration(command.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle)
+	ret := runWithLifecycleInput(execCmd, command.config.Timeout, time.Duration(command.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -249,8 +250,9 @@ func runWithLifecycleInput(
 	initial string,
 	conversation ConversationID,
 	lifecycle StdinLifecycle,
+	implicitReplyCommand *Command,
 ) int {
-	return runWithLifecycleInputWithLineEnding(command, timeout, idle, initial, conversation, lifecycle, "\n")
+	return runWithLifecycleInputWithLineEnding(command, timeout, idle, initial, conversation, lifecycle, implicitReplyCommand, "\n")
 }
 
 func runWithLifecycleInputWithLineEnding(
@@ -260,6 +262,7 @@ func runWithLifecycleInputWithLineEnding(
 	initial string,
 	conversation ConversationID,
 	lifecycle StdinLifecycle,
+	implicitReplyCommand *Command,
 	lineEnding string,
 ) int {
 	runner, ok := command.(interface {
@@ -282,8 +285,15 @@ func runWithLifecycleInputWithLineEnding(
 	defer endpoint.Close()
 	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {
 		endpoint.Start(stdin)
-		lifecycle.StdinReady(endpoint)
+		lifecycle.StdinReady(endpoint, implicitReplyCommand)
 	})
+}
+
+func implicitStdinReplyCommand(command *Command) *Command {
+	if command.replies == nil || len(command.replies.commands) == 0 {
+		return nil
+	}
+	return command.replies.commands[0]
 }
 
 type commandPart struct {
