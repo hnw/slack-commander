@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"container/list"
-	"slices"
 	"sync"
 )
 
@@ -55,13 +54,13 @@ func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 		return result
 	}
 	if resolvedInputExecutable(input.ResolvedInput) {
-		r.routes.store(input.ConversationID, matchedCommands(input.ResolvedInput))
+		r.routes.store(input.ConversationID, replyCommand(input.ResolvedInput))
 	}
 	return AcceptRouted
 }
 
 func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResult, error) {
-	rootCommands, found := r.routes.lookup(input.ConversationID)
+	reply, found := r.routes.lookup(input.ConversationID)
 	if !found {
 		if r.resolveRootInput == nil {
 			return AcceptIgnored, nil
@@ -75,21 +74,17 @@ func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResul
 			r.routes.store(input.ConversationID, nil)
 			return AcceptIgnored, nil
 		}
-		rootCommands = matchedCommands(root)
-		r.routes.store(input.ConversationID, rootCommands)
+		reply = replyCommand(root)
+		r.routes.store(input.ConversationID, reply)
 	}
-	if rootCommands == nil {
+	if reply == nil {
 		return AcceptIgnored, nil
 	}
-	return r.routeThreadReply(rootCommands, input)
+	return r.routeThreadReply(reply, input)
 }
 
-func (r *ConversationRouter) routeThreadReply(root []*Command, input *CommandInput) (AcceptResult, error) {
-	replies := replyCommands(root)
-	if replies == nil {
-		return AcceptIgnored, nil
-	}
-	input.ResolvedInput = replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
+func (r *ConversationRouter) routeThreadReply(replyCommand *Command, input *CommandInput) (AcceptResult, error) {
+	input.ResolvedInput = replyCommand.replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
 	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
 }
 
@@ -112,15 +107,15 @@ type conversationRoutes struct {
 }
 
 type conversationRoute struct {
-	key      ConversationID
-	commands []*Command
+	key          ConversationID
+	replyCommand *Command
 }
 
 func newConversationRoutes(capacity int) *conversationRoutes {
 	return &conversationRoutes{capacity: capacity}
 }
 
-func (r *conversationRoutes) lookup(conversation ConversationID) ([]*Command, bool) {
+func (r *conversationRoutes) lookup(conversation ConversationID) (*Command, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
@@ -131,14 +126,13 @@ func (r *conversationRoutes) lookup(conversation ConversationID) ([]*Command, bo
 		return nil, false
 	}
 	r.lru.MoveToFront(element)
-	return cloneCommands(element.Value.(conversationRoute).commands), true
+	return element.Value.(conversationRoute).replyCommand, true
 }
 
-func (r *conversationRoutes) store(conversation ConversationID, commands []*Command) {
+func (r *conversationRoutes) store(conversation ConversationID, replyCommand *Command) {
 	if r.capacity <= 0 {
 		return
 	}
-	commands = cloneCommands(commands)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
@@ -146,11 +140,11 @@ func (r *conversationRoutes) store(conversation ConversationID, commands []*Comm
 		r.lru = list.New()
 	}
 	if element := r.entries[conversation]; element != nil {
-		element.Value = conversationRoute{key: conversation, commands: commands}
+		element.Value = conversationRoute{key: conversation, replyCommand: replyCommand}
 		r.lru.MoveToFront(element)
 		return
 	}
-	element := r.lru.PushFront(conversationRoute{key: conversation, commands: commands})
+	element := r.lru.PushFront(conversationRoute{key: conversation, replyCommand: replyCommand})
 	r.entries[conversation] = element
 	if r.lru.Len() <= r.capacity {
 		return
@@ -160,26 +154,13 @@ func (r *conversationRoutes) store(conversation ConversationID, commands []*Comm
 	r.lru.Remove(oldest)
 }
 
-func cloneCommands(commands []*Command) []*Command {
-	return slices.Clone(commands)
-}
-
-func matchedCommands(parsed *ResolvedInput) []*Command {
-	if parsed == nil {
+func replyCommand(parsed *ResolvedInput) *Command {
+	if parsed == nil || len(parsed.Commands) != 1 {
 		return nil
 	}
-	commands := make([]*Command, 0, len(parsed.Commands))
-	for _, resolved := range parsed.Commands {
-		if resolved.Command != nil {
-			commands = append(commands, resolved.Command)
-		}
-	}
-	return commands
-}
-
-func replyCommands(commands []*Command) *CommandSet {
-	if len(commands) != 1 || commands[0] == nil {
+	command := parsed.Commands[0].Command
+	if command == nil || command.replies == nil {
 		return nil
 	}
-	return commands[0].replies
+	return command
 }

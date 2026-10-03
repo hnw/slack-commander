@@ -28,8 +28,8 @@ func routerRoot(interaction string) *testCommandConfig {
 	return root
 }
 
-func TestConversationRouterCachesOnlyQueuedMatchedRoots(t *testing.T) {
-	root := routerRoot(InteractionOneshot)
+func TestConversationRouterCachesReplyCommandOnlyAfterQueueingRoot(t *testing.T) {
+	root := routerRoot(InteractionCommand)
 	queued := false
 	c := newTestConversationRouter([]*testCommandConfig{root}, nil, func(*CommandInput) bool { return queued }, 2)
 	input := &CommandInput{Text: "run", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
@@ -43,33 +43,52 @@ func TestConversationRouterCachesOnlyQueuedMatchedRoots(t *testing.T) {
 	if result, _ := c.Accept(input); result != AcceptRouted {
 		t.Fatal("root was not queued")
 	}
-	if got, ok := c.routes.lookup(input.ConversationID); !ok || len(got) != 1 || got[0] != c.commands.commands[0] {
-		t.Fatalf("route = %v, %v", got, ok)
-	}
-	got, _ := c.routes.lookup(input.ConversationID)
-	got[0] = nil
-	if retained, _ := c.routes.lookup(input.ConversationID); retained[0] != c.commands.commands[0] {
-		t.Fatalf("lookup command slice aliased cache: %v", retained)
+	if got, ok := c.routes.lookup(input.ConversationID); !ok || got != c.commands.commands[0] {
+		t.Fatalf("route = %v, %v; want reply command", got, ok)
 	}
 }
 
-func TestConversationRoutesCopiesCommandSlices(t *testing.T) {
+func TestConversationRouterCachesNoReplyForOneshotRoot(t *testing.T) {
+	root := routerRoot(InteractionOneshot)
+	router := newTestConversationRouter([]*testCommandConfig{root}, nil, func(*CommandInput) bool { return true }, 1)
+	router.commands.commands[0].replies = nil
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	input := &CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+		t.Fatalf("root Accept() = %v, %v; want routed", result, err)
+	}
+	if got, found := router.routes.lookup(conversation); !found || got != nil {
+		t.Fatalf("oneshot route = (%v,%v), want negative cache", got, found)
+	}
+}
+
+func TestConversationRouterCachesStdinReplyCommand(t *testing.T) {
+	root := routerRoot(InteractionStdin)
+	router := newTestConversationRouter([]*testCommandConfig{root}, nil, func(*CommandInput) bool { return true }, 1)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	input := &CommandInput{Text: "run", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+		t.Fatalf("root Accept() = %v, %v; want routed", result, err)
+	}
+	if got, found := router.routes.lookup(conversation); !found || got != router.commands.commands[0] {
+		t.Fatalf("stdin route = (%v,%v), want stdin reply command", got, found)
+	}
+}
+
+func TestConversationRoutesCachesNegativeResult(t *testing.T) {
 	command := NewCommand(CommandConfig{}, nil, nil)
 	routes := newConversationRoutes(1)
-	input := []*Command{command}
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	if commands, found := routes.lookup(conversation); found || commands != nil {
-		t.Fatalf("cache miss = (%v,%v), want (nil,false)", commands, found)
+	if got, found := routes.lookup(conversation); found || got != nil {
+		t.Fatalf("cache miss = (%v,%v), want (nil,false)", got, found)
 	}
-	routes.store(conversation, input)
-	input[0] = nil
-	got, found := routes.lookup(conversation)
-	if !found || len(got) != 1 || got[0] != command {
-		t.Fatalf("lookup = %v, %v; want stored command", got, found)
+	routes.store(conversation, nil)
+	if got, found := routes.lookup(conversation); !found || got != nil {
+		t.Fatalf("negative cache = (%v,%v), want (nil,true)", got, found)
 	}
-	got[0] = nil
-	if retained, _ := routes.lookup(conversation); retained[0] != command {
-		t.Fatalf("lookup result aliased cache: %v", retained)
+	routes.store(conversation, command)
+	if got, found := routes.lookup(conversation); !found || got != command {
+		t.Fatalf("positive cache = (%v,%v), want stored command", got, found)
 	}
 }
 
@@ -91,14 +110,18 @@ func TestConversationRouterCacheHitDoesNotReResolveRoot(t *testing.T) {
 	}
 }
 
-func TestMatchedCommandsFiltersNilAndPreservesOrderAndDuplicates(t *testing.T) {
+func TestReplyCommandRequiresSingleReplyCapableCommand(t *testing.T) {
 	first := NewCommand(CommandConfig{}, nil, nil)
-	second := NewCommand(CommandConfig{}, nil, nil)
-	got := matchedCommands(&ResolvedInput{Commands: []ResolvedCommand{
-		{Command: first}, {}, {Command: second}, {Command: first},
-	}})
-	if !slices.Equal(got, []*Command{first, second, first}) {
-		t.Fatalf("matchedCommands() = %v", got)
+	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{}, nil, nil)})
+	first.replies = replySet
+	if got := replyCommand(&ResolvedInput{Commands: []ResolvedCommand{{Command: first}}}); got != first {
+		t.Fatalf("replyCommand(single) = %v, want command with replies", got)
+	}
+	if got := replyCommand(&ResolvedInput{Commands: []ResolvedCommand{{Command: first}, {Command: first}}}); got != nil {
+		t.Fatalf("replyCommand(chain) = %v, want nil", got)
+	}
+	if got := replyCommand(&ResolvedInput{Commands: []ResolvedCommand{{}}}); got != nil {
+		t.Fatalf("replyCommand(unmatched) = %v, want nil", got)
 	}
 }
 
@@ -161,7 +184,7 @@ func TestConversationRouterIgnoresReplyWhoseFirstCommandIsUnmatched(t *testing.T
 		return true
 	}, 1)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	router.routes.store(conversation, []*Command{router.commands.commands[0]})
+	router.routes.store(conversation, router.commands.commands[0])
 	result, err := router.Accept(&CommandInput{
 		Text: "unknown ; stop", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1},
 	})
@@ -234,6 +257,28 @@ func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.
 	}
 	if queued == nil || queued.ResolvedInput.Commands[0].Command != replySet.commands[0] {
 		t.Fatalf("thread reply route = %+v, want the ACL-selected root's reply set", queued)
+	}
+}
+
+func TestConversationRouterCachesReplyCommandRestoredFromHistory(t *testing.T) {
+	replySet := NewCommandSet([]*Command{NewCommand(CommandConfig{
+		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+	}, nil, nil)})
+	root := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	}, nil, replySet)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	router := NewConversationRouterWithRootInputResolver(NewCommandSet([]*Command{root}), func(ConversationID) (RootCommandInput, error) {
+		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
+	}, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
+	input := &CommandInput{Text: "stop", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+		t.Fatalf("history reply = %v, %v; want routed", result, err)
+	}
+	if got, found := router.routes.lookup(conversation); !found || got != root {
+		t.Fatalf("history route = (%v,%v), want restored reply command", got, found)
 	}
 }
 
@@ -327,7 +372,6 @@ func TestConversationRouterUsesSameReplyResultForCachedAndRestoredChain(t *testi
 	commands := NewCommandSet([]*Command{first, second})
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rootInput := RootCommandInput{Text: "first ; second", AllowedCommandIndexes: []int{0, 1}}
-	rootCommands := []*Command{first, second}
 	var outcomes []AcceptResult
 	for _, cached := range []bool{true, false} {
 		resolverCalls := 0
@@ -336,7 +380,7 @@ func TestConversationRouterUsesSameReplyResultForCachedAndRestoredChain(t *testi
 			return rootInput, nil
 		}, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
 		if cached {
-			router.routes.store(conversation, rootCommands)
+			router.routes.store(conversation, nil)
 		}
 		result, err := router.Accept(&CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{2}})
 		if err != nil {
@@ -347,8 +391,8 @@ func TestConversationRouterUsesSameReplyResultForCachedAndRestoredChain(t *testi
 			t.Fatalf("cache=%v resolver calls=%d", cached, resolverCalls)
 		}
 		stored, ok := router.routes.lookup(conversation)
-		if !ok || !slices.Equal(stored, rootCommands) {
-			t.Fatalf("cache=%v commands = %v, %v; want both commands", cached, stored, ok)
+		if !ok || stored != nil {
+			t.Fatalf("cache=%v reply command = %v, %v; want negative cache", cached, stored, ok)
 		}
 	}
 	if outcomes[0] != AcceptIgnored || outcomes[1] != outcomes[0] {

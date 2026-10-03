@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,7 +199,7 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 	}
 }
 
-func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
+func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
 	httpCommand := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
@@ -229,8 +228,8 @@ func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 	if got := input.ResolvedInput; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
 		t.Fatalf("ResolvedInput = %#v, want two commands with HTTP first match", got)
 	}
-	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{httpCommand, second}) {
-		t.Fatalf("cached root commands = %v, %v; want both commands in input order", got, ok)
+	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
+		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
 	}
 	reply := &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{0}}
 	if result, err := router.Accept(reply); err != nil || result != AcceptIgnored {
@@ -238,7 +237,7 @@ func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 	}
 }
 
-func TestRootChainCachesMatchedCommandsBeforeTrailingUnknown(t *testing.T) {
+func TestRootChainWithTrailingUnknownCachesNoReplyCommand(t *testing.T) {
 	foo := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "foo"}},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "foo"}},
@@ -252,8 +251,8 @@ func TestRootChainCachesMatchedCommandsBeforeTrailingUnknown(t *testing.T) {
 	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v; want routed", result, err)
 	}
-	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{foo}) {
-		t.Fatalf("cached commands = %v, %v; want matched foo only", got, ok)
+	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
+		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
 	}
 }
 
