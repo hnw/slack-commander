@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -199,7 +200,7 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 	}
 }
 
-func TestMixedRootChainStaysQueuedWithoutCachingOwnership(t *testing.T) {
+func TestMixedRootChainStaysQueuedAndCachesCommands(t *testing.T) {
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
 	httpCommand := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
@@ -228,8 +229,31 @@ func TestMixedRootChainStaysQueuedWithoutCachingOwnership(t *testing.T) {
 	if got := input.ResolvedInput; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
 		t.Fatalf("ResolvedInput = %#v, want two commands with HTTP first match", got)
 	}
-	if _, ok := router.routes.lookup(conversation); ok {
-		t.Fatal("HTTP chain cached root ownership")
+	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{httpCommand, second}) {
+		t.Fatalf("cached root commands = %v, %v; want both commands in input order", got, ok)
+	}
+	reply := &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{0}}
+	if result, err := router.Accept(reply); err != nil || result != AcceptIgnored {
+		t.Fatalf("reply to oneshot chain = %v, %v; want ignored", result, err)
+	}
+}
+
+func TestRootChainCachesMatchedCommandsBeforeTrailingUnknown(t *testing.T) {
+	foo := NewCommand(CommandConfig{
+		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "foo"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "foo"}},
+		ParserConfig: ParserConfig{AllowInChain: true},
+	}, nil, nil)
+	commands := NewCommandSet([]*Command{foo})
+	dispatcher := newTestCommandDispatcher(context.Background(), 10, func(*CommandInput) bool { return true })
+	router := NewConversationRouterWithRootInputResolver(commands, nil, dispatcher, 1)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	input := &CommandInput{Text: "foo ; unknown", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
+	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+		t.Fatalf("Accept() = %v, %v; want routed", result, err)
+	}
+	if got, ok := router.routes.lookup(conversation); !ok || !slices.Equal(got, []*Command{foo}) {
+		t.Fatalf("cached commands = %v, %v; want matched foo only", got, ok)
 	}
 }
 
@@ -464,6 +488,69 @@ func TestDispatcherIgnoresChainsWhoseFirstCommandIsUnmatched(t *testing.T) {
 	dispatcher.Wait()
 	if queueCalls != 0 || len(outputs) != 0 {
 		t.Fatalf("queue calls = %d, outputs = %d; want no dispatch", queueCalls, len(outputs))
+	}
+}
+
+func TestDispatcherEnforcesAllowInChainBeforeDispatch(t *testing.T) {
+	first := NewCommand(CommandConfig{
+		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}},
+		ParserConfig: ParserConfig{AllowInChain: true},
+	}, nil, nil)
+	blocked := NewCommand(CommandConfig{
+		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "blocked"}},
+		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "blocked"}},
+		ParserConfig: ParserConfig{AllowInChain: false},
+	}, nil, nil)
+	set := NewCommandSet([]*Command{first, blocked})
+	for _, tc := range []struct {
+		text string
+		want DispatchResult
+	}{
+		{text: "first ; blocked", want: DispatchIgnored},
+		{text: "first && blocked", want: DispatchIgnored},
+		{text: "first || blocked", want: DispatchIgnored},
+		{text: "blocked ; first", want: DispatchIgnored},
+		{text: "blocked", want: DispatchAccepted},
+		{text: "first ; first", want: DispatchAccepted},
+		{text: "first ; unknown", want: DispatchAccepted},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			queued := false
+			dispatcher := newTestCommandDispatcher(context.Background(), 10, func(*CommandInput) bool {
+				queued = true
+				return true
+			})
+			input := &CommandInput{Text: tc.text, ResolvedInput: set.ResolveInput(tc.text, []int{1, 2})}
+			if got := dispatcher.Dispatch(input); got != tc.want {
+				target, targetOK := input.ResolvedInput.DispatchTarget()
+				t.Fatalf("Dispatch() = %v, want %v; resolved=%#v target=(%v,%v)", got, tc.want, input.ResolvedInput, target, targetOK)
+			}
+			if queued != (tc.want == DispatchAccepted) {
+				t.Fatalf("queued = %v, want accepted=%v", queued, tc.want == DispatchAccepted)
+			}
+		})
+	}
+}
+
+func TestDispatcherReportsParseErrorBeforeChainPolicy(t *testing.T) {
+	command := NewCommand(CommandConfig{
+		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
+		ParserConfig: ParserConfig{AllowInChain: false},
+	}, nil, nil)
+	outputs := make(chan *CommandOutput, 1)
+	dispatcher := NewCommandDispatcher(context.Background(), nil, outputs, &StdinStore{}, &ConversationLocks{}, nil)
+	input := &CommandInput{ResolvedInput: &ResolvedInput{
+		Commands: []ResolvedCommand{{Command: command}, {Command: command}},
+		ParseErr: errors.New("parse failure"),
+	}}
+	if got := dispatcher.Dispatch(input); got != DispatchAccepted {
+		t.Fatalf("Dispatch() = %v, want parse error accepted", got)
+	}
+	dispatcher.Close()
+	dispatcher.Wait()
+	if output := <-outputs; output.Text != "parse failure" {
+		t.Fatalf("parse error output = %q", output.Text)
 	}
 }
 

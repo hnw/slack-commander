@@ -84,9 +84,6 @@ func (e *Executor) Execute(
 	if len(cmds) == 0 {
 		return
 	}
-	if len(cmds) > 1 && !allCommandsAllowedInChain(cmds) {
-		return
-	}
 	command := cmds[0].Command
 	if command != nil && command.config.InputBodyMode == InputBodyArgument {
 		if stdinText != "" {
@@ -108,18 +105,6 @@ func (e *Executor) Execute(
 		e.outputQueue,
 		inputLifecycle,
 	)
-}
-
-func allCommandsAllowedInChain(commands []ResolvedCommand) bool {
-	for _, resolved := range commands {
-		if resolved.Command == nil {
-			continue
-		}
-		if !resolved.Command.config.AllowInChain {
-			return false
-		}
-	}
-	return true
 }
 
 func splitCommandInput(text string) (string, string) {

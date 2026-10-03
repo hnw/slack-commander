@@ -23,12 +23,12 @@ flowchart TD
 
 Resolverは入力をparseしてpartごとにcommandを照合します。parse errorがある場合はDispatcherが実行経路を選ぶ前にerrorをoutputQueueへ送り、先頭partがunmatchedなら従来どおり無出力で終了します。
 parse errorは`SystemReplyConfig`付きの`CommandOutput`として`ExitCode=2`で送られます。実行前の入力エラーなので`Spawned`と`Finished`は出しません。
-各commandの`CommandConfig.Dispatch`は`DispatchMode`（`DispatchQueue`、`DispatchExecutor`、`DispatchRunner`）で実行方法を示し、`DispatchQueue`はゼロ値です。`ResolvedInput.DispatchTarget()`はmatched commandの値を同じ`DispatchMode`型のまま集約し、Dispatcherはその結果だけを見て経路を選びます。matched commandが存在しない場合や有効なdispatch先を決定できない場合は、dispatch先なしとして扱います。
-Routerはcommandの照合とroot ownershipのキャッシュを担当し、Dispatcherが解決済み入力のpolicyから実行経路を選びます。
+各commandの`CommandConfig.Dispatch`は`DispatchMode`（`DispatchQueue`、`DispatchExecutor`、`DispatchRunner`）で実行方法を示し、`DispatchQueue`はゼロ値です。Dispatcherは先頭partの一致とparse errorを確認し、parse errorがない複数part入力では全matched commandの`AllowInChain`を確認してから`ResolvedInput.DispatchTarget()`で実行経路を決めます。後続partの未一致はExecutorでcommand not foundとして扱います。`DispatchRunner`の複数part制約も維持します。
+Routerはrootで一致したCommand列をroute cacheへ保存します。historyからrootを復元した場合も一度だけ`ResolveInput()`を行って同じCommand列を作り、cache hitと同じreply判定へ進みます。cache内のCommandが1つの場合だけそのreply command setを使い、複数の場合はreply command setを選びません。DispatcherとRouterのroot資格判定は同じ副作用なし実行計画を使います。
 通常のcommand executionは必ずExecutorを通します。DispatcherはExecutorへ渡す方法として、worker queueを経由する`DispatchQueue`と、queueを使わない`DispatchExecutor`を選びます。
 exec / composeを含む入力は`DispatchQueue`でworker poolへ送ります。HTTPだけで構成された入力は、単一commandでもchainでも全体を1回のExecutor呼び出しとして非同期実行し、通常のcommandQueueが満杯でも受理します。
 stdin replyは既存executionへの入力配送でcommand executionではないため、`DispatchRunner`としてExecutorを介さずrunnerへ直接渡します。
-Executorはresolve済みcommand / chainの実行だけを担当し、parse errorを出力しません。
+ExecutorはDispatcherが受理したresolve済みcommand / chainの実行だけを担当し、parse errorを出力せず、`AllowInChain`の判定も行いません。
 
 workerと`DispatchExecutor`のgoroutineは同じConversationLocksとExecutorを使います。
 異なるconversationのHTTPはworker数に関係なく並列実行できますが、同じconversationのcommand実行は直列です。
