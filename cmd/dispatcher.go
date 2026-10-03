@@ -58,15 +58,12 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		return DispatchIgnored
 	}
 	parsed := input.ResolvedInput
-	if parsed == nil {
+	target, ok, parseErr := dispatchPlan(parsed)
+	if !ok {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
-	if len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
-		d.mu.Unlock()
-		return DispatchIgnored
-	}
-	if parsed.ParseErr != nil {
+	if parseErr {
 		output := &CommandOutput{
 			ReplyConfig:    parsed.Commands[0].Command.config.SystemReplyConfig,
 			ConversationID: input.ConversationID,
@@ -82,11 +79,6 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		}()
 		d.mu.Unlock()
 		return DispatchAccepted
-	}
-	target, ok := parsed.DispatchTarget()
-	if !ok {
-		d.mu.Unlock()
-		return DispatchIgnored
 	}
 	switch target {
 	case DispatchRunner:
@@ -108,6 +100,34 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
+}
+
+func dispatchPlan(parsed *ResolvedInput) (target DispatchMode, accepted bool, parseError bool) {
+	if parsed == nil || len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
+		return 0, false, false
+	}
+	if parsed.ParseErr != nil {
+		return 0, true, true
+	}
+	if len(parsed.Commands) > 1 && !allCommandsAllowedInChain(parsed.Commands) {
+		return 0, false, false
+	}
+	target, ok := parsed.DispatchTarget()
+	return target, ok, false
+}
+
+func resolvedInputExecutable(parsed *ResolvedInput) bool {
+	_, ok, parseErr := dispatchPlan(parsed)
+	return ok && !parseErr
+}
+
+func allCommandsAllowedInChain(commands []ResolvedCommand) bool {
+	for _, resolved := range commands {
+		if resolved.Command != nil && !resolved.Command.config.AllowInChain {
+			return false
+		}
+	}
+	return true
 }
 
 // Close prevents subsequent dispatches from accepting new work.

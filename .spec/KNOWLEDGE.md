@@ -9,7 +9,7 @@
 - `ConversationID` は transport 固有の thread 型ではなく、継続した command interaction を識別する単位とする。Slack では channel ID + root timestamp に対応する。
 - conversation 単位の責務を `ConversationRouter`（root/reply routing と route cache）、stdin reply runner（active endpoint への直接配送）、`StdinStore`（active stdin endpoint と lifecycle）、`ConversationLocks`（command 実行の直列化）へ分ける。main で各 instance を生成し、全 worker が同じ Store と Locks を使う。worker は Lock の unlock 関数を defer し、Executor は直列化を担当しない。
 - stdin endpoint は runner が実際の writer を渡した後にだけ公開し、古い endpoint の close は後から登録された endpoint を削除しない。stdin返信は他のCommandと同じ `CommandRunner` / `Cmd` を通し、`CommandDispatcher` が集約された `DispatchMode` に従ってrunnerを直接実行する。ConversationIDはstdin runnerがendpointを特定するruntime引数として渡す。
-- `ConversationRouter` は照合とroot ownership cacheを管理し、`ResolvedInput.DispatchTarget()` がmatch済みcommandの実行経路を集約する。`CommandDispatcher` は集約結果だけで実行先を選び、HTTPだけのchainもworker外で全体を一度だけ共有Executorへ渡す。exec / composeを含むchainはqueueを使う。両経路で同じConversationLocks、outputQueue、SlackWriterを共有する。
+- `ConversationRouter` はrootで一致したCommand列を入力順にcacheする。live受付とhistory復元はそれぞれ一度 `ResolveInput` して同じCommand列を作り、その後のreply判定を共通化する。cache hitではrootを再parseしない。`CommandDispatcher` はparse error処理後にchain可否を判定し、`ResolvedInput.DispatchTarget()` がmatch済みcommandの実行経路を集約する。HTTPだけのchainもworker外で全体を一度だけ共有Executorへ渡し、exec / composeを含むchainはqueueを使う。両経路で同じConversationLocks、outputQueue、SlackWriterを共有する。
 - `CommandConfig.Dispatch` は各commandの実行経路を `DispatchMode`（Queue / Executor / Runner）で保持する。ゼロ値は通常のQueueであり、NoneやInvalidを持たない。設定解決時にexec / composeはQueue、HTTPはExecutor、stdin replyはRunnerを明示する。入力全体の実行経路も同じ `DispatchMode` 型で表す。
 - `ResolveInput` はparse / matchを行い、`ResolvedInput.DispatchTarget()` はparse errorを考慮せずmatch済みcommandの `DispatchMode` を集約する。未matchは集約対象から除外し、match済みcommandがなければdispatch先なしとして返す。Queueを優先し、Runnerは既存executionへのstdin配送専用で、複数partに含まれた場合は拒否する。
 - parse errorはexecution前の入力エラーとしてDispatcher入口で共有outputQueueへ送り、Executorへ渡さない。最初のpartがmatch済みの場合だけ、同commandのSystemReplyConfigと入力のConversationID / MessageIDで表示する。`Spawned` / `Finished`は付けず、エラー出力のExitCodeを2とする。DispatcherのClose / Waitはこの出力配送も管理する。Executorはparse済み・resolve済みcommand / chainの実行だけを担当する。
@@ -23,6 +23,8 @@
 - `accept_reminder`はcommand/reply専用で既定false、継承しない。Reminderはuser allowlistを免除するがchannel allowlistは適用する。bot投稿はBot IDを通常のsender IDとして評価し、自身のuser IDまたはBot IDからの投稿は常に無視する。
 - stdin返信は独立したglobal command indexを持つ`*` replyとして照合し、root commandのresolved ACLを複製する。Listenerはroot候補とreply候補を分け、stdin runnerが返信本文全体を既存endpointへ渡す。explicit replyの`accept_reminder`は引き続き継承しない。
 - ADR候補: raw返信照合を `InputBodyRawStdin` で表す。今回の明示指示に基づく。可逆な内部構造変更のため独立ADRは見送る。
+- Dispatcherの副作用なし判定をlive受付とhistory復元のroot資格確認にも使い、liveで拒否されるchainがhistory復元経由で返信を受理することを防ぐ。parse error出力を受理したrootはlive cacheへ保存しない。historyの未一致・不正rootはnilのCommand sliceとしてnegative cacheし、繰り返し問い合わせを避ける。
+- ADR候補: ユーザーの修正仕様により、root本文とACL候補の保存・再解決から、一致したCommand列のcacheへ変更する。rootで一致したCommandの順序を保持したまま不要な再parseを省くため。sliceはcache境界でコピーし、runtime Command pointerは共有する。永続化・公開API・設定契約を変更しない可逆な内部変更のため独立ADRは見送る。command / stdin interactionの `AllowInChain=false` を維持し、chainの返信先選択規則は追加しない。
 
 ## 既知の境界上の課題
 

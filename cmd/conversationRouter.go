@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"container/list"
+	"slices"
 	"sync"
 )
 
@@ -49,41 +50,46 @@ func (r *ConversationRouter) Accept(input *CommandInput) (AcceptResult, error) {
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 	input.ResolvedInput = r.commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
-	root := input.ResolvedInput.SingleCommand()
 	result := r.acceptDispatchResult(r.dispatcher.Dispatch(input))
 	if result != AcceptRouted {
 		return result
 	}
-	if root != nil {
-		r.routes.store(input.ConversationID, root)
+	if resolvedInputExecutable(input.ResolvedInput) {
+		r.routes.store(input.ConversationID, matchedCommands(input.ResolvedInput))
 	}
 	return AcceptRouted
 }
 
 func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResult, error) {
-	root, found := r.routes.lookup(input.ConversationID)
+	rootCommands, found := r.routes.lookup(input.ConversationID)
 	if !found {
 		if r.resolveRootInput == nil {
 			return AcceptIgnored, nil
 		}
-		var err error
-		root, err = r.resolveRootCommand(input.ConversationID)
+		rootInput, err := r.resolveRootInput(input.ConversationID)
 		if err != nil {
 			return AcceptIgnored, err
 		}
-		r.routes.store(input.ConversationID, root)
+		root := r.commands.ResolveInput(rootInput.Text, rootInput.AllowedCommandIndexes)
+		if !resolvedInputExecutable(root) {
+			r.routes.store(input.ConversationID, nil)
+			return AcceptIgnored, nil
+		}
+		rootCommands = matchedCommands(root)
+		r.routes.store(input.ConversationID, rootCommands)
 	}
-	if root == nil {
+	if rootCommands == nil {
 		return AcceptIgnored, nil
 	}
-	return r.routeThreadReply(root, input)
+	return r.routeThreadReply(rootCommands, input)
 }
 
-func (r *ConversationRouter) routeThreadReply(root *Command, input *CommandInput) (AcceptResult, error) {
-	if root.replies == nil {
+func (r *ConversationRouter) routeThreadReply(root []*Command, input *CommandInput) (AcceptResult, error) {
+	replies := replyCommands(root)
+	if replies == nil {
 		return AcceptIgnored, nil
 	}
-	input.ResolvedInput = root.replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.ResolvedInput = replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
 	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
 }
 
@@ -98,18 +104,6 @@ func (r *ConversationRouter) acceptDispatchResult(result DispatchResult) AcceptR
 	}
 }
 
-func (r *ConversationRouter) resolveRootCommand(conversation ConversationID) (*Command, error) {
-	if r.resolveRootInput == nil {
-		return nil, nil
-	}
-	resolved, err := r.resolveRootInput(conversation)
-	if err != nil {
-		return nil, err
-	}
-	parsed := r.commands.ResolveInput(resolved.Text, resolved.AllowedCommandIndexes)
-	return parsed.SingleCommand(), nil
-}
-
 type conversationRoutes struct {
 	mu       sync.Mutex
 	capacity int
@@ -118,15 +112,15 @@ type conversationRoutes struct {
 }
 
 type conversationRoute struct {
-	key     ConversationID
-	command *Command
+	key      ConversationID
+	commands []*Command
 }
 
 func newConversationRoutes(capacity int) *conversationRoutes {
 	return &conversationRoutes{capacity: capacity}
 }
 
-func (r *conversationRoutes) lookup(conversation ConversationID) (*Command, bool) {
+func (r *conversationRoutes) lookup(conversation ConversationID) ([]*Command, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
@@ -137,13 +131,14 @@ func (r *conversationRoutes) lookup(conversation ConversationID) (*Command, bool
 		return nil, false
 	}
 	r.lru.MoveToFront(element)
-	return element.Value.(conversationRoute).command, true
+	return cloneCommands(element.Value.(conversationRoute).commands), true
 }
 
-func (r *conversationRoutes) store(conversation ConversationID, command *Command) {
+func (r *conversationRoutes) store(conversation ConversationID, commands []*Command) {
 	if r.capacity <= 0 {
 		return
 	}
+	commands = cloneCommands(commands)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
@@ -151,11 +146,11 @@ func (r *conversationRoutes) store(conversation ConversationID, command *Command
 		r.lru = list.New()
 	}
 	if element := r.entries[conversation]; element != nil {
-		element.Value = conversationRoute{key: conversation, command: command}
+		element.Value = conversationRoute{key: conversation, commands: commands}
 		r.lru.MoveToFront(element)
 		return
 	}
-	element := r.lru.PushFront(conversationRoute{key: conversation, command: command})
+	element := r.lru.PushFront(conversationRoute{key: conversation, commands: commands})
 	r.entries[conversation] = element
 	if r.lru.Len() <= r.capacity {
 		return
@@ -163,4 +158,28 @@ func (r *conversationRoutes) store(conversation ConversationID, command *Command
 	oldest := r.lru.Back()
 	delete(r.entries, oldest.Value.(conversationRoute).key)
 	r.lru.Remove(oldest)
+}
+
+func cloneCommands(commands []*Command) []*Command {
+	return slices.Clone(commands)
+}
+
+func matchedCommands(parsed *ResolvedInput) []*Command {
+	if parsed == nil {
+		return nil
+	}
+	commands := make([]*Command, 0, len(parsed.Commands))
+	for _, resolved := range parsed.Commands {
+		if resolved.Command != nil {
+			commands = append(commands, resolved.Command)
+		}
+	}
+	return commands
+}
+
+func replyCommands(commands []*Command) *CommandSet {
+	if len(commands) != 1 || commands[0] == nil {
+		return nil
+	}
+	return commands[0].replies
 }

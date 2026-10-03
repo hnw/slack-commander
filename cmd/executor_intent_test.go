@@ -263,63 +263,54 @@ func TestExecutorArgumentBodyPassesToHTTPOnlyForTrailingWildcard(t *testing.T) {
 	}
 }
 
-func TestExecutorRejectsChainsContainingDisallowedCommand(t *testing.T) {
-	newConfig := func(keyword string, allowInChain bool) *testCommandConfig {
-		config := newTestCommandConfig(&testExecutionConfig{Keyword: keyword, Command: keyword, AllowInChain: allowInChain})
-		return config
-	}
+func TestExecutorExecutesCommandChains(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		configs   []*testCommandConfig
-		wantCalls int
+		wantCalls []string
 	}{
 		{
-			name: "oneshot chain executes", input: "first ; second", wantCalls: 2,
-			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
+			name:      "semicolon executes both commands",
+			input:     "first ; second",
+			wantCalls: []string{"first", "second"},
 		},
 		{
-			name: "|| skips second command after success", input: "first || second", wantCalls: 1,
-			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", true)},
+			name:      "and executes second command after success",
+			input:     "first && second",
+			wantCalls: []string{"first", "second"},
 		},
 		{
-			name: "|| still rejects a disallowed skipped command", input: "first || second", wantCalls: 0,
-			configs: []*testCommandConfig{newConfig("first", true), newConfig("second", false)},
-		},
-		{
-			name: "stdin chain rejects", input: "stdin-first ; stdin-second",
-			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("stdin-second", false)},
-		},
-		{
-			name: "command chain rejects", input: "command-first ; command-second",
-			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("command-second", false)},
-		},
-		{
-			name: "oneshot then stdin rejects", input: "first ; stdin-second",
-			configs: []*testCommandConfig{newConfig("first", true), newConfig("stdin-second", false)},
-		},
-		{
-			name: "oneshot then command rejects", input: "first ; command-second",
-			configs: []*testCommandConfig{newConfig("first", true), newConfig("command-second", false)},
-		},
-		{
-			name: "stdin then oneshot rejects", input: "stdin-first ; second",
-			configs: []*testCommandConfig{newConfig("stdin-first", false), newConfig("second", true)},
-		},
-		{
-			name: "command then oneshot rejects", input: "command-first ; second",
-			configs: []*testCommandConfig{newConfig("command-first", false), newConfig("second", true)},
+			name:      "or skips second command after success",
+			input:     "first || second",
+			wantCalls: []string{"first"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for i, config := range tt.configs {
-				config.Index = i
+			configs := []*testCommandConfig{
+				newTestCommandConfig(&testExecutionConfig{
+					Index:        0,
+					Keyword:      "first",
+					Command:      "first",
+					AllowInChain: true,
+				}),
+				newTestCommandConfig(&testExecutionConfig{
+					Index:        1,
+					Keyword:      "second",
+					Command:      "second",
+					AllowInChain: true,
+				}),
 			}
-			calls, _ := runExecutorOnce(t, tt.input, tt.configs, []int{0, 1})
-			if len(calls) != tt.wantCalls {
-				t.Fatalf("calls = %#v, want %d", calls, tt.wantCalls)
+
+			calls, _ := runExecutorOnce(t, tt.input, configs, []int{0, 1})
+
+			got := make([]string, 0, len(calls))
+			for _, call := range calls {
+				got = append(got, call.name)
+			}
+			if !slices.Equal(got, tt.wantCalls) {
+				t.Fatalf("calls = %v, want %v", got, tt.wantCalls)
 			}
 		})
 	}
@@ -390,7 +381,6 @@ func TestExecutorIntentDetection(t *testing.T) {
 func TestExecutorInputBodyModes(t *testing.T) {
 	tests := []struct {
 		name          string
-		allowInChain  bool
 		inputBodyMode InputBodyMode
 		input         string
 		wantArgs      []string
@@ -401,15 +391,14 @@ func TestExecutorInputBodyModes(t *testing.T) {
 		{name: "argument body after quoted command", input: "todo \"foo bar\"\nbaz\n", wantArgs: []string{"foo bar", "\nbaz\n"}, wantCalls: 1, inputBodyMode: InputBodyArgument},
 		{name: "argument body preserves blank lines", input: "todo\n\n", wantArgs: []string{"\n\n"}, wantCalls: 1, inputBodyMode: InputBodyArgument},
 		{name: "argument body ignores empty input", input: "todo\n", wantArgs: nil, wantCalls: 1, inputBodyMode: InputBodyArgument},
-		{name: "argument body rejects chains", input: "todo one && todo two", wantCalls: 0, inputBodyMode: InputBodyArgument},
-		{name: "disallowed chain rejects", input: "todo one && todo two", wantCalls: 0, inputBodyMode: InputBodyStdin},
-		{name: "allowed chain executes", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2, allowInChain: true, inputBodyMode: InputBodyStdin},
+		{name: "argument body chain execution", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2, inputBodyMode: InputBodyArgument},
+		{name: "stdin body chain execution", input: "todo one && todo two", wantArgs: []string{"one"}, wantCalls: 2, inputBodyMode: InputBodyStdin},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestCommandConfig(&testExecutionConfig{Keyword: "todo *", Command: "todo *"})
-			config.AllowInChain = tt.allowInChain
+			config.AllowInChain = true
 			config.InputBodyMode = tt.inputBodyMode
 			calls, _ := runExecutorOnce(t, tt.input, []*testCommandConfig{config}, []int{0})
 			if len(calls) != tt.wantCalls {

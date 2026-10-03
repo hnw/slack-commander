@@ -245,7 +245,25 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 			}
 			commandSet := cmd.NewCommandSet(commands)
 			executor := cmd.NewExecutor(make(chan *cmd.CommandOutput, 20))
-			executor.Execute(context.Background(), &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed, ResolvedInput: commandSet.ResolveInput(tt.text, tt.allowed)}, nil)
+			var queued *cmd.CommandInput
+			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, make(chan *cmd.CommandOutput, 20), &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+				queued = input
+				return true
+			})
+			defer func() { dispatcher.Close(); dispatcher.Wait() }()
+			input := &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed}
+			input.ResolvedInput = commandSet.ResolveInput(tt.text, tt.allowed)
+			result := dispatcher.Dispatch(input)
+			if len(tt.want) == 0 {
+				if result != cmd.DispatchIgnored || queued != nil {
+					t.Fatalf("Dispatch() = %v, queued=%p; want ignored", result, queued)
+				}
+			} else if result != cmd.DispatchAccepted || queued != input {
+				t.Fatalf("Dispatch() = %v, queued=%p; want accepted input", result, queued)
+			}
+			if queued != nil {
+				executor.Execute(context.Background(), queued, nil)
+			}
 			if !slices.Equal(runner.calls, tt.want) {
 				t.Fatalf("executed = %v, want %v", runner.calls, tt.want)
 			}
