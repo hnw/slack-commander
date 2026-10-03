@@ -62,11 +62,11 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
+	if len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
 	if parsed.ParseErr != nil {
-		if len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
-			d.mu.Unlock()
-			return DispatchIgnored
-		}
 		output := &CommandOutput{
 			ReplyConfig:    parsed.Commands[0].Command.config.SystemReplyConfig,
 			ConversationID: input.ConversationID,
@@ -89,9 +89,6 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		return DispatchIgnored
 	}
 	switch target {
-	case DispatchNone:
-		d.mu.Unlock()
-		return DispatchIgnored
 	case DispatchRunner:
 		command, args := parsed.Commands[0].Command, parsed.Commands[0].Args
 		d.mu.Unlock()

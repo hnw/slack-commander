@@ -29,7 +29,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	stdinStore := &cmd.StdinStore{}
-	stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}}, Dispatch: cmd.CommandDispatchRunner}, cmd.NewStdinReplyRunner(stdinStore), nil)
+	stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}}, Dispatch: cmd.DispatchRunner}, cmd.NewStdinReplyRunner(stdinStore), nil)
 	root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "agent"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	var queuedCount atomic.Int64

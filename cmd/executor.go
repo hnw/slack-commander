@@ -162,10 +162,6 @@ func executeCommands(
 		ret = -1
 		command, args := resolved.Command, resolved.Args
 		if command == nil {
-			if i == 0 {
-				// キーワードにマッチしなかったらparse errorがあっても表示せず終了
-				return 0
-			}
 			ret = writeCommandNotFound(wq, input, resolved.Part)
 			continue
 		}
