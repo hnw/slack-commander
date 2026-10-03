@@ -56,7 +56,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		Index:         0,
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
 		RunnerConfig:  httpConfig,
-		Dispatch:      cmd.CommandDispatchExecutor,
+		Dispatch:      cmd.DispatchExecutor,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
 	executor := cmd.NewExecutor(outputs)
@@ -131,13 +131,13 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		dispatch  cmd.CommandDispatch
+		dispatch  cmd.DispatchMode
 		rootTS    string
 		msgTS     string
 		broadcast bool
 	}{
-		{name: "root", dispatch: cmd.CommandDispatchQueue, rootTS: "1700000000.000100", msgTS: "1700000000.000100"},
-		{name: "reply", dispatch: cmd.CommandDispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
+		{name: "root", dispatch: cmd.DispatchQueue, rootTS: "1700000000.000100", msgTS: "1700000000.000100"},
+		{name: "reply", dispatch: cmd.DispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			type slackRequest struct {

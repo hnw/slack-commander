@@ -38,9 +38,9 @@ func newTestCommandConfig(config *testExecutionConfig) *testCommandConfig {
 }
 
 func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Command {
-	dispatch := CommandDispatchQueue
+	dispatch := DispatchQueue
 	if config.Runner == RunnerHTTP {
-		dispatch = CommandDispatchExecutor
+		dispatch = DispatchExecutor
 	}
 	return NewCommand(
 		CommandConfig{
@@ -80,7 +80,7 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
 				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-				Dispatch:      CommandDispatchRunner,
+				Dispatch:      DispatchRunner,
 			}, NewStdinReplyRunner(&StdinStore{}), nil))
 		}
 		command := testRuntimeCommand(definition, runner)

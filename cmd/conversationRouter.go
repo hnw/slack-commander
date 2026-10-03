@@ -84,9 +84,6 @@ func (r *ConversationRouter) routeThreadReply(root *Command, input *CommandInput
 		return AcceptIgnored, nil
 	}
 	input.ResolvedInput = root.replies.ResolveInput(input.Text, input.AllowedCommandIndexes)
-	if len(input.ResolvedInput.Commands) == 0 || input.ResolvedInput.Commands[0].Command == nil {
-		return AcceptIgnored, nil
-	}
 	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
 }
 

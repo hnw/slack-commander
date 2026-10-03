@@ -184,7 +184,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 			ParserConfig:   replyParserConfig,
 			RunnerConfig:   cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
 			ExecutorConfig: executorConfig,
-			Dispatch:       cmd.CommandDispatchRunner,
+			Dispatch:       cmd.DispatchRunner,
 		}}
 	}
 	return config, nil
@@ -221,11 +221,11 @@ func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawCommandConfig)
 	return &cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parent.ParserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast), Dispatch: commandDispatch(runnerConfig.Runner)}, nil
 }
 
-func commandDispatch(runner string) cmd.CommandDispatch {
+func commandDispatch(runner string) cmd.DispatchMode {
 	if runner == cmd.RunnerHTTP {
-		return cmd.CommandDispatchExecutor
+		return cmd.DispatchExecutor
 	}
-	return cmd.CommandDispatchQueue
+	return cmd.DispatchQueue
 }
 
 func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {

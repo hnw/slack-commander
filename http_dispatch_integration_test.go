@@ -30,7 +30,7 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}},
 		RunnerConfig:  httpConfig,
 		ParserConfig:  cmd.ParserConfig{AllowInChain: true},
-		Dispatch:      cmd.CommandDispatchExecutor,
+		Dispatch:      cmd.DispatchExecutor,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	echoCommand := cmd.NewCommand(cmd.CommandConfig{
 		Index:         1,
@@ -114,7 +114,7 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
 	httpCommand := cmd.NewCommand(cmd.CommandConfig{
 		Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}},
-		RunnerConfig: httpConfig, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.CommandDispatchExecutor,
+		RunnerConfig: httpConfig, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.DispatchExecutor,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	queuedStarted, queuedRelease := make(chan struct{}, 1), make(chan struct{})
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{
@@ -271,7 +271,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	locks := &cmd.ConversationLocks{}
 	outputs := make(chan *cmd.CommandOutput, 30)
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}, RunnerConfig: httpConfig, Dispatch: cmd.CommandDispatchExecutor}, cmd.NewHTTPRunner(httpConfig), nil)
+	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}, RunnerConfig: httpConfig, Dispatch: cmd.DispatchExecutor}, cmd.NewHTTPRunner(httpConfig), nil)
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}))
 	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
 	requests := make(chan *cmd.CommandInput, 10)

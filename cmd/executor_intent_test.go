@@ -380,7 +380,7 @@ func TestExecutorIntentDetection(t *testing.T) {
 		"ignore casual message starting with prefix of valid command",
 		testExecutorIgnoreCasualMessageStartingWithPrefix,
 	)
-	t.Run("ignore casual message with semicolon", testExecutorIgnoreCasualMessageWithSemicolon)
+	t.Run("report errors for unmatched commands", testExecutorReportsErrorsForUnmatchedCommands)
 	t.Run(
 		"execute valid command and show error for invalid subsequent command",
 		testExecutorExecuteValidThenInvalidCommand,
@@ -613,14 +613,25 @@ func testExecutorIgnoreCasualMessageStartingWithPrefix(t *testing.T) {
 	}
 }
 
-func testExecutorIgnoreCasualMessageWithSemicolon(t *testing.T) {
+func testExecutorReportsErrorsForUnmatchedCommands(t *testing.T) {
 	t.Helper()
+
 	calls, outputs := runExecutorOnce(t, "x ; y", testCommandConfigs(), []int{0, 1, 2})
 	if len(calls) != 0 {
 		t.Fatalf("expected no calls, got %d", len(calls))
 	}
-	if len(outputs) != 0 {
-		t.Fatalf("expected no outputs, got %d", len(outputs))
+
+	var errText string
+	for _, out := range outputs {
+		if out.IsErrOut {
+			errText += out.Text
+		}
+	}
+	if !strings.Contains(errText, "x") {
+		t.Fatalf("expected error output for command 'x', got %q", errText)
+	}
+	if !strings.Contains(errText, "y") {
+		t.Fatalf("expected error output for command 'y', got %q", errText)
 	}
 }
 

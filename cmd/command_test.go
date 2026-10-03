@@ -90,19 +90,19 @@ func TestResolveInputKeepsUnmatchedChainPosition(t *testing.T) {
 }
 
 func TestResolvedInputDispatchTarget(t *testing.T) {
-	if CommandDispatchQueue != 0 {
-		t.Fatalf("CommandDispatchQueue = %d, want zero value", CommandDispatchQueue)
+	if DispatchQueue != 0 {
+		t.Fatalf("DispatchQueue = %d, want zero value", DispatchQueue)
 	}
-	queue := NewCommand(CommandConfig{Dispatch: CommandDispatchQueue}, nil, nil)
-	executor := NewCommand(CommandConfig{Dispatch: CommandDispatchExecutor}, nil, nil)
-	runner := NewCommand(CommandConfig{Dispatch: CommandDispatchRunner}, nil, nil)
+	queue := NewCommand(CommandConfig{Dispatch: DispatchQueue}, nil, nil)
+	executor := NewCommand(CommandConfig{Dispatch: DispatchExecutor}, nil, nil)
+	runner := NewCommand(CommandConfig{Dispatch: DispatchRunner}, nil, nil)
 	for _, tc := range []struct {
 		name   string
 		input  *ResolvedInput
-		want   DispatchTarget
+		want   DispatchMode
 		wantOK bool
 	}{
-		{name: "empty", input: &ResolvedInput{}, want: DispatchNone, wantOK: true},
+		{name: "empty", input: &ResolvedInput{}},
 		{name: "single queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}}}, want: DispatchQueue, wantOK: true},
 		{name: "single executor", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}}}, want: DispatchExecutor, wantOK: true},
 		{name: "executor chain", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}, {Command: executor}}}, want: DispatchExecutor, wantOK: true},
@@ -116,7 +116,7 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 		{name: "runner mixed", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {Command: queue}}}},
 		{name: "runner with unmatched", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {}}}},
 		{name: "unmatched with runner", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {Command: runner}}}},
-		{name: "unmatched only", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {}}}, want: DispatchNone, wantOK: true},
+		{name: "unmatched only", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {}}}},
 		{name: "zero dispatch is queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{}, nil, nil)}}}, want: DispatchQueue, wantOK: true},
 		{name: "unknown dispatch invalid", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{Dispatch: 99}, nil, nil)}}}},
 		{name: "queue and executor", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}, {Command: executor}}}, want: DispatchQueue, wantOK: true},
@@ -125,7 +125,7 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := tc.input.DispatchTarget()
-			if got != tc.want || ok != tc.wantOK {
+			if ok != tc.wantOK || (ok && got != tc.want) {
 				t.Fatalf("DispatchTarget() = (%v, %v), want (%v, %v)", got, ok, tc.want, tc.wantOK)
 			}
 		})

@@ -98,6 +98,24 @@ func TestConversationRouterDoesNotCacheRootWithParseError(t *testing.T) {
 	}
 }
 
+func TestConversationRouterIgnoresReplyWhoseFirstCommandIsUnmatched(t *testing.T) {
+	rootConfig := routerRoot(InteractionOneshot)
+	rootConfig.Replies = []*testCommandConfig{newTestCommandConfig(&testExecutionConfig{Index: 1, Keyword: "stop", Command: "stop", AllowInChain: true})}
+	queued := false
+	router := newTestConversationRouter([]*testCommandConfig{rootConfig}, nil, func(*CommandInput) bool {
+		queued = true
+		return true
+	}, 1)
+	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	router.routes.store(conversation, router.commands.commands[0])
+	result, err := router.Accept(&CommandInput{
+		Text: "unknown ; stop", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1},
+	})
+	if err != nil || result != AcceptIgnored || queued {
+		t.Fatalf("reply Accept() = %v, %v, queued=%v; want ignored without queueing", result, err, queued)
+	}
+}
+
 func TestConversationRouterRestoresRawRootWithTheSameParseMode(t *testing.T) {
 	text := "raw root && \"unfinished\n  payload"
 	if _, err := parseCommands("raw root && \"unfinished"); err == nil {
@@ -364,7 +382,7 @@ func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
 		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 		ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
 		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-		Dispatch:      CommandDispatchRunner,
+		Dispatch:      DispatchRunner,
 	}, NewStdinReplyRunner(store), nil)
 	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{stdinReply}))
 	queued := 0
@@ -416,7 +434,7 @@ func TestRouterDirectRootRunsWithWholeRawInput(t *testing.T) {
 	command := NewCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "capture original"}},
-		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin}, Dispatch: CommandDispatchRunner,
+		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin}, Dispatch: DispatchRunner,
 	}, runner, nil)
 	commands := NewCommandSet([]*Command{command})
 	queued := false
@@ -478,7 +496,7 @@ func TestDispatcherIgnoresFailedDirectReply(t *testing.T) {
 		Index:         1,
 		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
 		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
-		Dispatch:      CommandDispatchRunner,
+		Dispatch:      DispatchRunner,
 	}, dispatcherExitCodeRunner(1), nil)
 	root := NewCommand(CommandConfig{
 		Index:         0,
@@ -509,7 +527,7 @@ func TestHTTPReplyUsesExecutorOutputPipeline(t *testing.T) {
 		Index:         1,
 		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}},
 		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*"}},
-		Dispatch:      CommandDispatchExecutor,
+		Dispatch:      DispatchExecutor,
 		ReplyConfig:   "reply",
 	}, NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*"}}), nil)
 	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
@@ -572,7 +590,7 @@ func TestHTTPRootBypassesFullQueueAndCachesOwnership(t *testing.T) {
 	root := NewCommand(CommandConfig{
 		Index:         0,
 		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
-		RunnerConfig:  httpConfig, Dispatch: CommandDispatchExecutor,
+		RunnerConfig:  httpConfig, Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(httpConfig), NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	queueCalls := 0

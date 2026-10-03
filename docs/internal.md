@@ -9,7 +9,7 @@ flowchart TD
     resolve --> dispatcher[CommandDispatcher]
     dispatcher -->|ParseErr| parseOutput[parse error output]
     parseOutput --> output[outputQueue]
-    dispatcher -->|DispatchNone| ignored[ignore]
+    dispatcher -->|ignored| ignored[ignore]
     dispatcher -->|DispatchQueue: exec / compose / mixed chain| queue[commandQueue]
     queue --> workers[worker pool]
     workers --> locks[共有 ConversationLocks]
@@ -23,7 +23,7 @@ flowchart TD
 
 Resolverは入力をparseしてpartごとにcommandを照合します。parse errorがある場合はDispatcherが実行経路を選ぶ前にerrorをoutputQueueへ送り、先頭partがunmatchedなら従来どおり無出力で終了します。
 parse errorは`SystemReplyConfig`付きの`CommandOutput`として`ExitCode=2`で送られます。実行前の入力エラーなので`Spawned`と`Finished`は出しません。
-各commandの`CommandConfig.Dispatch`は`CommandDispatch`（`CommandDispatchQueue`、`CommandDispatchExecutor`、`CommandDispatchRunner`）で実行方法を示し、`CommandDispatchQueue`はゼロ値です。`ResolvedInput.DispatchTarget()`がmatched commandの値を`DispatchTarget`（`DispatchNone`、`DispatchQueue`、`DispatchExecutor`、`DispatchRunner`）へ集約し、Dispatcherはその結果だけを見て経路を選びます。`DispatchNone`はcommandの未設定値ではなく、入力全体にmatched commandがない状態を表します。
+各commandの`CommandConfig.Dispatch`は`DispatchMode`（`DispatchQueue`、`DispatchExecutor`、`DispatchRunner`）で実行方法を示し、`DispatchQueue`はゼロ値です。`ResolvedInput.DispatchTarget()`はmatched commandの値を同じ`DispatchMode`型のまま集約し、Dispatcherはその結果だけを見て経路を選びます。matched commandが存在しない場合や有効なdispatch先を決定できない場合は、dispatch先なしとして扱います。
 Routerはcommandの照合とroot ownershipのキャッシュを担当し、Dispatcherが解決済み入力のpolicyから実行経路を選びます。
 通常のcommand executionは必ずExecutorを通します。DispatcherはExecutorへ渡す方法として、worker queueを経由する`DispatchQueue`と、queueを使わない`DispatchExecutor`を選びます。
 exec / composeを含む入力は`DispatchQueue`でworker poolへ送ります。HTTPだけで構成された入力は、単一commandでもchainでも全体を1回のExecutor呼び出しとして非同期実行し、通常のcommandQueueが満杯でも受理します。
