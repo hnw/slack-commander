@@ -158,7 +158,7 @@ accept_reminder = true
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	outputs := make(chan *cmd.CommandOutput, 30)
 	executor := cmd.NewExecutor(outputs)
-	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
 	})

@@ -164,7 +164,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
 		return nil, fmt.Errorf("http runner does not support stdin interaction for keyword '%s'", raw.Keyword)
 	}
-	config := &cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: &raw.ReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(raw.ReplyBroadcast)}
+	config := &cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: &raw.ReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(raw.ReplyBroadcast), Dispatch: commandDispatch(runnerConfig.Runner)}
 	configuredReplies := make([]*cmd.CommandConfig, 0, len(raw.Replies))
 	for _, reply := range raw.Replies {
 		resolved, err := resolveReplyCommandConfig(config, reply)
@@ -184,7 +184,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 			ParserConfig:   replyParserConfig,
 			RunnerConfig:   cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
 			ExecutorConfig: executorConfig,
-			DispatchPolicy: cmd.DispatchDirect,
+			Dispatch:       cmd.CommandDispatchRunner,
 		}}
 	}
 	return config, nil
@@ -218,7 +218,14 @@ func resolveReplyCommandConfig(parent *cmd.CommandConfig, raw *RawCommandConfig)
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, err
 	}
-	return &cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parent.ParserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast)}, nil
+	return &cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parent.ParserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, OutputFlushInterval: outputFlushInterval, ReplyConfig: resolvedReplyConfig, SystemReplyConfig: pubsub.NewSystemReplyConfig(resolvedReplyConfig.ReplyBroadcast), Dispatch: commandDispatch(runnerConfig.Runner)}, nil
+}
+
+func commandDispatch(runner string) cmd.CommandDispatch {
+	if runner == cmd.RunnerHTTP {
+		return cmd.CommandDispatchExecutor
+	}
+	return cmd.CommandDispatchQueue
 }
 
 func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {

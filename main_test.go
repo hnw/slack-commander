@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,11 +56,12 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		Index:         0,
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
 		RunnerConfig:  httpConfig,
+		Dispatch:      cmd.CommandDispatchExecutor,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
 	executor := cmd.NewExecutor(outputs)
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
-	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
+	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 	writerDone := make(chan struct{})
 	writerCtx, cancelWriter := context.WithCancel(context.Background())
@@ -121,6 +125,83 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 	}
 	if !postedBody {
 		t.Fatal("SlackWriter did not post the asynchronous HTTP response body")
+	}
+}
+
+func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dispatch  cmd.CommandDispatch
+		rootTS    string
+		msgTS     string
+		broadcast bool
+	}{
+		{name: "root", dispatch: cmd.CommandDispatchQueue, rootTS: "1700000000.000100", msgTS: "1700000000.000100"},
+		{name: "reply", dispatch: cmd.CommandDispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type slackRequest struct {
+				path string
+				form url.Values
+			}
+			requests := make(chan slackRequest, 4)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					t.Errorf("ParseForm() error = %v", err)
+				}
+				requests <- slackRequest{path: r.URL.Path, form: r.Form}
+				_, _ = io.WriteString(w, `{"ok":true,"channel":"C123","ts":"1700000000.000300"}`)
+			}))
+			t.Cleanup(server.Close)
+
+			outputs := make(chan *cmd.CommandOutput, 1)
+			broadcast := tc.broadcast
+			command := cmd.NewCommand(cmd.CommandConfig{
+				Dispatch:          tc.dispatch,
+				SystemReplyConfig: pubsub.NewSystemReplyConfig(&broadcast),
+			}, nil, nil)
+			dispatcher := newMainTestDispatcher(context.Background(), outputs, nil, nil, func(*cmd.CommandInput) bool {
+				t.Fatal("parse error entered the command queue")
+				return false
+			})
+			input := &cmd.CommandInput{
+				ConversationID: cmd.ConversationID{ChannelID: "C123", RootTimestamp: tc.rootTS},
+				MessageID:      cmd.MessageID{ChannelID: "C123", Timestamp: tc.msgTS},
+				ResolvedInput: &cmd.ResolvedInput{
+					Commands: []cmd.ResolvedCommand{{Command: command}},
+					ParseErr: errors.New("Parse error: malformed input"),
+				},
+			}
+			if got := dispatcher.Dispatch(input); got != cmd.DispatchAccepted {
+				t.Fatalf("Dispatch() = %v, want accepted", got)
+			}
+			dispatcher.Close()
+			dispatcher.Wait()
+			close(outputs)
+
+			smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
+			writerDone := make(chan struct{})
+			go func() { pubsub.SlackWriter(context.Background(), smc, outputs); close(writerDone) }()
+			select {
+			case <-writerDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("SlackWriter did not finish")
+			}
+			if len(requests) != 1 {
+				t.Fatalf("Slack API requests = %d, want one text post and no reactions", len(requests))
+			}
+			request := <-requests
+			wantBroadcast := ""
+			if tc.broadcast {
+				wantBroadcast = strconv.FormatBool(tc.broadcast)
+			}
+			if request.path != "/chat.postMessage" || request.form.Get("channel") != "C123" || request.form.Get("thread_ts") != tc.rootTS || request.form.Get("reply_broadcast") != wantBroadcast {
+				t.Fatalf("Slack request = %#v, want configured thread text post", request)
+			}
+			if !strings.Contains(request.form.Get("attachments"), "Parse error: malformed input") {
+				t.Fatalf("posted attachments = %q, want parse error text", request.form.Get("attachments"))
+			}
+		})
 	}
 }
 
@@ -223,7 +304,7 @@ func newMainTestDispatcher(
 	if conversationLocks == nil {
 		conversationLocks = &cmd.ConversationLocks{}
 	}
-	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), stdinStore, conversationLocks, enqueue)
+	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), outputs, stdinStore, conversationLocks, enqueue)
 }
 
 func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {

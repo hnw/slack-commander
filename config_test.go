@@ -87,13 +87,60 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 			if len(resolved.Replies) != tc.wantReplies {
 				t.Fatalf("resolved replies = %d, want %d", len(resolved.Replies), tc.wantReplies)
 			}
-			if tc.wantDirectReply && (resolved.Replies[0].Runner != cmd.RunnerStdinReply || resolved.Replies[0].Command != "stdin-reply" || resolved.Replies[0].DispatchPolicy != cmd.DispatchDirect || resolved.Replies[0].Keyword != "*" || resolved.Replies[0].InputBodyMode != cmd.InputBodyRawStdin || resolved.InputBodyMode != cmd.InputBodyStdin) {
+			if tc.wantDirectReply && (resolved.Replies[0].Runner != cmd.RunnerStdinReply || resolved.Replies[0].Command != "stdin-reply" || resolved.Replies[0].Dispatch != cmd.CommandDispatchRunner || resolved.Replies[0].Keyword != "*" || resolved.Replies[0].InputBodyMode != cmd.InputBodyRawStdin || resolved.InputBodyMode != cmd.InputBodyStdin) {
 				t.Fatalf("stdin reply = %+v, want stdin runner direct reply", resolved.Replies[0])
 			}
-			if !tc.wantDirectReply && tc.wantReplies == 1 && (resolved.Replies[0].Keyword != "retry" || resolved.Replies[0].DispatchPolicy != cmd.DispatchQueued) {
+			if !tc.wantDirectReply && tc.wantReplies == 1 && (resolved.Replies[0].Keyword != "retry" || resolved.Replies[0].Dispatch != cmd.CommandDispatchQueue) {
 				t.Fatalf("configured reply = %+v, want queued retry", resolved.Replies[0])
 			}
 		})
+	}
+}
+
+func TestResolveCommandConfigAssignsCommandDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		runner string
+		want   cmd.CommandDispatch
+	}{
+		{runner: cmd.RunnerExec, want: cmd.CommandDispatchQueue},
+		{runner: cmd.RunnerCompose, want: cmd.CommandDispatchQueue},
+		{runner: cmd.RunnerHTTP, want: cmd.CommandDispatchExecutor},
+	} {
+		t.Run(tc.runner, func(t *testing.T) {
+			raw := &RawCommandConfig{
+				RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"},
+				RawRunnerConfig:  cmd.RawRunnerConfig{Runner: tc.runner, Command: "run", Method: "GET", URL: "https://example.com"},
+			}
+			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Dispatch != tc.want {
+				t.Fatalf("Dispatch = %v, want %v", resolved.Dispatch, tc.want)
+			}
+		})
+	}
+}
+
+func TestReplyCommandDispatchFollowsResolvedRunner(t *testing.T) {
+	raw := &RawCommandConfig{
+		RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"},
+		RawRunnerConfig:  cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: "https://example.com"},
+		Interaction:      cmd.InteractionCommand,
+		Replies: []*RawCommandConfig{
+			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "inherited"}, RawRunnerConfig: cmd.RawRunnerConfig{Method: "GET", URL: "https://example.com"}},
+			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "overridden"}, RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerExec, Command: "run"}},
+		},
+	}
+	resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Replies[0].Runner != cmd.RunnerHTTP || resolved.Replies[0].Dispatch != cmd.CommandDispatchExecutor {
+		t.Fatalf("inherited reply = %+v, want HTTP Executor policy", resolved.Replies[0])
+	}
+	if resolved.Replies[1].Runner != cmd.RunnerExec || resolved.Replies[1].Dispatch != cmd.CommandDispatchQueue {
+		t.Fatalf("overridden reply = %+v, want exec Queue policy", resolved.Replies[1])
 	}
 }
 

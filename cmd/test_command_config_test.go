@@ -38,6 +38,10 @@ func newTestCommandConfig(config *testExecutionConfig) *testCommandConfig {
 }
 
 func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Command {
+	dispatch := CommandDispatchQueue
+	if config.Runner == RunnerHTTP {
+		dispatch = CommandDispatchExecutor
+	}
 	return NewCommand(
 		CommandConfig{
 			Index:               config.Index,
@@ -48,6 +52,7 @@ func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Comm
 			OutputFlushInterval: config.OutputFlushInterval,
 			ReplyConfig:         config.ReplyConfig,
 			SystemReplyConfig:   config.SystemReplyConfig,
+			Dispatch:            dispatch,
 		},
 		runner,
 		nil,
@@ -71,11 +76,11 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 				replies = NewCommandSet(nil)
 			}
 			replies.commands = append(replies.commands, NewCommand(CommandConfig{
-				Index:          1000,
-				MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-				ParserConfig:   ParserConfig{InputBodyMode: InputBodyRawStdin},
-				RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-				DispatchPolicy: DispatchDirect,
+				Index:         1000,
+				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
+				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
+				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
+				Dispatch:      CommandDispatchRunner,
 			}, NewStdinReplyRunner(&StdinStore{}), nil))
 		}
 		command := testRuntimeCommand(definition, runner)
@@ -91,5 +96,10 @@ func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputRe
 }
 
 func newTestDispatcher(enqueue func(*CommandInput) bool) *CommandDispatcher {
-	return NewCommandDispatcher(context.Background(), NewExecutor(make(chan *CommandOutput, 100)), &StdinStore{}, &ConversationLocks{}, enqueue)
+	return newTestCommandDispatcher(context.Background(), 100, enqueue)
+}
+
+func newTestCommandDispatcher(ctx context.Context, capacity int, enqueue func(*CommandInput) bool) *CommandDispatcher {
+	outputs := make(chan *CommandOutput, capacity)
+	return NewCommandDispatcher(ctx, NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, enqueue)
 }
