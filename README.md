@@ -1,25 +1,20 @@
 # slack-commander
 
-SlackからCLIツール、スクリプト、HTTP APIを実行し、その出力や失敗をSlackで確認できるセルフホスト型のSlack botです。
+SlackからCLIツール、スクリプト、HTTP APIを実行できるセルフホスト型のSlack botです。
 
-設定ファイルにキーワードと実行内容を登録するだけで、既存のCLIツールやスクリプトをSlackから利用できます。ツール側にSlack固有の処理を追加する必要はありません。
+設定ファイルにキーワードと実行内容を登録すると、既存のCLIツールをSlackから呼び出せます。コマンドの出力は元の投稿のスレッドへ送られ、実行中プロセスへの標準入力や、スレッド返信を起点とした別コマンドの実行にも対応します。
 
-コマンドの出力は元の投稿に対応するSlackスレッドへ送られます。実行中のプロセスへスレッドから標準入力を送ることもできるため、人間の入力が必要な処理や対話的なCLIもSlackから扱えます。
-
-SlackとはSocket Modeで接続するため、slack-commanderを動かすマシンに公開HTTPエンドポイントを用意する必要はありません。
+SlackとはSocket Modeで接続するため、公開HTTPエンドポイントは不要です。
 
 ## 特徴
 
-* 既存のCLIツールやスクリプトをそのままSlackから実行できます
-* コマンドごとにわかりやすい`keyword`を定義できます
-* コマンドの出力を元の投稿のSlackスレッドへ送信します
-* Slackスレッドへの返信を、実行中プロセスの標準入力へ渡せます
-* スレッドへの返信に応じて別のコマンドを実行できます
-* `exec`、`compose`、`http`の3種類のrunnerを利用できます
-* TTYを必要とするCLIも限定的に利用できます
-* Slackのリマインダーを`cron`や`at`の代わりとして利用できます
-* Socket Modeを利用するため、公開Webサーバーは不要です
-* 実行を許可するユーザーやチャンネルを制限できます
+* `exec`、`compose`、`http`の3種類のrunner
+* コマンド出力をSlackスレッドへ送信
+* スレッド返信を実行中プロセスの標準入力へ転送
+* スレッド返信に応じた別コマンドの実行
+* `;`、`&&`、`||`によるコマンドの連結
+* TTYを必要とするCLIへの限定的な対応
+* ユーザー・チャンネル単位の実行制限
 
 ## Quick Start
 
@@ -27,11 +22,9 @@ SlackとはSocket Modeで接続するため、slack-commanderを動かすマシ�
 
 SlackのApp管理画面から新しいAppを作成し、このリポジトリの [`manifest.yaml`](./manifest.yaml) をインポートします。
 
-AppをWorkspaceへインストールし、`xoxb-`から始まるBot User OAuth Tokenを取得してください。
+AppをWorkspaceへインストールし、Bot User OAuth Tokenを取得します。続いて、`connections:write` scopeを持つApp-Level Tokenを作成してください。
 
-続いて、App-Level Tokenを`connections:write` scope付きで作成し、`xapp-`から始まるトークンを取得します。
-
-チャンネルで利用する場合は、slack-commanderのbotを対象チャンネルへ追加してください。
+チャンネルで利用する場合は、slack-commanderのbotを対象チャンネルへ追加します。
 
 ### 2. 設定ファイルを作成する
 
@@ -43,7 +36,7 @@ cd slack-commander
 cp config.toml.example config.toml
 ```
 
-まずは最小限、Slackのtoken、利用を許可するユーザー、コマンドを設定します。
+最小構成は次のようになります。
 
 ```toml
 slack_bot_token = "xoxb-..."
@@ -56,19 +49,17 @@ keyword = "date"
 command = "date"
 ```
 
-この状態でSlackに
+Slackへ
 
 ```text
 date
 ```
 
-と投稿すると、`date`コマンドの出力がSlackへ返ります。
+と投稿すると、`date`の出力がその投稿のスレッドへ送られます。
 
-トップレベルの`allowed_user_ids`と`allowed_channel_ids`が両方空の場合、デフォルトでは起動できません。コマンド側で制限を追加しても、`allow_unsafe_open_access = true`が必要です。
+トップレベルの`allowed_user_ids`と`allowed_channel_ids`が両方空の場合は起動できません。制限なしで起動する場合は、`allow_unsafe_open_access = true`を明示する必要があります。
 
 ### 3. 起動する
-
-ソースから起動する場合:
 
 ```console
 go build
@@ -77,27 +68,29 @@ go build
 
 ビルドにはGo 1.25以降が必要です。
 
-起動前に設定ファイルだけを検証するには、`--check-config`を指定します。Slackへ接続せず、成功時は何も出力せず終了します。
+設定だけを検証する場合は`--check-config`を使用できます。
 
 ```console
 ./slack-commander --check-config --config-file=config.toml
+```
+
+バージョンを確認するには`--version`を指定します。
+
+```console
+./slack-commander --version
 ```
 
 Dockerで運用する場合は [Dockerでの運用](./docs/docker.md) を参照してください。
 
 ## Runner
 
-slack-commanderはSlackへの投稿を`keyword`と照合し、マッチした設定に従って処理を実行します。
+コマンドごとに実行方法を選択できます。
 
-実行方法はコマンドごとに3種類のrunnerから選べます。
-
-| runner    | 用途                                    |
-| --------- | ------------------------------------- |
-| `exec`    | slack-commanderと同じ環境で外部コマンドを実行する      |
+| runner | 用途 |
+| --- | --- |
+| `exec` | slack-commanderと同じ環境で外部コマンドを実行する |
 | `compose` | Docker Composeで定義したservice内でコマンドを実行する |
-| `http`    | HTTP APIを呼び出す                         |
-
-### exec
+| `http` | HTTP APIを呼び出す |
 
 `runner`を省略すると`exec`になります。
 
@@ -107,17 +100,7 @@ keyword = "uname"
 command = "uname -mrs"
 ```
 
-Slackに
-
-```text
-uname
-```
-
-と投稿すると、slack-commanderが動作している環境で`uname -mrs`を実行します。
-
-### compose
-
-Docker Composeで定義したserviceを実行できます。
+Docker Composeのserviceで実行する場合は次のように指定します。
 
 ```toml
 [[commands]]
@@ -126,19 +109,7 @@ runner = "compose"
 command = "worker echo *"
 ```
 
-Slackに
-
-```text
-echo hello
-```
-
-と投稿すると、`worker` service内で`echo hello`を実行します。
-
-slack-commander自身をコンテナで実行する場合の構成や、DooD（Docker outside of Docker）については [Dockerでの運用](./docs/docker.md) を参照してください。
-
-### http
-
-HTTP APIをコマンドとして利用することもできます。
+HTTP APIもコマンドとして登録できます。
 
 ```toml
 [[commands]]
@@ -146,55 +117,24 @@ keyword = "notify *"
 runner = "http"
 method = "POST"
 url = "https://example.com/hooks/notify"
-headers = { "Content-Type" = "application/json" }
 body = '{"text":"*"}'
 ```
 
-Slackに
-
-```text
-notify hello
-```
-
-と投稿すると、`*`に`hello`を展開してHTTPリクエストを送信します。
-
-## ワイルドカード
-
-`keyword`では、空白で区切られた単独の`*`を1つだけワイルドカードとして使用できます。
-
-```toml
-[[commands]]
-keyword = "echo *"
-command = "echo *"
-```
-
-この設定に対して
-
-```text
-echo hello world
-```
-
-と投稿すると、`*`には`hello world`がマッチします。
-
-マッチした内容は、`command`内のすべての`*`へ展開されます。`http` runnerでは`url`、`body`、`headers`内の`*`にも展開できます。
-
-詳細なマッチング規則は [設定リファレンス](./docs/config.md) を参照してください。
+`keyword`では、空白で区切られた単独の`*`を1個までワイルドカードとして使用できます。詳しいマッチング規則と展開先は [設定リファレンス](./docs/config.md) を参照してください。
 
 ## スレッドでの対話
 
-コマンドごとに`interaction`を指定すると、Slackスレッドへの返信を処理できます。
+`interaction`を指定すると、起点メッセージに続くSlackスレッドへの返信を処理できます。
 
-| `interaction` | 動作                                                |
-| ------------- | ------------------------------------------------- |
-| `oneshot`     | 1回だけ実行します。スレッドへの返信は処理しません                         |
-| `stdin`       | スレッドへの返信を実行中プロセスの標準入力へ渡します                        |
-| `command`     | スレッドへの返信を`[[commands.replies]]`に従って別のコマンドとして処理します |
+| `interaction` | 動作 |
+| --- | --- |
+| `oneshot` | 1回だけ実行し、スレッドへの返信は処理しない |
+| `stdin` | スレッドへの返信を実行中プロセスの標準入力へ渡す |
+| `command` | スレッドへの返信に応じて`[[commands.replies]]`を実行する |
 
 省略時は`oneshot`です。
 
 ### 標準入力へ送る
-
-`interaction = "stdin"`を指定すると、同じSlackスレッドへの返信を実行中プロセスの標準入力へ渡します。stdin commandは`;`、`&&`、`||`でつなぐchain内でも使用できます。返信は、その時点で実行中のstdin commandの許可リストと本文設定に従って照合します。実行中のstdin commandがなければ返信は無視します。
 
 ```toml
 [[commands]]
@@ -204,29 +144,15 @@ interaction = "stdin"
 timeout = "1h"
 ```
 
-たとえばCLIが、
+この設定で起動したプロセスへは、同じSlackスレッドから標準入力を送れます。
 
-```text
-Continue? [y/N]
-```
+`interaction = "stdin"`は`;`、`&&`、`||`でつないだコマンドチェーン内でも利用できます。返信は、その時点で実行中のコマンドの許可設定に従って受け付けます。標準入力を受け付けるコマンドが実行中でなければ返信は無視されます。
 
-と出力した場合、その出力はSlackスレッドへ送られます。
+起点メッセージの2行目以降も最初の標準入力として利用できます。
 
-同じスレッドへ
-
-```text
-y
-```
-
-と返信すると、その内容が実行中の`my-agent`の標準入力へ渡されます。
-
-起点メッセージの2行目以降も、最初の標準入力として利用できます。
-
-`interaction = "stdin"`は`exec`と`compose`で利用できます。`http`では利用できません。`interaction = "command"`を含むchainは使用できません。
+`interaction = "stdin"`は`exec`と`compose`で利用できます。`http`では利用できません。
 
 ### 返信に応じてコマンドを実行する
-
-`interaction = "command"`では、スレッドへの返信ごとに実行するコマンドを定義できます。
 
 ```toml
 [[commands]]
@@ -243,13 +169,15 @@ keyword = "*"
 command = "todo-wrapper *"
 ```
 
-この設定では、`todo ...`から始まったスレッド内だけで`cancel`やその他の返信を処理します。
+この場合、`todo ...`から始まったスレッド内でだけ返信用コマンドを使用できます。
 
-`interaction`ごとの細かい動作や、`[[commands.replies]]`の継承規則については [設定リファレンス](./docs/config.md) を参照してください。
+`interaction = "command"`を含むchainは使用できません。
+
+返信設定の継承規則は [設定リファレンス](./docs/config.md#replies)、stdinの詳細な動作は [対話的な標準入力](./docs/config.md#対話的な標準入力) を参照してください。
 
 ## TTY
 
-TTYを必要とするCLIでは、`exec`または`compose`に`tty = true`を指定できます。
+`exec`または`compose`では、TTYを必要とするCLIに`tty = true`を指定できます。
 
 ```toml
 [[commands]]
@@ -260,118 +188,41 @@ tty = true
 timeout = "1h"
 ```
 
-TTY使用時は標準出力と標準エラー出力を1本の端末出力として扱い、一般的な端末制御シーケンスの一部を除去してSlackへ送ります。
-
-完全な端末エミュレーションを行うわけではありません。フルスクリーンTUI、カーソル位置を利用した画面更新、端末サイズの変更、特殊キー入力などには対応していません。
-
-TTYがなくても正常に動作するCLIでは、通常どおり`tty = false`のまま利用してください。
-
-詳細は [設定リファレンス](./docs/config.md) を参照してください。
-
-## コマンドの出力
-
-コマンドの出力は、起点となったSlackメッセージのスレッドへ投稿されます。
-
-`output_format`では、出力の表示方法を選択できます。
-
-```toml
-output_format = "plain"
-```
-
-```toml
-output_format = "monospaced"
-```
-
-```toml
-output_format = "markdown"
-```
-
-`reply_broadcast`はデフォルトで`true`です。`false`を指定すると、結果をチャンネルへbroadcastせずスレッド内だけに投稿します。
-
-```toml
-reply_broadcast = false
-```
-
-投稿時のユーザー名やアイコンもコマンドごとに変更できます。
-
-```toml
-username = "Clock"
-icon_emoji = ":alarm_clock:"
-```
-
-## Slack Reminderから実行する
-
-コマンドに`accept_reminder = true`を指定すると、Slack Reminderによる投稿も`keyword`との照合対象になります。既定値は`false`で、親コマンドから継承しません。
-
-```toml
-[[commands]]
-keyword = "date"
-command = "date"
-accept_reminder = true
-```
-
-Reminderではユーザー許可リストを適用せず、チャンネル許可リストは適用します。トップレベルには設定できません。Slack側のReminderと組み合わせることで、簡単な定期実行に利用できます。
+TTY対応は完全な端末エミュレーションではありません。対応範囲と制約は [設定リファレンス](./docs/config.md#ttyの入出力) を参照してください。
 
 ## Docker
 
-公式コンテナイメージは、slack-commander本体だけを実行する最小構成です。
+公式コンテナイメージにはslack-commander本体だけを含めています。
 
-shell、Docker CLI、Compose CLI、一般的なCLIツールを含めないことで、不要な実行環境を持ち込まず、攻撃面を小さくしています。
+コンテナで運用する場合は、CLIツールをslack-commander自身へ追加するより、実際の処理を別コンテナへ分離し、`compose` runnerから実行する構成を想定しています。
 
-コンテナで運用する場合は、slack-commander本体へさまざまなツールを追加するよりも、実際の処理をsibling containerへ分離し、`compose` runnerから実行する構成を推奨します。
-
-DooDの仕組み、Compose projectのパスに関する注意、credentialやnetworkの分離、Docker socketの権限については [Dockerでの運用](./docs/docker.md) を参照してください。
+Docker socket、Compose projectのパス、credentialやnetworkの分離については [Dockerでの運用](./docs/docker.md) を参照してください。
 
 ## Security
 
-slack-commanderはSlackから外部コマンドやHTTP APIを実行できるため、実行元を制限して利用することを推奨します。
-
-トップレベルの`allowed_user_ids`または`allowed_channel_ids`で最大の利用範囲を設定できます。
+slack-commanderはSlackから外部コマンドやHTTP APIを実行できるため、利用できるユーザーやチャンネルを制限して運用してください。
 
 ```toml
-allowed_user_ids = ["U0123456789"]
-allowed_channel_ids = ["C0123456789"]
+allowed_user_ids = ["U0123456789", "U9876543210"]
+allowed_channel_ids = ["C0123456789", "C9876543210"]
 ```
 
-コマンドと返信はトップレベルまたは親コマンドの許可リストを継承し、さらに範囲を狭められます。親にないIDを追加すると設定エラーになります。空配列も親の値を継承します。
+各コマンドや返信用コマンドでは、親の許可範囲をさらに狭められます。
 
 ```toml
-allowed_user_ids = ["U0123456789", "U-admin"]
-allowed_channel_ids = ["C0123456789", "C-ops"]
-
-[[commands]]
-keyword = "status"
-command = "status"
-allowed_user_ids = ["U0123456789"]
-allowed_channel_ids = ["C0123456789"]
-
 [[commands]]
 keyword = "deploy"
 command = "deploy"
-allowed_user_ids = ["U-admin"]
-allowed_channel_ids = ["C-ops"]
+allowed_user_ids = ["U9876543210"]
+allowed_channel_ids = ["C9876543210"]
 ```
 
-Reminderではユーザー許可リストを適用せず、チャンネル許可リストは適用します。自身のボットの投稿は常に無視し、それ以外のボット投稿はBot IDを通常のsender IDとして許可リストで判定します。
-
-旧トップレベル`accept_reminder`と`accept_bot_message`は使用できず、設定エラーになります。Reminderを有効にする場合は各commandまたはreplyに`accept_reminder = true`を設定してください。
-
-トップレベルのユーザーとチャンネルの制限が両方ない構成は、コマンド側で制限してもデフォルトでは起動できません。
-
-制限なしでの起動が必要な場合は、
-
-```toml
-allow_unsafe_open_access = true
-```
-
-を明示する必要があります。
-
-Dockerで運用する場合の権限構成については [Dockerでの運用](./docs/docker.md) も参照してください。
+Reminderとbot投稿では許可リストの扱いが異なります。詳しくは [accept_reminder](./docs/config.md#accept_reminder-bool) と [allowed_user_ids](./docs/config.md#allowed_user_ids-string) を参照してください。
 
 ## Documentation
 
-* [設定リファレンス](./docs/config.md) — 設定項目と詳細な動作仕様
-* [Dockerでの運用](./docs/docker.md) — 公式コンテナ、DooD、実行先コンテナの分離
+* [設定リファレンス](./docs/config.md) — 設定項目と動作仕様
+* [Dockerでの運用](./docs/docker.md) — コンテナ構成とDocker利用時の注意
 * [内部構造](./docs/internal.md) — slack-commander内部の構成
 
 ## License
