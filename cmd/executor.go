@@ -189,6 +189,8 @@ func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *comm
 	return 127
 }
 
+var errCommandTimeout = errors.New("command timeout")
+
 func runMatchedCommand(
 	ctx context.Context,
 	command *Command,
@@ -201,9 +203,10 @@ func runMatchedCommand(
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if command.config.Timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(
+		cmdCtx, cancel = context.WithTimeoutCause(
 			ctx,
 			command.config.Timeout,
+			errCommandTimeout,
 		)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
@@ -223,7 +226,6 @@ func runMatchedCommand(
 		execCmd.SetStderr(terminal)
 		ret := runWithLifecycleInputWithLineEnding(
 			execCmd,
-			command.config.Timeout,
 			0,
 			stdinText,
 			input.ConversationID,
@@ -231,12 +233,20 @@ func runMatchedCommand(
 			implicitStdinReplyCommand(command),
 			"\r",
 		)
+		cancel()
+		if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
+			_, _ = fmt.Fprintf(terminal, "Timeout exceeded (%s)", command.config.Timeout)
+		}
 		_ = terminal.Flush()
 		return ret
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, command.config.Timeout, command.config.StdinIdleTimeout, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
+	ret := runWithLifecycleInput(execCmd, command.config.StdinIdleTimeout, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
+	cancel()
+	if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
+		_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%s)", command.config.Timeout)
+	}
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -245,19 +255,17 @@ func runMatchedCommand(
 
 func runWithLifecycleInput(
 	command Cmd,
-	timeout time.Duration,
 	idle time.Duration,
 	initial string,
 	conversation ConversationID,
 	lifecycle StdinLifecycle,
 	implicitReplyCommand *Command,
 ) int {
-	return runWithLifecycleInputWithLineEnding(command, timeout, idle, initial, conversation, lifecycle, implicitReplyCommand, "\n")
+	return runWithLifecycleInputWithLineEnding(command, idle, initial, conversation, lifecycle, implicitReplyCommand, "\n")
 }
 
 func runWithLifecycleInputWithLineEnding(
 	command Cmd,
-	timeout time.Duration,
 	idle time.Duration,
 	initial string,
 	conversation ConversationID,
@@ -266,16 +274,16 @@ func runWithLifecycleInputWithLineEnding(
 	lineEnding string,
 ) int {
 	runner, ok := command.(interface {
-		RunWithStdin(time.Duration, func(io.WriteCloser)) int
+		RunWithStdin(func(io.WriteCloser)) int
 	})
 	if !ok {
 		command.SetStdin(strings.NewReader(initial))
-		return command.Run(timeout)
+		return command.Run()
 	}
 	if lifecycle == nil {
 		session := newStdinSession(initial, nil)
 		defer session.Close()
-		return runner.RunWithStdin(timeout, session.Start)
+		return runner.RunWithStdin(session.Start)
 	}
 	onError := func(err error) {
 		log.Printf("[WARN] live stdin write failed channel=%s thread=%s: %v", conversation.ChannelID, conversation.RootTimestamp, err)
@@ -283,7 +291,7 @@ func runWithLifecycleInputWithLineEnding(
 	endpoint := newInteractiveStdinSessionWithLineEnding(initial, idle, onError, lineEnding)
 	endpoint.onClose = func() { lifecycle.StdinClosed(endpoint) }
 	defer endpoint.Close()
-	return runner.RunWithStdin(timeout, func(stdin io.WriteCloser) {
+	return runner.RunWithStdin(func(stdin io.WriteCloser) {
 		endpoint.Start(stdin)
 		lifecycle.StdinReady(endpoint, implicitReplyCommand)
 	})

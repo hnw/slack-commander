@@ -1073,7 +1073,7 @@ func TestStdinReplyCommandSucceedsWhenEndpointRejectsInput(t *testing.T) {
 		command := runner.CommandContext(context.Background(), "stdin-reply")
 		command.(interface{ SetStdinTarget(*InteractiveStdin) }).SetStdinTarget(endpoint)
 		command.SetStdin(strings.NewReader("reply"))
-		return command.Run(0)
+		return command.Run()
 	}
 	if got := run(); got != 0 {
 		t.Fatalf("Run() with full endpoint = %d, want success", got)

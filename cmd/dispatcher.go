@@ -163,7 +163,7 @@ func runDirectCommand(command *Command, args []string, input *CommandInput) Disp
 		setter.SetStdinTarget(input.stdinTarget)
 	}
 	directCmd.SetStdin(strings.NewReader(input.Text))
-	if directCmd.Run(0) != 0 {
+	if directCmd.Run() != 0 {
 		return DispatchIgnored
 	}
 	return DispatchAccepted

@@ -5,7 +5,6 @@ import (
 	"io"
 	"sync"
 	"testing"
-	"time"
 )
 
 type environmentRecordingCmd struct {
@@ -21,7 +20,7 @@ func (c *environmentRecordingCmd) SetEnv(environment []string) {
 	c.environment = append([]string(nil), environment...)
 }
 
-func (c *environmentRecordingCmd) Run(time.Duration) int {
+func (c *environmentRecordingCmd) Run() int {
 	if c.started != nil {
 		c.started <- struct{}{}
 	}

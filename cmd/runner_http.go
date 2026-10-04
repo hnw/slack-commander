@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type httpRunner struct {
@@ -59,7 +58,7 @@ func (c *httpCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 }
 
-func (c *httpCmd) Run(timeout time.Duration) int {
+func (c *httpCmd) Run() int {
 	if err := c.validateConfig(); err != nil {
 		c.writeErr(err)
 		return 127
@@ -73,7 +72,7 @@ func (c *httpCmd) Run(timeout time.Duration) int {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return c.handleRequestError(err, timeout)
+		return c.handleRequestError(err)
 	}
 	defer c.closeBody(resp.Body)
 
@@ -122,13 +121,12 @@ func (c *httpCmd) expandWildcard(value string) string {
 	return strings.ReplaceAll(value, "*", c.wildcard)
 }
 
-func (c *httpCmd) handleRequestError(err error, timeout time.Duration) int {
+func (c *httpCmd) handleRequestError(err error) int {
 	if c.ctx != nil {
 		if errors.Is(c.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
 			return 143
 		}
-		if timeout > 0 && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-			c.writeTimeout(timeout)
+		if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
 			return 143
 		}
 	}
@@ -167,11 +165,5 @@ func (c *httpCmd) closeBody(body io.ReadCloser) {
 func (c *httpCmd) writeErr(err error) {
 	if c.stderr != nil {
 		_, _ = fmt.Fprintf(c.stderr, "Error: %v", err)
-	}
-}
-
-func (c *httpCmd) writeTimeout(timeout time.Duration) {
-	if c.stderr != nil {
-		_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%s)", timeout)
 	}
 }

@@ -18,7 +18,7 @@ func TestExecCmdSetEnvOverridesExistingSlackContext(t *testing.T) {
 	})
 	var output bytes.Buffer
 	command.SetStdout(&output)
-	if code := command.Run(0); code != 0 {
+	if code := command.Run(); code != 0 {
 		t.Fatalf("code = %d", code)
 	}
 	if !strings.Contains(output.String(), "SLACK_CHANNEL_ID=C123\n") {
@@ -46,7 +46,7 @@ func TestExecStdin(t *testing.T) {
 			var out bytes.Buffer
 			c.SetStdout(&out)
 			started := false
-			code := c.RunWithStdin(0, func(stdin io.WriteCloser) {
+			code := c.RunWithStdin(func(stdin io.WriteCloser) {
 				started = true
 				if tt.input != "" {
 					if _, err := io.WriteString(stdin, tt.input); err != nil {
@@ -73,7 +73,7 @@ func TestExecTTYProvidesTerminalAndLiveInput(t *testing.T) {
 	c.SetTTY()
 	var out bytes.Buffer
 	c.SetStdout(&out)
-	if code := c.RunWithStdin(0, func(stdin io.WriteCloser) {
+	if code := c.RunWithStdin(func(stdin io.WriteCloser) {
 		if _, err := io.WriteString(stdin, "input\n"); err != nil {
 			t.Error(err)
 		}
@@ -97,7 +97,7 @@ func TestExecTTYInitialInputWithoutConversationKeepsOutputOpen(t *testing.T) {
 	c.SetTTY()
 	var out bytes.Buffer
 	c.SetStdout(&out)
-	if code := testRunWithInput(c, 0, 0, "initial\n", ConversationID{}, nil); code != 0 {
+	if code := testRunWithInput(c, 0, "initial\n", ConversationID{}, nil); code != 0 {
 		t.Fatalf("code=%d output=%q", code, out.String())
 	}
 	if !strings.Contains(out.String(), "done:initial") {
@@ -120,7 +120,7 @@ func TestExecTTYSessionCloseDoesNotCloseTerminal(t *testing.T) {
 	sessionReady := make(chan *InteractiveStdin, 1)
 	done := make(chan int, 1)
 	go func() {
-		done <- c.RunWithStdin(0, func(stdin io.WriteCloser) {
+		done <- c.RunWithStdin(func(stdin io.WriteCloser) {
 			session := NewInteractiveStdin(stdin, "initial", func(error) {})
 			sessionReady <- session
 		})
@@ -159,7 +159,7 @@ func TestExecTTYClosesMasterAfterProcessExit(t *testing.T) {
 	c := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "printf done").(*execCmd)
 	c.SetTTY()
 	writerReady := make(chan io.WriteCloser, 1)
-	if code := c.RunWithStdin(0, func(stdin io.WriteCloser) { writerReady <- stdin }); code != 0 {
+	if code := c.RunWithStdin(func(stdin io.WriteCloser) { writerReady <- stdin }); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	writer := <-writerReady
@@ -173,7 +173,7 @@ func TestExecTTYCancellationStopsProcessGroup(t *testing.T) {
 	c := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "sleep 30 & wait").(*execCmd)
 	c.SetTTY()
 	done := make(chan int, 1)
-	go func() { done <- c.RunWithStdin(0, nil) }()
+	go func() { done <- c.RunWithStdin(nil) }()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	select {
@@ -193,7 +193,7 @@ func TestExecStdinWaitsForEOF(t *testing.T) {
 	var out bytes.Buffer
 	c.SetStdout(&out)
 	var input io.WriteCloser
-	code := c.RunWithStdin(1, func(stdin io.WriteCloser) {
+	code := c.RunWithStdin(func(stdin io.WriteCloser) {
 		input = stdin
 		if _, err := io.WriteString(stdin, "alpha\n"); err != nil {
 			t.Error(err)
@@ -226,7 +226,7 @@ func TestExecStdinProcessesSeparateAwkReplies(t *testing.T) {
 	started := make(chan io.WriteCloser, 1)
 	done := make(chan int, 1)
 	go func() {
-		done <- c.RunWithStdin(0, func(stdin io.WriteCloser) {
+		done <- c.RunWithStdin(func(stdin io.WriteCloser) {
 			started <- stdin
 		})
 	}()

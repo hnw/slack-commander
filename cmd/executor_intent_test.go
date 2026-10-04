@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type fakeCall struct {
@@ -70,7 +69,7 @@ func (c *fakeCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 }
 
-func (c *fakeCmd) Run(_ time.Duration) int {
+func (c *fakeCmd) Run() int {
 	if c.onRun != nil && c.stdin != nil {
 		c.onRun(c.stdin)
 	}
