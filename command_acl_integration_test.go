@@ -37,7 +37,7 @@ keyword = "agent"
 command = '''/bin/sh -c 'printf "ready\n"; IFS= read -r line; printf "%s\n" "$line"' '''
 interaction = "stdin"
 allowed_user_ids = ["U-root"]
-timeout = 5
+timeout = "5s"
 `, &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -236,11 +236,11 @@ type aclSwitchCommand struct {
 	name   string
 }
 
-func (aclSwitchCommand) SetStdin(io.Reader)  {}
-func (aclSwitchCommand) SetStdout(io.Writer) {}
-func (aclSwitchCommand) SetStderr(io.Writer) {}
-func (aclSwitchCommand) Run(int) int         { return 0 }
-func (c aclSwitchCommand) RunWithStdin(_ int, start func(io.WriteCloser)) int {
+func (aclSwitchCommand) SetStdin(io.Reader)    {}
+func (aclSwitchCommand) SetStdout(io.Writer)   {}
+func (aclSwitchCommand) SetStderr(io.Writer)   {}
+func (aclSwitchCommand) Run(time.Duration) int { return 0 }
+func (c aclSwitchCommand) RunWithStdin(_ time.Duration, start func(io.WriteCloser)) int {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close(); _ = writer.Close() }()
 	start(writer)
@@ -266,10 +266,10 @@ func (r *aclIntegrationRunner) CommandContext(_ context.Context, name string, _ 
 
 type aclIntegrationCmd struct{}
 
-func (*aclIntegrationCmd) SetStdin(io.Reader)  {}
-func (*aclIntegrationCmd) SetStdout(io.Writer) {}
-func (*aclIntegrationCmd) SetStderr(io.Writer) {}
-func (*aclIntegrationCmd) Run(int) int         { return 0 }
+func (*aclIntegrationCmd) SetStdin(io.Reader)    {}
+func (*aclIntegrationCmd) SetStdout(io.Writer)   {}
+func (*aclIntegrationCmd) SetStderr(io.Writer)   {}
+func (*aclIntegrationCmd) Run(time.Duration) int { return 0 }
 
 func TestCommandACLThroughSlackListenerAndExecutor(t *testing.T) {
 	var cfg Config

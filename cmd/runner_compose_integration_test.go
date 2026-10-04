@@ -113,7 +113,7 @@ func TestComposeTTYProvidesTerminalAndMergedStream(t *testing.T) {
 	command.SetStdout(&output)
 	command.SetStderr(&output)
 	if code := command.(interface {
-		RunWithStdin(int, func(io.WriteCloser)) int
+		RunWithStdin(time.Duration, func(io.WriteCloser)) int
 	}).RunWithStdin(0, func(stdin io.WriteCloser) {
 		if _, err := io.WriteString(stdin, "input\n"); err != nil {
 			t.Error(err)

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -518,7 +519,7 @@ command = "date"
 [[commands]]
 keyword = "bad-format"
 output_format = "html"
-timeout = -1
+timeout = "-1s"
 [[commands]]
 keyword = "bad-acl"
 command = "date"
@@ -716,7 +717,7 @@ func TestValidateConfigRequiresCommandFields(t *testing.T) {
 func TestValidateConfigTimeout(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		timeout int
+		timeout Duration
 		wantErr string
 	}{
 		{name: "negative is rejected", timeout: -1, wantErr: "timeout must be >= 0"},
@@ -726,6 +727,96 @@ func TestValidateConfigTimeout(t *testing.T) {
 			cfg := validTestConfig(&RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "date"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "date"}, RawExecutorConfig: RawExecutorConfig{Timeout: &tc.timeout}})
 
 			err := resolveConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("resolveConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDecodeConfigExecutorDurations(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  time.Duration
+	}{
+		{input: `timeout = "1m"`, want: time.Minute},
+		{input: `timeout = 60000000000`, want: time.Minute},
+		{input: `stdin_idle_timeout = "30s"`, want: 30 * time.Second},
+		{input: `stdin_idle_timeout = 30000000000`, want: 30 * time.Second},
+		{input: `timeout = "0s"`, want: 0},
+		{input: `timeout = 0`, want: 0},
+		{input: `stdin_idle_timeout = "0s"`, want: 0},
+		{input: `stdin_idle_timeout = 0`, want: 0},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			var cfg Config
+			if err := decodeConfigString("[[commands]]\n"+tc.input, &cfg); err != nil {
+				t.Fatalf("decodeConfigString() error = %v", err)
+			}
+			var got *Duration
+			if strings.HasPrefix(tc.input, "timeout") {
+				got = cfg.Commands[0].Timeout
+			} else {
+				got = cfg.Commands[0].StdinIdleTimeout
+			}
+			if got == nil || time.Duration(*got) != tc.want {
+				t.Fatalf("decoded duration = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNegativeExecutorDurationsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, want string
+	}{
+		{name: "timeout string negative", key: "timeout = \"-1ns\"", want: "timeout must be >= 0"},
+		{name: "timeout integer negative", key: "timeout = -1", want: "timeout must be >= 0"},
+		{name: "idle string negative", key: "stdin_idle_timeout = \"-1ns\"", want: "stdin_idle_timeout must be >= 0"},
+		{name: "idle integer negative", key: "stdin_idle_timeout = -1", want: "stdin_idle_timeout must be >= 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var decoded Config
+			input := fmt.Sprintf("[[commands]]\nkeyword = \"date\"\ncommand = \"date\"\n%s", tc.key)
+			if err := decodeConfigString(input, &decoded); err != nil {
+				t.Fatalf("decodeConfigString() error = %v", err)
+			}
+			cfg := validTestConfig(decoded.Commands[0])
+			err := resolveConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecutorDurationsMinimumResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, value, wantErr string
+	}{
+		{name: "timeout string below minimum", key: "timeout", value: `"999us"`, wantErr: "timeout must be 0 or at least 1ms"},
+		{name: "timeout integer below minimum", key: "timeout", value: "999999", wantErr: "timeout must be 0 or at least 1ms"},
+		{name: "idle string below minimum", key: "stdin_idle_timeout", value: `"999us"`, wantErr: "stdin_idle_timeout must be 0 or at least 1ms"},
+		{name: "idle integer below minimum", key: "stdin_idle_timeout", value: "999999", wantErr: "stdin_idle_timeout must be 0 or at least 1ms"},
+		{name: "timeout old seconds is below minimum", key: "timeout", value: "60", wantErr: "timeout must be 0 or at least 1ms"},
+		{name: "timeout string minimum accepted", key: "timeout", value: `"1ms"`},
+		{name: "timeout integer minimum accepted", key: "timeout", value: "1000000"},
+		{name: "idle string minimum accepted", key: "stdin_idle_timeout", value: `"1ms"`},
+		{name: "idle integer minimum accepted", key: "stdin_idle_timeout", value: "1000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var decoded Config
+			input := fmt.Sprintf("[[commands]]\nkeyword = \"date\"\ncommand = \"date\"\n%s = %s", tc.key, tc.value)
+			if err := decodeConfigString(input, &decoded); err != nil {
+				t.Fatalf("decodeConfigString() error = %v", err)
+			}
+			err := resolveConfig(validTestConfig(decoded.Commands[0]))
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("resolveConfig() error = %v", err)
@@ -811,6 +902,18 @@ command = "date"
 		}
 	})
 
+	t.Run("accepts sub-millisecond interval", func(t *testing.T) {
+		cfg := validTestConfig(&RawCommandConfig{
+			RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "date"},
+			RawRunnerConfig:  cmd.RawRunnerConfig{Command: "date"},
+		})
+		interval := Duration(time.Nanosecond)
+		cfg.OutputFlushInterval = &interval
+		if err := resolveConfig(cfg); err != nil {
+			t.Fatalf("resolveConfig() error = %v", err)
+		}
+	})
+
 	t.Run("command and reply override inherited interval", func(t *testing.T) {
 		cfg, err := loadConfig(writeConfigFile(t, `
 slack_bot_token = "xoxb-test"
@@ -889,7 +992,7 @@ output_flush_interval = "500ms"
 keyword = "todo"
 command = "todo"
 interaction = "command"
-timeout = 30
+timeout = "30s"
 tty = true
 output_flush_interval = "2s"
 
@@ -911,6 +1014,9 @@ command = "todo retry"
 	if inherited.ParserConfig != root.ParserConfig || inherited.ExecutorConfig != root.ExecutorConfig {
 		t.Fatalf("inherited reply config = %+v, root = %+v", inherited, root)
 	}
+	if root.Timeout != 30*time.Second || inherited.Timeout != root.Timeout {
+		t.Fatalf("resolved timeout root=%s reply=%s, want both 30s", root.Timeout, inherited.Timeout)
+	}
 }
 
 func TestLoadConfigResolvesReplyOverrides(t *testing.T) {
@@ -923,7 +1029,7 @@ allowed_user_ids = ["U123"]
 keyword = "todo"
 command = "todo"
 interaction = "command"
-timeout = 30
+timeout = "30s"
 tty = true
 
 [[commands.replies]]
@@ -935,7 +1041,7 @@ tty = false
 [[commands.replies]]
 keyword = "stop"
 command = "todo stop"
-timeout = 0
+timeout = "0s"
 tty = false
 `))
 	if err != nil {
@@ -961,18 +1067,45 @@ allowed_user_ids = ["U123"]
 keyword = "agent"
 command = "agent"
 interaction = "command"
-stdin_idle_timeout = 30
+stdin_idle_timeout = "30s"
+timeout = "2m"
 
 [[commands.replies]]
 keyword = "stop"
 command = "agent stop"
-stdin_idle_timeout = 0
+stdin_idle_timeout = "0s"
+timeout = "0s"
+
+[[commands.replies]]
+keyword = "continue"
+command = "agent continue"
+stdin_idle_timeout = "45s"
+timeout = "1m"
+
+[[commands.replies]]
+keyword = "inherit"
+command = "agent inherit"
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := cfg.commandConfigs[0].Replies[0].StdinIdleTimeout; got != 0 {
 		t.Fatalf("reply stdin_idle_timeout = %d, want 0", got)
+	}
+	if got := cfg.commandConfigs[0].Replies[0].Timeout; got != 0 {
+		t.Fatalf("reply timeout = %s, want explicit zero", got)
+	}
+	if got := cfg.commandConfigs[0].Replies[1].StdinIdleTimeout; got != 45*time.Second {
+		t.Fatalf("reply stdin_idle_timeout override = %s, want 45s", got)
+	}
+	if got := cfg.commandConfigs[0].Replies[1].Timeout; got != time.Minute {
+		t.Fatalf("reply timeout override = %s, want 1m", got)
+	}
+	if got := cfg.commandConfigs[0].Replies[2].Timeout; got != 2*time.Minute {
+		t.Fatalf("inherited reply timeout = %s, want 2m", got)
+	}
+	if got := cfg.commandConfigs[0].Replies[2].StdinIdleTimeout; got != 30*time.Second {
+		t.Fatalf("inherited reply stdin_idle_timeout = %s, want 30s", got)
 	}
 }
 
@@ -1120,14 +1253,14 @@ func TestValidateConfigTTY(t *testing.T) {
 	tests := []struct {
 		name    string
 		runner  string
-		idle    int
+		idle    Duration
 		wantErr string
 	}{
 		{name: "exec", runner: "exec"},
 		{name: "compose", runner: "compose"},
 		{name: "http", runner: "http", wantErr: "tty is not supported for http runner"},
 		{
-			name: "idle timeout", runner: "exec", idle: 300,
+			name: "idle timeout", runner: "exec", idle: Duration(300 * time.Second),
 			wantErr: "tty cannot be used with stdin_idle_timeout",
 		},
 		{name: "zero idle timeout", runner: "exec", idle: 0},
@@ -1163,7 +1296,7 @@ func TestValidateConfigTTY(t *testing.T) {
 func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
-		timeout int
+		timeout Duration
 		wantErr string
 	}{
 		{
@@ -1172,7 +1305,7 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 			wantErr: "command keyword 'agent': stdin_idle_timeout must be >= 0",
 		},
 		{name: "zero is allowed"},
-		{name: "positive is allowed", timeout: 300},
+		{name: "positive is allowed", timeout: Duration(300 * time.Second)},
 	}
 
 	for _, tc := range tests {
@@ -1184,6 +1317,35 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 			}
 
 			err := resolveConfig(cfg)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("resolveConfig() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestHTTPRejectsStdinIdleTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields, wantErr string
+	}{
+		{name: "root zero allowed", fields: `stdin_idle_timeout = "0s"`},
+		{name: "reply zero allowed", fields: "[[commands.replies]]\nkeyword = \"notify\"\ncommand = \"notify\"\nurl = \"https://example.com/reply\"\nstdin_idle_timeout = \"0s\""},
+		{name: "root positive rejected", fields: `stdin_idle_timeout = "1s"`, wantErr: "stdin_idle_timeout is not supported for http runner"},
+		{name: "reply positive rejected", fields: "[[commands.replies]]\nkeyword = \"notify\"\ncommand = \"notify\"\nurl = \"https://example.com/reply\"\nstdin_idle_timeout = \"1s\"", wantErr: "stdin_idle_timeout is not supported for http runner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := "slack_bot_token = \"xoxb-test\"\nslack_app_token = \"xapp-test\"\nnum_workers = 1\nallowed_user_ids = [\"U123\"]\n\n[[commands]]\nkeyword = \"hook\"\nrunner = \"http\"\nurl = \"https://example.com/hook\"\ninteraction = \"command\"\n" + tc.fields
+			var cfg Config
+			if err := decodeConfigString(input, &cfg); err != nil {
+				t.Fatalf("decodeConfigString() error = %v", err)
+			}
+			err := resolveConfig(&cfg)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("resolveConfig() error = %v", err)
@@ -1302,8 +1464,8 @@ allowed_user_ids = ["U123"]
 keyword = "todo *"
 command = "todo-wrapper *"
 runner = "compose"
-timeout = 3600
-stdin_idle_timeout = 300
+timeout = "1h"
+stdin_idle_timeout = "5m"
 tty = true
 username = "todo bot"
 icon_emoji = ":memo:"
@@ -1319,8 +1481,8 @@ command = "todo-wrapper --cancel"
 keyword = "stop"
 command = "todo-wrapper --stop"
 runner = "exec"
-timeout = 0
-stdin_idle_timeout = 0
+timeout = "0s"
+stdin_idle_timeout = "0s"
 tty = false
 username = "stop bot"
 icon_emoji = ":octagonal_sign:"

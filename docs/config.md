@@ -27,8 +27,8 @@
 | [`runner`](#runner-string)                      | `string`               | `exec`    | 実行方法                                |
 | [`command`](#command-string)                    | `string`               | —         | `exec`または`compose`で実行する内容           |
 | [`tty`](#tty-bool)                              | `bool`                 | `false`   | TTYを確保して実行する                        |
-| [`stdin_idle_timeout`](#stdin_idle_timeout-int) | `int`                  | `0`       | 標準入力を自動的に閉じるまでの時間                   |
-| [`timeout`](#timeout-int)                       | `int`                  | `0`       | 実行全体のタイムアウト                         |
+| [`stdin_idle_timeout`](#stdin_idle_timeout-duration) | `duration`             | `0s`      | 標準入力を自動的に閉じるまでの時間                   |
+| [`timeout`](#timeout-duration)                       | `duration`             | `0s`      | 実行全体のタイムアウト                         |
 | [`output_flush_interval`](#output_flush_interval-duration)  | `duration`             | 継承      | コマンド出力を途中送信する最大待ち時間               |
 
 ### HTTP runner
@@ -250,7 +250,7 @@ command = "todo-wrapper *"
 * `headers`
 * `body`
 
-継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = 0`、`stdin_idle_timeout = 0`、`tty = false`、`output_flush_interval = "0s"`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。`accept_reminder`は返信側の値だけで決まり、親から継承しません。
+継承される項目も、`[[commands.replies]]`側で指定すれば上書きできます。`timeout = "0s"`、`stdin_idle_timeout = "0s"`、`tty = false`、`output_flush_interval = "0s"`、`reply_broadcast = false`のような値も明示的な上書きとして扱われます。`accept_reminder`は返信側の値だけで決まり、親から継承しません。
 
 `allowed_user_ids = []`と`allowed_channel_ids = []`は親の許可リストを継承します。親の制限にないIDを指定すると設定エラーになります。
 
@@ -291,7 +291,7 @@ TTYを必要とするCLIのための互換機能です。TTYがなくても正�
 keyword = "opencode *"
 command = "opencode *"
 tty = true
-timeout = 3600
+timeout = "1h"
 ```
 
 TTY使用時の入出力については、[TTYの入出力](#ttyの入出力)を参照してください。
@@ -356,21 +356,29 @@ headers = { "Content-Type" = "application/json" }
 
 `false`にすると、スレッド内だけに投稿します。
 
-### stdin_idle_timeout `int`
+### stdin_idle_timeout `duration`
 
-`exec`または`compose`で`interaction = "stdin"`を使用する場合に、最後の入力から何秒後に標準入力を閉じるかを指定します。
+`exec`または`compose`で`interaction = "stdin"`を使用する場合に、最後の入力から標準入力を閉じるまでの時間をGoのduration構文で指定します。たとえば`30s`、`5m`を使用できます。
 
-省略するか`0`を指定した場合は無効となり、自動的にはEOFを送りません。負の値を指定すると設定エラーになります。
+整数を指定した場合はナノ秒として扱われます。`0`または`1ms`以上を指定してください。
 
-HTTPには適用されません。`tty = true`とも併用できません。
+省略するか`"0s"`を指定した場合は無効となり、自動的にはEOFを送りません。負の値を指定すると設定エラーになります。
+
+数値の`0`も無効です。
+
+HTTPでは使用できません。`tty = true`とも併用できません。
 
 標準入力を閉じるタイミングやEOF後の動作については、[対話的な標準入力](#対話的な標準入力)を参照してください。
 
-### timeout `int`
+### timeout `duration`
 
-外部コマンドまたはHTTPリクエストのタイムアウト時間を秒単位で指定します。
+外部コマンドまたはHTTPリクエストのタイムアウト時間をGoのduration構文で指定します。たとえば`30s`、`5m`を使用できます。
+
+整数を指定した場合はナノ秒として扱われます。`0`または`1ms`以上を指定してください。
 
 実行時間全体を制限します。標準入力がない時間を計測する`stdin_idle_timeout`とは独立しています。
+
+省略するか`0`を指定すると、実行時間に上限を設けません。
 
 ## 関連する動作仕様
 
@@ -505,8 +513,8 @@ HTTPでは使用できません。
 keyword = "agent"
 command = "..."
 interaction = "stdin"
-stdin_idle_timeout = 300
-timeout = 3600
+stdin_idle_timeout = "5m"
+timeout = "1h"
 ```
 
 この例では、300秒間入力がなければEOFを渡します。EOFを渡した後もプロセスが終了しない場合は、起動から3600秒後に`timeout`が最終的な安全弁として働きます。

@@ -46,7 +46,7 @@ type eofTestCmd struct {
 	afterEOF func()
 }
 
-func (c *eofTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+func (c *eofTestCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -115,13 +115,13 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	}
 	compose := NewComposeRunner("").CommandContext(context.Background(), "unused")
 	if _, live := compose.(interface {
-		RunWithStdin(int, func(io.WriteCloser)) int
+		RunWithStdin(time.Duration, func(io.WriteCloser)) int
 	}); !live {
 		t.Fatalf("compose runner %T lacks interactive stdin", compose)
 	}
 	http := NewHTTPRunner(RunnerConfig{}).CommandContext(context.Background(), "unused")
 	if _, live := http.(interface {
-		RunWithStdin(int, func(io.WriteCloser)) int
+		RunWithStdin(time.Duration, func(io.WriteCloser)) int
 	}); live {
 		t.Fatalf("http runner %T gained interactive stdin", http)
 	}
@@ -261,11 +261,11 @@ type stdinCaptureCmd struct {
 	captured []byte
 }
 
-func (*stdinCaptureCmd) SetStdin(io.Reader)  {}
-func (*stdinCaptureCmd) SetStdout(io.Writer) {}
-func (*stdinCaptureCmd) SetStderr(io.Writer) {}
-func (*stdinCaptureCmd) Run(int) int         { return 99 }
-func (c *stdinCaptureCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+func (*stdinCaptureCmd) SetStdin(io.Reader)    {}
+func (*stdinCaptureCmd) SetStdout(io.Writer)   {}
+func (*stdinCaptureCmd) SetStderr(io.Writer)   {}
+func (*stdinCaptureCmd) Run(time.Duration) int { return 99 }
+func (c *stdinCaptureCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -313,11 +313,11 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	}
 }
 
-func (*stdinTestCmd) SetStdin(io.Reader)  {}
-func (*stdinTestCmd) SetStdout(io.Writer) {}
-func (*stdinTestCmd) SetStderr(io.Writer) {}
-func (*stdinTestCmd) Run(int) int         { return 99 }
-func (c *stdinTestCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+func (*stdinTestCmd) SetStdin(io.Reader)    {}
+func (*stdinTestCmd) SetStdout(io.Writer)   {}
+func (*stdinTestCmd) SetStderr(io.Writer)   {}
+func (*stdinTestCmd) Run(time.Duration) int { return 99 }
+func (c *stdinTestCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -350,11 +350,11 @@ func (r *lifecycleSwitchRunner) CommandContext(context.Context, string, ...strin
 
 type lifecycleSwitchCmd struct{ runner *lifecycleSwitchRunner }
 
-func (lifecycleSwitchCmd) SetStdin(io.Reader)  {}
-func (lifecycleSwitchCmd) SetStdout(io.Writer) {}
-func (lifecycleSwitchCmd) SetStderr(io.Writer) {}
-func (lifecycleSwitchCmd) Run(int) int         { return 0 }
-func (c lifecycleSwitchCmd) RunWithStdin(_ int, start func(io.WriteCloser)) int {
+func (lifecycleSwitchCmd) SetStdin(io.Reader)    {}
+func (lifecycleSwitchCmd) SetStdout(io.Writer)   {}
+func (lifecycleSwitchCmd) SetStderr(io.Writer)   {}
+func (lifecycleSwitchCmd) Run(time.Duration) int { return 0 }
+func (c lifecycleSwitchCmd) RunWithStdin(_ time.Duration, start func(io.WriteCloser)) int {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close(); _ = writer.Close() }()
 	start(writer)
@@ -596,11 +596,11 @@ type endpointProbeCmd struct {
 	finish  chan struct{}
 }
 
-func (*endpointProbeCmd) SetStdin(io.Reader)  {}
-func (*endpointProbeCmd) SetStdout(io.Writer) {}
-func (*endpointProbeCmd) SetStderr(io.Writer) {}
-func (*endpointProbeCmd) Run(int) int         { return 0 }
-func (c *endpointProbeCmd) RunWithStdin(_ int, started func(io.WriteCloser)) int {
+func (*endpointProbeCmd) SetStdin(io.Reader)    {}
+func (*endpointProbeCmd) SetStdout(io.Writer)   {}
+func (*endpointProbeCmd) SetStderr(io.Writer)   {}
+func (*endpointProbeCmd) Run(time.Duration) int { return 0 }
+func (c *endpointProbeCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
 	started(writer)

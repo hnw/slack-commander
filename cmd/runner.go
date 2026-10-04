@@ -18,7 +18,7 @@ type Cmd interface {
 	SetStdin(r io.Reader)
 	SetStdout(w io.Writer)
 	SetStderr(w io.Writer)
-	Run(timeout int) int
+	Run(timeout time.Duration) int
 }
 
 // CommandRunner creates Cmd instances for a given command.
@@ -84,17 +84,17 @@ func (c *execCmd) SetTTY() {
 // - 0-255: actual exit code
 // - 127: failed to start or unknown error
 // - 143: terminated by signal or timeout
-func (c *execCmd) Run(timeout int) int {
+func (c *execCmd) Run(timeout time.Duration) int {
 	return c.run(timeout, execStdin{})
 }
 
 // RunWithStdin は Start 後、Wait を妨げない入力処理の接続に writer を渡す。
 // started は入力の完了を待たずに戻り、呼び出し側が endpoint を後始末する。
-func (c *execCmd) RunWithStdin(timeout int, started func(io.WriteCloser)) int {
+func (c *execCmd) RunWithStdin(timeout time.Duration, started func(io.WriteCloser)) int {
 	return c.run(timeout, execStdin{onStarted: started})
 }
 
-func (c *execCmd) run(timeout int, stdin execStdin) int {
+func (c *execCmd) run(timeout time.Duration, stdin execStdin) int {
 	if c.tty {
 		return c.runTTY(timeout, stdin)
 	}
@@ -129,7 +129,7 @@ func (c *execCmd) run(timeout int, stdin execStdin) int {
 				// -1 if the process hasn't exited or was terminated by a signal.
 				if c.cmd.Stderr != nil && timeout > 0 && c.ctx != nil &&
 					errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-					_, _ = fmt.Fprintf(c.cmd.Stderr, "Timeout exceeded (%ds)", timeout)
+					_, _ = fmt.Fprintf(c.cmd.Stderr, "Timeout exceeded (%s)", timeout)
 				}
 				return 143 // 128+15(SIGTERM)
 			}
@@ -143,7 +143,7 @@ func (c *execCmd) run(timeout int, stdin execStdin) int {
 	return c.cmd.ProcessState.ExitCode()
 }
 
-func (c *execCmd) runTTY(timeout int, stdin execStdin) int {
+func (c *execCmd) runTTY(timeout time.Duration, stdin execStdin) int {
 	defer stdin.closeUnclaimed()
 	c.cmd.Stdin = nil
 	c.cmd.Stdout = nil
@@ -183,13 +183,13 @@ func (c *execCmd) runTTY(timeout int, stdin execStdin) int {
 	return c.exitCode(timeout, err, c.stderr)
 }
 
-func (c *execCmd) exitCode(timeout int, err error, stderr io.Writer) int {
+func (c *execCmd) exitCode(timeout time.Duration, err error, stderr io.Writer) int {
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if exitError.ExitCode() == -1 {
 				if stderr != nil && timeout > 0 && c.ctx != nil &&
 					errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-					_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%ds)", timeout)
+					_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%s)", timeout)
 				}
 				return 143
 			}

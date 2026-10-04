@@ -24,7 +24,7 @@ func (c *blockingCmd) SetStdin(_ io.Reader)  {}
 func (c *blockingCmd) SetStdout(_ io.Writer) {}
 func (c *blockingCmd) SetStderr(_ io.Writer) {}
 
-func (c *blockingCmd) Run(_ int) int {
+func (c *blockingCmd) Run(_ time.Duration) int {
 	if c.started != nil {
 		select {
 		case c.started <- struct{}{}:
@@ -89,7 +89,7 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 	runner := &blockingRunner{started: started}
 
 	cfgs := []*testCommandConfig{
-		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", Timeout: 1}),
+		newTestCommandConfig(&testExecutionConfig{Keyword: "date", Command: "date", Timeout: 100 * time.Millisecond}),
 	}
 
 	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner })

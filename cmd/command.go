@@ -38,8 +38,8 @@ type RunnerConfig struct {
 
 // ExecutorConfig contains execution policy after a command has matched.
 type ExecutorConfig struct {
-	Timeout          int
-	StdinIdleTimeout int
+	Timeout          time.Duration
+	StdinIdleTimeout time.Duration
 	TTY              bool
 	InteractiveStdin bool
 }
