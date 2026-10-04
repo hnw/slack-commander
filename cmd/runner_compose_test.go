@@ -14,7 +14,7 @@ func TestComposeStdinStartFailureDoesNotPublishWriter(t *testing.T) {
 	c.SetStderr(&stderr)
 
 	started := false
-	if code := c.RunWithStdin(0, func(io.WriteCloser) { started = true }); code != 127 {
+	if code := c.RunWithStdin(func(io.WriteCloser) { started = true }); code != 127 {
 		t.Fatalf("code=%d", code)
 	}
 	if started {

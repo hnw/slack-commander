@@ -24,7 +24,7 @@ func (c *blockingCmd) SetStdin(_ io.Reader)  {}
 func (c *blockingCmd) SetStdout(_ io.Writer) {}
 func (c *blockingCmd) SetStderr(_ io.Writer) {}
 
-func (c *blockingCmd) Run(_ time.Duration) int {
+func (c *blockingCmd) Run() int {
 	if c.started != nil {
 		select {
 		case c.started <- struct{}{}:

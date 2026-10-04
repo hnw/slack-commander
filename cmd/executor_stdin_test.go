@@ -30,7 +30,7 @@ func TestExecSessionEOF(t *testing.T) {
 		command := NewExecRunner().CommandContext(ctx, "/bin/cat")
 		var out bytes.Buffer
 		command.SetStdout(&out)
-		code := testRunWithInput(command, 5, 30*time.Millisecond, "raw input", conversation, &registry)
+		code := testRunWithInput(command, 30*time.Millisecond, "raw input", conversation, &registry)
 		cancel()
 		if code != 0 || out.String() != want {
 			t.Fatalf("interactive=%v code=%d output=%q", interactive, code, out.String())
@@ -46,7 +46,7 @@ type eofTestCmd struct {
 	afterEOF func()
 }
 
-func (c *eofTestCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
+func (c *eofTestCmd) RunWithStdin(started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -67,7 +67,6 @@ func TestExecutorIdleUnregistersBeforeProcessExit(t *testing.T) {
 		}}
 		if code := testRunWithInput(
 			command,
-			0,
 			time.Second,
 			"",
 			ConversationID{ChannelID: "C", RootTimestamp: "1"},
@@ -85,7 +84,6 @@ func TestExecutorFiniteCanExitWithoutConsumingStdin(t *testing.T) {
 	if code := testRunWithInput(
 		command,
 		0,
-		0,
 		strings.Repeat("x", 1<<20),
 		ConversationID{},
 		nil,
@@ -99,14 +97,14 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := NewExecRunner().CommandContext(context.Background(), "/no-such-live-command")
-	if code := testRunWithInput(command, 0, 0, "initial", conversation, &registry); code != 127 {
+	if code := testRunWithInput(command, 0, "initial", conversation, &registry); code != 127 {
 		t.Fatalf("code=%d", code)
 	}
 	if registry.lookup(key) != nil {
 		t.Fatal("published after failed start")
 	}
 	finite := &fakeCmd{}
-	if code := testRunWithInput(finite, 0, 0, "no-final-newline", conversation, &registry); code != 0 {
+	if code := testRunWithInput(finite, 0, "no-final-newline", conversation, &registry); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	got, err := io.ReadAll(finite.stdin)
@@ -115,13 +113,13 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	}
 	compose := NewComposeRunner("").CommandContext(context.Background(), "unused")
 	if _, live := compose.(interface {
-		RunWithStdin(time.Duration, func(io.WriteCloser)) int
+		RunWithStdin(func(io.WriteCloser)) int
 	}); !live {
 		t.Fatalf("compose runner %T lacks interactive stdin", compose)
 	}
 	http := NewHTTPRunner(RunnerConfig{}).CommandContext(context.Background(), "unused")
 	if _, live := http.(interface {
-		RunWithStdin(time.Duration, func(io.WriteCloser)) int
+		RunWithStdin(func(io.WriteCloser)) int
 	}); live {
 		t.Fatalf("http runner %T gained interactive stdin", http)
 	}
@@ -162,7 +160,7 @@ func TestExecutorStdinRemovesOnTimeoutAndCancel(t *testing.T) {
 		command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "read value")
 		done := make(chan int, 1)
 		go func() {
-			done <- testRunWithInput(command, 1, 0, "", ConversationID{ChannelID: "C", RootTimestamp: "1"}, &registry)
+			done <- testRunWithInput(command, 0, "", ConversationID{ChannelID: "C", RootTimestamp: "1"}, &registry)
 		}()
 		endpoint := waitForInteractiveStdin(t, &registry, key)
 		if !timeout {
@@ -192,7 +190,6 @@ func TestInteractiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "exit 0")
 	code := testRunWithInput(
 		command,
-		0,
 		0,
 		strings.Repeat("x", 1<<20),
 		ConversationID{ChannelID: "C", RootTimestamp: "1"},
@@ -261,11 +258,11 @@ type stdinCaptureCmd struct {
 	captured []byte
 }
 
-func (*stdinCaptureCmd) SetStdin(io.Reader)    {}
-func (*stdinCaptureCmd) SetStdout(io.Writer)   {}
-func (*stdinCaptureCmd) SetStderr(io.Writer)   {}
-func (*stdinCaptureCmd) Run(time.Duration) int { return 99 }
-func (c *stdinCaptureCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
+func (*stdinCaptureCmd) SetStdin(io.Reader)  {}
+func (*stdinCaptureCmd) SetStdout(io.Writer) {}
+func (*stdinCaptureCmd) SetStderr(io.Writer) {}
+func (*stdinCaptureCmd) Run() int            { return 99 }
+func (c *stdinCaptureCmd) RunWithStdin(started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -313,11 +310,11 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	}
 }
 
-func (*stdinTestCmd) SetStdin(io.Reader)    {}
-func (*stdinTestCmd) SetStdout(io.Writer)   {}
-func (*stdinTestCmd) SetStderr(io.Writer)   {}
-func (*stdinTestCmd) Run(time.Duration) int { return 99 }
-func (c *stdinTestCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
+func (*stdinTestCmd) SetStdin(io.Reader)  {}
+func (*stdinTestCmd) SetStdout(io.Writer) {}
+func (*stdinTestCmd) SetStderr(io.Writer) {}
+func (*stdinTestCmd) Run() int            { return 99 }
+func (c *stdinTestCmd) RunWithStdin(started func(io.WriteCloser)) int {
 	r, w := io.Pipe()
 	defer func() { _ = r.Close() }()
 	started(w)
@@ -350,11 +347,11 @@ func (r *lifecycleSwitchRunner) CommandContext(context.Context, string, ...strin
 
 type lifecycleSwitchCmd struct{ runner *lifecycleSwitchRunner }
 
-func (lifecycleSwitchCmd) SetStdin(io.Reader)    {}
-func (lifecycleSwitchCmd) SetStdout(io.Writer)   {}
-func (lifecycleSwitchCmd) SetStderr(io.Writer)   {}
-func (lifecycleSwitchCmd) Run(time.Duration) int { return 0 }
-func (c lifecycleSwitchCmd) RunWithStdin(_ time.Duration, start func(io.WriteCloser)) int {
+func (lifecycleSwitchCmd) SetStdin(io.Reader)  {}
+func (lifecycleSwitchCmd) SetStdout(io.Writer) {}
+func (lifecycleSwitchCmd) SetStderr(io.Writer) {}
+func (lifecycleSwitchCmd) Run() int            { return 0 }
+func (c lifecycleSwitchCmd) RunWithStdin(start func(io.WriteCloser)) int {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close(); _ = writer.Close() }()
 	start(writer)
@@ -596,11 +593,11 @@ type endpointProbeCmd struct {
 	finish  chan struct{}
 }
 
-func (*endpointProbeCmd) SetStdin(io.Reader)    {}
-func (*endpointProbeCmd) SetStdout(io.Writer)   {}
-func (*endpointProbeCmd) SetStderr(io.Writer)   {}
-func (*endpointProbeCmd) Run(time.Duration) int { return 0 }
-func (c *endpointProbeCmd) RunWithStdin(_ time.Duration, started func(io.WriteCloser)) int {
+func (*endpointProbeCmd) SetStdin(io.Reader)  {}
+func (*endpointProbeCmd) SetStdout(io.Writer) {}
+func (*endpointProbeCmd) SetStderr(io.Writer) {}
+func (*endpointProbeCmd) Run() int            { return 0 }
+func (c *endpointProbeCmd) RunWithStdin(started func(io.WriteCloser)) int {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
 	started(writer)

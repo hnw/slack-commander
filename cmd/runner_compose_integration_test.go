@@ -41,7 +41,6 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 		done <- testRunWithInput(
 			command,
 			0,
-			0,
 			"initial",
 			ConversationID{
 				ChannelID:     key.ChannelID,
@@ -113,8 +112,8 @@ func TestComposeTTYProvidesTerminalAndMergedStream(t *testing.T) {
 	command.SetStdout(&output)
 	command.SetStderr(&output)
 	if code := command.(interface {
-		RunWithStdin(time.Duration, func(io.WriteCloser)) int
-	}).RunWithStdin(0, func(stdin io.WriteCloser) {
+		RunWithStdin(func(io.WriteCloser)) int
+	}).RunWithStdin(func(stdin io.WriteCloser) {
 		if _, err := io.WriteString(stdin, "input\n"); err != nil {
 			t.Error(err)
 		}
@@ -152,7 +151,6 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 	go func() {
 		done <- testRunWithInput(
 			command,
-			0,
 			0,
 			"",
 			ConversationID(key),
@@ -195,7 +193,6 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 	go func() {
 		done <- testRunWithInput(
 			command,
-			0,
 			time.Second,
 			"initial",
 			ConversationID{

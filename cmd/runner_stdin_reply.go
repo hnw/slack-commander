@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"time"
 )
 
 // StdinReplyRunner は選択済みのstdin endpointへ返信を渡す。
@@ -30,7 +29,7 @@ func (c *stdinReplyCmd) SetStdin(stdin io.Reader)                { c.stdin = std
 func (*stdinReplyCmd) SetStdout(io.Writer)                       {}
 func (*stdinReplyCmd) SetStderr(io.Writer)                       {}
 
-func (c *stdinReplyCmd) Run(time.Duration) int {
+func (c *stdinReplyCmd) Run() int {
 	if c.target == nil || c.stdin == nil {
 		return 127
 	}

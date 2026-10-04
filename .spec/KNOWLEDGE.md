@@ -3,7 +3,7 @@
 ## 現在の設計判断
 
 - ADR候補: 時間設定を duration として解決し、整数秒の互換は維持しない。整数はgo-tomlによるtime.Durationのdecode結果をそのまま受け入れ、ナノ秒として扱う。旧整数秒設定の誤用を検出するため、`timeout` / `stdin_idle_timeout` は0または1ms以上に制限する。方針を [duration settings](../docs/decisions/2026-10-04-duration-settings.md) に記録した。既存の `Duration` とポインタによる指定有無の区別を再利用し、解決後は `time.Duration` とする。
-- 要整理: timeoutはExecutorが`context.WithTimeout`で実行制限に使う一方、同じ値を`Cmd.Run(timeout)` / `RunWithStdin(timeout, ...)`にも渡している。現在のrunner側では主にtimeout発生時の判定・表示に利用しており、責務が重複している。Executorとrunnerでtimeoutの扱いがずれると、実際の終了条件とエラー表示が一致しない潜在バグになり得る。`Cmd`がtimeout値そのものを受け取る必要があるか、contextだけで判定できないかを後で見直す。
+- timeout は `runMatchedCommand` が context の生成と表示を管理する。`WithTimeoutCause` と専用の `errCommandTimeout` を使い、command 自身の timeout だけを `context.Cause` で識別する。`Cmd.Run()` / `RunWithStdin(started)` は timeout 値を受け取らず、渡された context に従って停止する。親 context の deadline/cancel・通常の非0終了・143だけでは timeout 表示しない。親 deadline の回帰テストは timeout 設定が0の場合も通常出力・TTYの両方で確認する（`cmd/executor_timeout_test.go`）。TTY は従来の terminal 出力経路を維持する。runner 単体では timeout 文言を出さず、exec / compose / HTTP の deadline 終了で143を返す（`cmd/runner_timeout_test.go`）。依頼に明記された責務移動と判定修正で可逆な変更のため、独立 ADR は見送る。
 - `RawCommandConfig` とその `RawExecutorConfig` は TOML 上の未指定値を保持する decode 用構造とする。root / reply の既定値、継承、制約は `resolveConfig` で一度だけ解決し、後段には resolved `cmd.CommandConfig` だけを渡す。`--check-config` は runner を生成しない。
 - `CommandConfig.Replies` は resolved config tree にだけ残す。instantiate 時に `Command.config.Replies` を nil にし、runtime reply tree は `Command.replies *CommandSet` だけで表現する。
 - startup で `CommandSet` とその `Command` / matcher / runner、および `Executor` を一度だけ構築する。routing と全 worker、および非同期HTTP実行は同じ runtime object を使う。matcher / runner は実行ごとの可変状態を持たず、compose runner も同時実行可能であるため worker ごとには生成しない。

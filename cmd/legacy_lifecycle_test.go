@@ -52,11 +52,11 @@ func (l testLifecycle) StdinClosed(input *InteractiveStdin) {
 	l.registry.unregister(l.conversation, input)
 }
 
-func testRunWithInput(command Cmd, timeout time.Duration, idle time.Duration, initial string, conversation ConversationID, registry *testThreadRegistry) int {
+func testRunWithInput(command Cmd, idle time.Duration, initial string, conversation ConversationID, registry *testThreadRegistry) int {
 	if registry == nil || conversation.ChannelID == "" || conversation.RootTimestamp == "" {
-		return runWithLifecycleInput(command, timeout, idle, initial, conversation, nil, nil)
+		return runWithLifecycleInput(command, idle, initial, conversation, nil, nil)
 	}
-	return runWithLifecycleInput(command, timeout, idle, initial, conversation, testLifecycle{registry: registry, conversation: conversation}, nil)
+	return runWithLifecycleInput(command, idle, initial, conversation, testLifecycle{registry: registry, conversation: conversation}, nil)
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, registry *testThreadRegistry) {
