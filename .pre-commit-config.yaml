@@ -9,6 +9,6 @@ repos:
       - id: check-merge-conflict
 
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.8.0
+    rev: v2.14.0
     hooks:
       - id: golangci-lint

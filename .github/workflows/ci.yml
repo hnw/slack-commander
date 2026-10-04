@@ -23,7 +23,7 @@ jobs:
       - name: Run Linter
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.8.0
+          version: v2.14.0
 
   build-push:
     needs: test

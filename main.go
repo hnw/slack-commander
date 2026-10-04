@@ -138,7 +138,7 @@ func run(args []string) int {
 	}()
 
 	exitCode := 0
-	if err := smc.RunContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := smc.RunContext(ctx); !errors.Is(err, context.Canceled) {
 		logger.Error("Socket Mode error", "error", err)
 		exitCode = 1
 	}

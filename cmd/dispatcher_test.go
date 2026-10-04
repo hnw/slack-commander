@@ -848,7 +848,7 @@ func TestSameConversationHTTPChainRunsSeriallyWithReplies(t *testing.T) {
 		case "/third":
 			<-releaseThird
 		}
-		_, _ = io.WriteString(w, r.URL.Path)
+		_, _ = io.WriteString(w, r.URL.Path) //nolint:gosec // G705 -- test server echoes a controlled request path
 	}))
 	t.Cleanup(server.Close)
 
