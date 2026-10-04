@@ -50,6 +50,7 @@ jobs:
       - name: Build and Push
         run: |
           ko build . --bare \
+            --ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             --platform=linux/amd64,linux/arm64,linux/armv7 \
             --tags=${{ github.ref_name }},latest
         env:
