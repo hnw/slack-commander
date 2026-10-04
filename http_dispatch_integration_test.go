@@ -15,7 +15,7 @@ import (
 )
 
 func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 50)
+	outputs := make(chan *observedCommandOutput, 50)
 
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -34,12 +34,12 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 		RunnerConfig:  httpConfig,
 		ParserConfig:  cmd.ParserConfig{AllowInChain: true},
 		Dispatch:      cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	echoCommand := cmd.NewCommand(cmd.CommandConfig{
 		Index:         1,
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "echo *"}},
 		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/echo *"}},
-	}, cmd.NewExecRunner(), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	}, cmd.NewExecRunner(), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, echoCommand})
 	requests := make(chan *cmd.CommandInput, 10)
 
@@ -103,7 +103,7 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 }
 
 func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 20)
+	outputs := make(chan *observedCommandOutput, 20)
 
 	started := make(chan string, 2)
 	releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})
@@ -121,12 +121,12 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 	httpCommand := cmd.NewCommand(cmd.CommandConfig{
 		Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}},
 		RunnerConfig: httpConfig, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	queuedStarted, queuedRelease := make(chan struct{}, 1), make(chan struct{})
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{
 		Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}},
 		RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}},
-	}, blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	}, blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, queuedCommand})
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	requests := make(chan *cmd.CommandInput, 2)
@@ -222,9 +222,9 @@ func waitForStartedIntegrationRequests(t *testing.T, started <-chan string, coun
 	}
 }
 
-func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *pubsub.CommandOutput, conversation cmd.ConversationID) []*pubsub.CommandOutput {
+func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *observedCommandOutput, conversation cmd.ConversationID) []*observedCommandOutput {
 	t.Helper()
-	collected := make([]*pubsub.CommandOutput, 0, 10)
+	collected := make([]*observedCommandOutput, 0, 10)
 	for {
 		select {
 		case output := <-outputs:
@@ -238,7 +238,7 @@ func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *pubsub.Comm
 	}
 }
 
-func assertIntegrationOutputs(t *testing.T, outputs []*pubsub.CommandOutput, queuedConversation cmd.ConversationID) {
+func assertIntegrationOutputs(t *testing.T, outputs []*observedCommandOutput, queuedConversation cmd.ConversationID) {
 	t.Helper()
 	seenHTTP := map[string]bool{}
 	var queuedText string
@@ -264,7 +264,7 @@ func assertIntegrationOutputs(t *testing.T, outputs []*pubsub.CommandOutput, que
 }
 
 func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 30)
+	outputs := make(chan *observedCommandOutput, 30)
 
 	startedQueued := make(chan struct{}, 1)
 	releaseQueued := make(chan struct{})
@@ -280,8 +280,8 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	locks := &cmd.ConversationLocks{}
 
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}, RunnerConfig: httpConfig, Dispatch: cmd.DispatchExecutor}, cmd.NewHTTPRunner(httpConfig), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
-	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}), pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}, RunnerConfig: httpConfig, Dispatch: cmd.DispatchExecutor}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}), testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
 	requests := make(chan *cmd.CommandInput, 10)
 

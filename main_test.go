@@ -27,7 +27,7 @@ type listenerFailureTransport struct {
 }
 
 func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 10)
+	outputs := pubsub.NewSlackOutput(10)
 
 	type slackRequest struct {
 		path string
@@ -58,7 +58,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
 		RunnerConfig:  httpConfig,
 		Dispatch:      cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+	}, cmd.NewHTTPRunner(httpConfig), nil, outputs.NewCommandOutput(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
 
 	executor := cmd.NewExecutor()
@@ -69,7 +69,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 	writerCtx, cancelWriter := context.WithCancel(context.Background())
 	var outputCloseOnce sync.Once
 	go func() {
-		pubsub.SlackWriter(writerCtx, smc, outputs)
+		outputs.Run(writerCtx, smc)
 		close(writerDone)
 	}()
 	t.Cleanup(func() {
@@ -78,7 +78,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		cancelDispatch()
 		cancelWriter()
 		dispatcher.Wait()
-		outputCloseOnce.Do(func() { close(outputs) })
+		outputCloseOnce.Do(func() { outputs.Close() })
 		<-writerDone
 	})
 
@@ -101,7 +101,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 	cancelWriter()
 	releaseOnce.Do(func() { close(releaseHTTP) })
 	dispatcher.Wait()
-	outputCloseOnce.Do(func() { close(outputs) })
+	outputCloseOnce.Do(func() { outputs.Close() })
 	select {
 	case <-writerDone:
 	case <-time.After(3 * time.Second):
@@ -142,7 +142,7 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 		{name: "reply", dispatch: cmd.DispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			outputs := make(chan *pubsub.CommandOutput, 1)
+			outputs := pubsub.NewSlackOutput(1)
 
 			type slackRequest struct {
 				path string
@@ -161,7 +161,7 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			broadcast := tc.broadcast
 			command := cmd.NewCommand(cmd.CommandConfig{
 				Dispatch: tc.dispatch,
-			}, nil, nil, pubsub.NewSlackOutputHandler(outputs, *pubsub.NewSystemReplyConfig(&broadcast), 0))
+			}, nil, nil, outputs.NewCommandOutput(*pubsub.NewSystemReplyConfig(&broadcast), 0))
 
 			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool {
 				t.Fatal("parse error entered the command queue")
@@ -180,11 +180,11 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			}
 			dispatcher.Close()
 			dispatcher.Wait()
-			close(outputs)
+			outputs.Close()
 
 			smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 			writerDone := make(chan struct{})
-			go func() { pubsub.SlackWriter(context.Background(), smc, outputs); close(writerDone) }()
+			go func() { outputs.Run(context.Background(), smc); close(writerDone) }()
 			select {
 			case <-writerDone:
 			case <-time.After(3 * time.Second):

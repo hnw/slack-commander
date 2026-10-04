@@ -34,6 +34,13 @@
 - stdin interactionをchain内で許可する。Executorは実行中の各Commandが生成したendpointとimplicit reply Commandを一括登録し、Routerはactive entryのreply ACLで照合する。Routerにoperatorや実行状態を持たせない。既存設定のchain制約を緩め、active stdinのACLを明確にする可逆な変更として独立ADRを作成した（[active stdin reply ACL](../docs/decisions/2026-10-03-active-stdin-reply-acl.md)）。
 
 
+## Slack output pipeline の内部化（2026-10-05）
+
+- `SlackOutput`がprivateな`slackOutputEvent` channelを所有する。mainは生成・command出力factory注入・Run・Closeだけを担当する。
+- cmdの出力抽象を`CommandOutput`へ改名し、pubsubのbuffer / timer streamをprivate化した。text / sixel分離用rawWriterは責務が異なるため維持する。
+- producerと最終Flushの完了後にCloseする契約を維持する。context終了後の複数producer drainと非同期HTTP drainをテストで確認する。
+- ADR検討: queue所有者のpubsubへの移動は依頼された可逆な内部変更であり、設定・永続化・外部API契約を変えないため独立ADRは見送る。
+
 ## 既知の境界上の課題
 
 - route cache miss 時の再判定では `RootInputResolver` を通じて transport 側の root text と起点senderの候補indexを取得している。現在の Slack 実装では `pubsub.SlackRootInputResolver` が同期的に取得するため、cmd 側から transport 側へ問い合わせる形が残っている。

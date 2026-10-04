@@ -243,7 +243,7 @@ func TestResolveConfigBuildsRawStdinReplyWithResolvedRootACL(t *testing.T) {
 func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	cfg, resolved, rawReply := resolveStdinReplyTestConfig(t)
 	stdinStore := &cmd.StdinStore{}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), make(chan *pubsub.CommandOutput, 100))
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), pubsub.NewSlackOutput(100).NewCommandOutput)
 	queued := false
 	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
@@ -259,7 +259,7 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 		ParserConfig:  cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin},
 		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
 		Dispatch:      cmd.DispatchRunner,
-	}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutputHandler(make(chan *pubsub.CommandOutput, 100), pubsub.ReplyConfig{}, 0))
+	}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutput(100).NewCommandOutput(pubsub.ReplyConfig{}, 0))
 	stdinStore.Lifecycle(conversation).StdinReady(endpoint, implicitReply)
 	for _, indexes := range [][]int{{resolved.Index}, {}} {
 		result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
@@ -292,7 +292,7 @@ func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
 	if len(cfg.commandConfigs[0].Replies) != 0 || len(cfg.ListenerConfigs) != 1 {
 		t.Fatalf("oneshot resolved replies/listener candidates = %d/%+v, want none", len(cfg.commandConfigs[0].Replies), cfg.ListenerConfigs)
 	}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), make(chan *pubsub.CommandOutput, 100))
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), pubsub.NewSlackOutput(100).NewCommandOutput)
 	queued := false
 	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}

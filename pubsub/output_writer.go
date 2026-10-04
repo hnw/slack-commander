@@ -14,8 +14,7 @@ import (
 // DefaultOutputFlushInterval is the maximum delay before buffered output is emitted.
 const DefaultOutputFlushInterval = time.Second
 
-// OutputWriter buffers command output and emits it to the output channel.
-type OutputWriter struct {
+type slackOutputStream struct {
 	bufw          *bufio.Writer // 埋め込みにするとWriteメソッドの上書きができない場合があったのでメンバにしている
 	raw           *rawWriter
 	flushInterval time.Duration
@@ -25,42 +24,42 @@ type OutputWriter struct {
 }
 
 func newStdWriter(
-	ch chan *CommandOutput,
+	ch chan<- *slackOutputEvent,
 	cfg *ReplyConfig,
 	conversationID cmd.ConversationID,
 	messageID cmd.MessageID,
 	flushInterval time.Duration,
-) *OutputWriter {
-	return newOutputWriter(ch, cfg, false, conversationID, messageID, flushInterval)
+) *slackOutputStream {
+	return newSlackOutputStream(ch, cfg, false, conversationID, messageID, flushInterval)
 }
 
 func newErrWriter(
-	ch chan *CommandOutput,
+	ch chan<- *slackOutputEvent,
 	cfg *ReplyConfig,
 	conversationID cmd.ConversationID,
 	messageID cmd.MessageID,
 	flushInterval time.Duration,
-) *OutputWriter {
-	return newOutputWriter(ch, cfg, true, conversationID, messageID, flushInterval)
+) *slackOutputStream {
+	return newSlackOutputStream(ch, cfg, true, conversationID, messageID, flushInterval)
 }
 
-func newOutputWriter(
-	ch chan *CommandOutput,
+func newSlackOutputStream(
+	ch chan<- *slackOutputEvent,
 	cfg *ReplyConfig,
 	isErrOut bool,
 	conversationID cmd.ConversationID,
 	messageID cmd.MessageID,
 	flushInterval time.Duration,
-) *OutputWriter {
+) *slackOutputStream {
 	raw := newRawWriter(ch, cfg, isErrOut, conversationID, messageID)
-	return &OutputWriter{
+	return &slackOutputStream{
 		bufw:          bufio.NewWriterSize(raw, 2048),
 		raw:           raw,
 		flushInterval: flushInterval,
 	}
 }
 
-func (w *OutputWriter) Write(data []byte) (n int, err error) {
+func (w *slackOutputStream) Write(data []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	n, err = w.bufw.Write(data)
@@ -80,8 +79,7 @@ func (w *OutputWriter) Write(data []byte) (n int, err error) {
 	return
 }
 
-// Flush sends buffered output to the channel.
-func (w *OutputWriter) Flush() error {
+func (w *slackOutputStream) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.stopTimerLocked()
@@ -91,7 +89,7 @@ func (w *OutputWriter) Flush() error {
 	return w.raw.Flush()
 }
 
-func (w *OutputWriter) startTimerLocked() {
+func (w *slackOutputStream) startTimerLocked() {
 	w.timerSequence++
 	sequence := w.timerSequence
 	w.timer = time.AfterFunc(w.flushInterval, func() {
@@ -99,7 +97,7 @@ func (w *OutputWriter) startTimerLocked() {
 	})
 }
 
-func (w *OutputWriter) stopTimerLocked() {
+func (w *slackOutputStream) stopTimerLocked() {
 	if w.timer != nil {
 		w.timer.Stop()
 		w.timer = nil
@@ -107,7 +105,7 @@ func (w *OutputWriter) stopTimerLocked() {
 	w.timerSequence++
 }
 
-func (w *OutputWriter) flushBuffered(sequence uint64) {
+func (w *slackOutputStream) flushBuffered(sequence uint64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.timerSequence != sequence {
@@ -118,7 +116,7 @@ func (w *OutputWriter) flushBuffered(sequence uint64) {
 }
 
 type rawWriter struct {
-	Ch             chan *CommandOutput
+	Ch             chan<- *slackOutputEvent
 	ReplyConfig    *ReplyConfig
 	ConversationID cmd.ConversationID
 	MessageID      cmd.MessageID
@@ -127,7 +125,7 @@ type rawWriter struct {
 }
 
 func newRawWriter(
-	ch chan *CommandOutput,
+	ch chan<- *slackOutputEvent,
 	cfg *ReplyConfig,
 	isErrOut bool,
 	conversationID cmd.ConversationID,
@@ -146,7 +144,7 @@ func (w *rawWriter) emitText(text []byte) {
 	if len(text) == 0 {
 		return
 	}
-	w.Ch <- &CommandOutput{
+	w.Ch <- &slackOutputEvent{
 		ReplyConfig:    w.ReplyConfig,
 		ConversationID: w.ConversationID,
 		MessageID:      w.MessageID,
@@ -161,7 +159,7 @@ func (w *rawWriter) emitImage(sixelData []byte) {
 		fmt.Fprintf(os.Stderr, "[WARN] sixel to PNG conversion failed: %v\n", err)
 		return
 	}
-	w.Ch <- &CommandOutput{
+	w.Ch <- &slackOutputEvent{
 		ReplyConfig:    w.ReplyConfig,
 		ConversationID: w.ConversationID,
 		MessageID:      w.MessageID,
@@ -218,8 +216,7 @@ func (w *rawWriter) processBuffer(final bool) {
 	}
 }
 
-// Flush は rawWriter に残ったバッファを処理する。
-// 不完全な sixel シーケンスは破棄し、残テキストは送信する。
+// Incomplete sixel sequences must not carry over into subsequent output.
 func (w *rawWriter) Flush() error {
 	w.processBuffer(true)
 	return nil

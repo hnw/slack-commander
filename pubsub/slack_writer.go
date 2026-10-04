@@ -11,8 +11,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-// SlackWriter はoutputQueueから来たコマンド実行結果をSlackに書き込みます
-func SlackWriter(ctx context.Context, smc *socketmode.Client, outputQueue chan *CommandOutput) {
+func slackWriter(ctx context.Context, smc *socketmode.Client, outputQueue <-chan *slackOutputEvent) {
 	runningProcess := 0
 	for {
 		select {
@@ -30,7 +29,7 @@ func SlackWriter(ctx context.Context, smc *socketmode.Client, outputQueue chan *
 	}
 }
 
-func handleOutput(smc *socketmode.Client, output *CommandOutput, runningProcess int) int {
+func handleOutput(smc *socketmode.Client, output *slackOutputEvent, runningProcess int) int {
 	if output.Spawned {
 		runningProcess++
 		if err := addReaction(smc, output, "eyes"); err != nil {
@@ -64,21 +63,21 @@ func handleOutput(smc *socketmode.Client, output *CommandOutput, runningProcess 
 	return runningProcess
 }
 
-func addReaction(smc *socketmode.Client, output *CommandOutput, name string) error {
+func addReaction(smc *socketmode.Client, output *slackOutputEvent, name string) error {
 	ch := getReactionChannel(output)
 	ts := getReactionTimestamp(output)
 	item := slack.NewRefToMessage(ch, ts)
 	return smc.AddReaction(name, item)
 }
 
-func removeReaction(smc *socketmode.Client, output *CommandOutput, name string) error {
+func removeReaction(smc *socketmode.Client, output *slackOutputEvent, name string) error {
 	ch := getReactionChannel(output)
 	ts := getReactionTimestamp(output)
 	item := slack.NewRefToMessage(ch, ts)
 	return smc.RemoveReaction(name, item)
 }
 
-func postMessage(smc *socketmode.Client, output *CommandOutput) error {
+func postMessage(smc *socketmode.Client, output *slackOutputEvent) error {
 	if !hasMeaningfulText(output) {
 		return nil
 	}
@@ -103,7 +102,7 @@ func postMessage(smc *socketmode.Client, output *CommandOutput) error {
 
 func postMessageWithImageBlock(
 	smc *socketmode.Client,
-	output *CommandOutput,
+	output *slackOutputEvent,
 	fileID string,
 ) error {
 	cfg := getConfig(output)
@@ -138,7 +137,7 @@ func postMessageWithImageBlock(
 	return nil
 }
 
-func uploadImage(smc *socketmode.Client, output *CommandOutput) error {
+func uploadImage(smc *socketmode.Client, output *slackOutputEvent) error {
 	cfg := getConfig(output)
 	params := slack.UploadFileParameters{
 		Reader:   bytes.NewReader(output.ImageData),
@@ -180,26 +179,26 @@ func isInvalidBlocks(err error) bool {
 	return strings.Contains(err.Error(), "invalid_blocks")
 }
 
-func hasMeaningfulText(output *CommandOutput) bool {
+func hasMeaningfulText(output *slackOutputEvent) bool {
 	return strings.TrimSpace(output.Text) != ""
 }
 
-func getConfig(output *CommandOutput) *ReplyConfig {
+func getConfig(output *slackOutputEvent) *ReplyConfig {
 	if output.ReplyConfig == nil {
 		return NewSystemReplyConfig(nil)
 	}
 	return output.ReplyConfig
 }
 
-func getThreadTimestamp(output *CommandOutput) string {
+func getThreadTimestamp(output *slackOutputEvent) string {
 	return output.ConversationID.RootTimestamp
 }
 
-func getReactionTimestamp(output *CommandOutput) string {
+func getReactionTimestamp(output *slackOutputEvent) string {
 	return output.MessageID.Timestamp
 }
 
-func buildTextAttachment(output *CommandOutput) slack.Attachment {
+func buildTextAttachment(output *slackOutputEvent) slack.Attachment {
 	attachment := slack.Attachment{Color: getColor(output)}
 	switch getConfig(output).OutputFormat {
 	case OutputFormatMonospaced:
@@ -214,7 +213,7 @@ func buildTextAttachment(output *CommandOutput) slack.Attachment {
 	return attachment
 }
 
-func buildTextBlock(output *CommandOutput) slack.Block {
+func buildTextBlock(output *slackOutputEvent) slack.Block {
 	switch getConfig(output).OutputFormat {
 	case OutputFormatMarkdown:
 		return slack.NewMarkdownBlock("", output.Text)
@@ -227,7 +226,7 @@ func buildTextBlock(output *CommandOutput) slack.Block {
 	}
 }
 
-func getReplyBroadcast(output *CommandOutput) bool {
+func getReplyBroadcast(output *slackOutputEvent) bool {
 	cfg := getConfig(output)
 	if cfg.ReplyBroadcast == nil {
 		return true
@@ -240,17 +239,17 @@ const (
 	stderrColor = "#E01E5A"
 )
 
-func getColor(output *CommandOutput) string {
+func getColor(output *slackOutputEvent) string {
 	if output.IsErrOut {
 		return stderrColor
 	}
 	return stdoutColor
 }
 
-func getOutputChannel(output *CommandOutput) string {
+func getOutputChannel(output *slackOutputEvent) string {
 	return output.ConversationID.ChannelID
 }
 
-func getReactionChannel(output *CommandOutput) string {
+func getReactionChannel(output *slackOutputEvent) string {
 	return output.MessageID.ChannelID
 }
