@@ -33,7 +33,7 @@ func NewExecRunner() CommandRunner {
 }
 
 func (r *execRunner) CommandContext(ctx context.Context, name string, arg ...string) Cmd {
-	return &execCmd{cmd: exec.CommandContext(ctx, name, arg...)}
+	return &execCmd{cmd: exec.CommandContext(ctx, name, arg...)} //nolint:gosec // G204 -- executing configured commands is the purpose of this runner.
 }
 
 type execCmd struct {

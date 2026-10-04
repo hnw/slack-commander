@@ -23,7 +23,7 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started <- r.URL.Path
 		<-release
-		_, _ = io.WriteString(w, r.URL.Path)
+		_, _ = io.WriteString(w, r.URL.Path) //nolint:gosec // G705 -- test server echoes a controlled request path
 	}))
 	t.Cleanup(server.Close)
 
