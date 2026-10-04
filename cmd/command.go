@@ -67,26 +67,27 @@ const (
 	DispatchRunner
 )
 
-// Command は出力handlerとreply CommandSetを持つruntime command。
+// Command is a runtime command with its output and reply CommandSet.
 type Command struct {
-	output  CommandOutputHandler
+	output  CommandOutput
 	config  CommandConfig
 	matcher Matcher
 	runner  CommandRunner
 	replies *CommandSet
 }
 
-func newCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutputHandler) *Command {
+// NewCommand requires a CommandOutput at construction time.
+func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutput) *Command {
 	if runner == nil {
 		runner = NewExecRunner()
 	}
 	if output == nil {
-		panic("cmd.NewCommand requires a CommandOutputHandler")
+		panic("cmd.NewCommand requires a CommandOutput")
 	}
 	switch value := reflect.ValueOf(output); value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		if value.IsNil() {
-			panic("cmd.NewCommand requires a CommandOutputHandler")
+			panic("cmd.NewCommand requires a CommandOutput")
 		}
 	}
 	return &Command{
@@ -96,11 +97,6 @@ func newCommand(config CommandConfig, runner CommandRunner, replies *CommandSet,
 		runner:  runner,
 		replies: replies,
 	}
-}
-
-// NewCommand は生成時に必須のoutput handlerを受け取る。
-func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutputHandler) *Command {
-	return newCommand(config, runner, replies, output)
 }
 
 func (c *Command) match(args []string) []string {

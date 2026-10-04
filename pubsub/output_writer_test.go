@@ -7,12 +7,12 @@ import (
 	"github.com/hnw/slack-commander/cmd"
 )
 
-func newTestOutputWriter(interval time.Duration) (*OutputWriter, chan *CommandOutput) {
-	ch := make(chan *CommandOutput, 10)
-	return newOutputWriter(ch, nil, false, cmd.ConversationID{}, cmd.MessageID{}, interval), ch
+func newTestSlackOutputStream(interval time.Duration) (*slackOutputStream, chan *slackOutputEvent) {
+	ch := make(chan *slackOutputEvent, 10)
+	return newSlackOutputStream(ch, nil, false, cmd.ConversationID{}, cmd.MessageID{}, interval), ch
 }
 
-func receiveOutput(t *testing.T, ch <-chan *CommandOutput, timeout time.Duration) *CommandOutput {
+func receiveOutput(t *testing.T, ch <-chan *slackOutputEvent, timeout time.Duration) *slackOutputEvent {
 	t.Helper()
 	select {
 	case output := <-ch:
@@ -23,7 +23,7 @@ func receiveOutput(t *testing.T, ch <-chan *CommandOutput, timeout time.Duration
 	}
 }
 
-func waitForTimerCallback(t *testing.T, writer *OutputWriter) {
+func waitForTimerCallback(t *testing.T, writer *slackOutputStream) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -38,8 +38,8 @@ func waitForTimerCallback(t *testing.T, writer *OutputWriter) {
 	t.Fatal("timed out waiting for timer callback")
 }
 
-func TestOutputWriterFlushesAtBatchInterval(t *testing.T) {
-	writer, ch := newTestOutputWriter(20 * time.Millisecond)
+func TestSlackOutputStreamFlushesAtBatchInterval(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(20 * time.Millisecond)
 	if _, err := writer.Write([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +48,8 @@ func TestOutputWriterFlushesAtBatchInterval(t *testing.T) {
 	}
 }
 
-func TestOutputWriterDoesNotResetTimerOnSubsequentWrite(t *testing.T) {
-	writer, _ := newTestOutputWriter(time.Second)
+func TestSlackOutputStreamDoesNotResetTimerOnSubsequentWrite(t *testing.T) {
+	writer, _ := newTestSlackOutputStream(time.Second)
 	if _, err := writer.Write([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +74,8 @@ func TestOutputWriterDoesNotResetTimerOnSubsequentWrite(t *testing.T) {
 	}
 }
 
-func TestOutputWriterStartsNextBatchAfterTimerFlush(t *testing.T) {
-	writer, ch := newTestOutputWriter(20 * time.Millisecond)
+func TestSlackOutputStreamStartsNextBatchAfterTimerFlush(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(20 * time.Millisecond)
 	if _, err := writer.Write([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +91,8 @@ func TestOutputWriterStartsNextBatchAfterTimerFlush(t *testing.T) {
 	}
 }
 
-func TestOutputWriterFlushesExplicitly(t *testing.T) {
-	writer, ch := newTestOutputWriter(100 * time.Millisecond)
+func TestSlackOutputStreamFlushesExplicitly(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(100 * time.Millisecond)
 	if _, err := writer.Write([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,8 @@ func TestOutputWriterFlushesExplicitly(t *testing.T) {
 	}
 }
 
-func TestOutputWriterFlushesImmediatelyAtZeroInterval(t *testing.T) {
-	writer, ch := newTestOutputWriter(0)
+func TestSlackOutputStreamFlushesImmediatelyAtZeroInterval(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(0)
 	if _, err := writer.Write([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +114,8 @@ func TestOutputWriterFlushesImmediatelyAtZeroInterval(t *testing.T) {
 	}
 }
 
-func TestOutputWriterFlushesWhenBufferIsFull(t *testing.T) {
-	writer, ch := newTestOutputWriter(time.Hour)
+func TestSlackOutputStreamFlushesWhenBufferIsFull(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(time.Hour)
 	data := make([]byte, 2049)
 	for i := range data {
 		data[i] = 'x'
@@ -128,8 +128,8 @@ func TestOutputWriterFlushesWhenBufferIsFull(t *testing.T) {
 	}
 }
 
-func TestOutputWriterTimerFlushPreservesIncompleteSixel(t *testing.T) {
-	writer, ch := newTestOutputWriter(20 * time.Millisecond)
+func TestSlackOutputStreamTimerFlushPreservesIncompleteSixel(t *testing.T) {
+	writer, ch := newTestSlackOutputStream(20 * time.Millisecond)
 	half := len(minimalRedSixel) / 2
 	if _, err := writer.Write(minimalRedSixel[:half]); err != nil {
 		t.Fatal(err)

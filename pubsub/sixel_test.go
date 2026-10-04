@@ -20,9 +20,9 @@ import (
 var minimalRedSixel = []byte("\x1bPq\"1;1;4;6#1;2;100;0;0#1~~~~\x1b\\")
 
 // collectRawOutputs は rawWriter に対して複数回 Write して、Flush 後にチャンネルから全出力を収集する
-func collectRawOutputs(t *testing.T, writes ...[]byte) []*CommandOutput {
+func collectRawOutputs(t *testing.T, writes ...[]byte) []*slackOutputEvent {
 	t.Helper()
-	ch := make(chan *CommandOutput, 100)
+	ch := make(chan *slackOutputEvent, 100)
 	raw := newRawWriter(ch, nil, false, cmd.ConversationID{}, cmd.MessageID{})
 	for _, data := range writes {
 		if _, err := raw.Write(data); err != nil {
@@ -33,7 +33,7 @@ func collectRawOutputs(t *testing.T, writes ...[]byte) []*CommandOutput {
 		t.Fatalf("rawWriter.Flush error: %v", err)
 	}
 	close(ch)
-	var out []*CommandOutput
+	var out []*slackOutputEvent
 	for o := range ch {
 		out = append(out, o)
 	}
@@ -57,7 +57,7 @@ func TestRawWriterPureText(t *testing.T) {
 // TestRawWriterSixelOnly は sixel のみの出力が ImageData として届くことを確認する
 func TestRawWriterSixelOnly(t *testing.T) {
 	outs := collectRawOutputs(t, minimalRedSixel)
-	var imgOuts []*CommandOutput
+	var imgOuts []*slackOutputEvent
 	for _, o := range outs {
 		if o.ImageData != nil {
 			imgOuts = append(imgOuts, o)
@@ -81,7 +81,7 @@ func TestRawWriterTextBeforeAndAfterSixel(t *testing.T) {
 	outs := collectRawOutputs(t, data)
 
 	var texts []string
-	var imgs []*CommandOutput
+	var imgs []*slackOutputEvent
 	for _, o := range outs {
 		if o.Text != "" {
 			texts = append(texts, o.Text)
@@ -110,7 +110,7 @@ func TestRawWriterSixelSpanningTwoWrites(t *testing.T) {
 	half := len(minimalRedSixel) / 2
 	outs := collectRawOutputs(t, minimalRedSixel[:half], minimalRedSixel[half:])
 
-	var imgOuts []*CommandOutput
+	var imgOuts []*slackOutputEvent
 	for _, o := range outs {
 		if o.ImageData != nil {
 			imgOuts = append(imgOuts, o)
@@ -126,7 +126,7 @@ func TestRawWriterMultipleSixels(t *testing.T) {
 	combined := append(minimalRedSixel, minimalRedSixel...)
 	outs := collectRawOutputs(t, combined)
 
-	var imgOuts []*CommandOutput
+	var imgOuts []*slackOutputEvent
 	for _, o := range outs {
 		if o.ImageData != nil {
 			imgOuts = append(imgOuts, o)

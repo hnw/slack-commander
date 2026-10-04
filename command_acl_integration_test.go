@@ -23,7 +23,7 @@ type aclIntegrationRunner struct {
 }
 
 func TestThreadStdinUsesRootCommandACL(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 30)
+	outputs := make(chan *observedCommandOutput, 30)
 
 	var cfg Config
 	if err := decodeConfigString(`
@@ -47,7 +47,7 @@ timeout = "5s"
 		t.Fatal(err)
 	}
 	stdinStore := &cmd.StdinStore{}
-	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), outputs)
+	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), testOutputFactory(outputs))
 	requests := make(chan *cmd.CommandInput, 10)
 
 	conversationLocks := &cmd.ConversationLocks{}
@@ -91,7 +91,7 @@ timeout = "5s"
 }
 
 func TestThreadStdinChainReplyACLTracksActiveCommand(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 30)
+	outputs := make(chan *observedCommandOutput, 30)
 
 	var cfg Config
 	if err := decodeConfigString(`
@@ -129,7 +129,7 @@ allowed_user_ids = ["U-root", "U-b"]
 			return cmd.NewStdinReplyRunner()
 		}
 		return runner.forCommand(config.Command)
-	}, outputs)
+	}, testOutputFactory(outputs))
 	requests := make(chan *cmd.CommandInput, 10)
 
 	conversationLocks := &cmd.ConversationLocks{}
@@ -278,7 +278,7 @@ func (*aclIntegrationCmd) SetStderr(io.Writer) {}
 func (*aclIntegrationCmd) Run() int            { return 0 }
 
 func TestCommandACLThroughSlackListenerAndExecutor(t *testing.T) {
-	outputs := make(chan *pubsub.CommandOutput, 30)
+	outputs := make(chan *observedCommandOutput, 30)
 
 	var cfg Config
 	err := decodeConfigString(`
@@ -323,7 +323,7 @@ accept_reminder = true
 		t.Fatal(err)
 	}
 	runner := &aclIntegrationRunner{}
-	commands := buildCommandSet(cfg.commandConfigs, func(cmd.RunnerConfig) cmd.CommandRunner { return runner }, outputs)
+	commands := buildCommandSet(cfg.commandConfigs, func(cmd.RunnerConfig) cmd.CommandRunner { return runner }, testOutputFactory(outputs))
 	queued := make(chan *cmd.CommandInput, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth.test" {
@@ -423,7 +423,7 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 			}
 			commands := make([]*cmd.Command, 0, len(configs))
 			for _, config := range configs {
-				commands = append(commands, cmd.NewCommand(config, runner, nil, pubsub.NewSlackOutputHandler(make(chan *pubsub.CommandOutput, 100), pubsub.ReplyConfig{}, 0)))
+				commands = append(commands, cmd.NewCommand(config, runner, nil, testOutputFactory(make(chan *observedCommandOutput, 100))(pubsub.ReplyConfig{}, 0)))
 			}
 			commandSet := cmd.NewCommandSet(commands)
 

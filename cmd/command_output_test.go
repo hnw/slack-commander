@@ -71,7 +71,7 @@ func assertOutputCalls(t *testing.T, handler *recordingOutputHandler, input *Com
 	}
 }
 
-func TestExecutorOutputHandlerStreamsAndLifecycle(t *testing.T) {
+func TestExecutorOutputStreamsAndLifecycle(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "plain", true: "tty"}[tty], func(t *testing.T) {
 			handler := &recordingOutputHandler{}
@@ -91,7 +91,7 @@ func TestExecutorOutputHandlerStreamsAndLifecycle(t *testing.T) {
 	}
 }
 
-func TestExecutorOutputHandlerTimeout(t *testing.T) {
+func TestExecutorOutputTimeout(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "plain", true: "tty"}[tty], func(t *testing.T) {
 			handler := &recordingOutputHandler{}
@@ -111,7 +111,7 @@ func TestExecutorOutputHandlerTimeout(t *testing.T) {
 	}
 }
 
-func TestExecutorChainOutputHandlerOwnership(t *testing.T) {
+func TestExecutorChainOutputOwnership(t *testing.T) {
 	owner, second := &recordingOutputHandler{}, &recordingOutputHandler{}
 	firstCommand := testRuntimeCommand(&testExecutionConfig{Index: 0, Keyword: "first", Command: "first", AllowInChain: true}, singleCmdRunner{command: &fakeCmd{stdoutText: "first"}})
 	secondCommand := testRuntimeCommand(&testExecutionConfig{Index: 1, Keyword: "second", Command: "second", AllowInChain: true}, singleCmdRunner{command: &fakeCmd{stderrText: "second", exitCode: 3}})
@@ -125,7 +125,7 @@ func TestExecutorChainOutputHandlerOwnership(t *testing.T) {
 	}
 }
 
-func TestExecutorMissingCommandOutputHandlerAndExitCode(t *testing.T) {
+func TestExecutorMissingCommandOutputAndExitCode(t *testing.T) {
 	for _, tc := range []struct {
 		text    string
 		code    int
@@ -151,7 +151,7 @@ func TestExecutorMissingCommandOutputHandlerAndExitCode(t *testing.T) {
 	}
 }
 
-func TestDispatcherParseErrorUsesOutputHandler(t *testing.T) {
+func TestDispatcherParseErrorUsesOutput(t *testing.T) {
 	handler := &recordingOutputHandler{}
 	command := testRuntimeCommand(&testExecutionConfig{Keyword: "run *", Command: "run *"}, &fakeRunner{})
 	command.output = handler

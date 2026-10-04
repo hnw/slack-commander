@@ -132,10 +132,10 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 	}
 }
 
-func TestNewCommandRequiresOutputHandler(t *testing.T) {
+func TestNewCommandRequiresOutput(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		output CommandOutputHandler
+		output CommandOutput
 	}{
 		{name: "nil"},
 		{name: "typed nil", output: (*recordingOutputHandler)(nil)},

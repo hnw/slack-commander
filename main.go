@@ -94,8 +94,8 @@ func run(args []string) int {
 	// チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
-	outputQueue := make(chan *pubsub.CommandOutput, cfg.NumWorkers)
-	commands := buildCommandSet(cfg.commandConfigs, runnerFactory, outputQueue)
+	output := pubsub.NewSlackOutput(cfg.NumWorkers)
+	commands := buildCommandSet(cfg.commandConfigs, runnerFactory, output.NewCommandOutput)
 	conversationLocks := &cmd.ConversationLocks{}
 	executor := cmd.NewExecutor()
 	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
@@ -119,7 +119,7 @@ func run(args []string) int {
 	writerWG.Add(1)
 	go func() {
 		defer writerWG.Done()
-		pubsub.SlackWriter(ctx, smc, outputQueue)
+		output.Run(ctx, smc)
 	}()
 	var listenerWG sync.WaitGroup
 	var listenerErr error
@@ -152,7 +152,7 @@ func run(args []string) int {
 	close(commandQueue)
 	executorWG.Wait()
 	dispatcher.Wait()
-	close(outputQueue)
+	output.Close()
 	writerWG.Wait()
 	return exitCode
 }

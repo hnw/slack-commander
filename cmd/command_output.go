@@ -20,9 +20,9 @@ const (
 	SystemErrorCommandNotFound
 )
 
-// CommandOutputHandler は出力先と表示設定を所有する。
-// Start / Finish はchain全体について先頭Commandが通知する。
-type CommandOutputHandler interface {
+// CommandOutput represents the destination for command execution results.
+// The first Command calls Start and Finish for the entire chain.
+type CommandOutput interface {
 	Stdout(ConversationID, MessageID) OutputStream
 	Stderr(ConversationID, MessageID) OutputStream
 	Start(ConversationID, MessageID)

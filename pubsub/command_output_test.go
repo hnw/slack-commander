@@ -8,11 +8,12 @@ import (
 	"github.com/hnw/slack-commander/cmd"
 )
 
-func TestSlackOutputHandlerStreamsAndLifecycle(t *testing.T) {
-	queue := make(chan *CommandOutput, 10)
+func TestSlackCommandOutputStreamsAndLifecycle(t *testing.T) {
+	pipeline := NewSlackOutput(10)
+	queue := pipeline.events
 	broadcast := false
 	reply := ReplyConfig{Username: "command", IconEmoji: ":robot_face:", OutputFormat: OutputFormatMarkdown, ReplyBroadcast: &broadcast}
-	handler := NewSlackOutputHandler(queue, reply, time.Hour)
+	handler := pipeline.NewCommandOutput(reply, time.Hour)
 	c := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	m := cmd.MessageID{ChannelID: "C", Timestamp: "2"}
 	handler.Start(c, m)
@@ -29,7 +30,7 @@ func TestSlackOutputHandlerStreamsAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler.Finish(c, m, 7)
-	want := []*CommandOutput{
+	want := []*slackOutputEvent{
 		{ConversationID: c, MessageID: m, Spawned: true},
 		{ConversationID: c, MessageID: m, ReplyConfig: &reply, Text: "out"},
 		{ConversationID: c, MessageID: m, ReplyConfig: &reply, Text: "err", IsErrOut: true},
@@ -42,7 +43,7 @@ func TestSlackOutputHandlerStreamsAndLifecycle(t *testing.T) {
 	}
 }
 
-func TestSlackOutputHandlerSystemErrors(t *testing.T) {
+func TestSlackCommandOutputSystemErrors(t *testing.T) {
 	broadcast := false
 	reply := ReplyConfig{Username: "custom", IconEmoji: ":robot_face:", OutputFormat: OutputFormatMarkdown, ReplyBroadcast: &broadcast}
 	c, m := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}, cmd.MessageID{ChannelID: "C", Timestamp: "2"}
@@ -56,11 +57,12 @@ func TestSlackOutputHandlerSystemErrors(t *testing.T) {
 		{name: "not found", kind: cmd.SystemErrorCommandNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			queue := make(chan *CommandOutput, 1)
-			handler := NewSlackOutputHandler(queue, reply, time.Hour)
+			pipeline := NewSlackOutput(1)
+			queue := pipeline.events
+			handler := pipeline.NewCommandOutput(reply, time.Hour)
 			handler.SystemError(c, m, "error", tc.kind)
 			got := <-queue
-			want := &CommandOutput{ConversationID: c, MessageID: m, Text: "error", IsErrOut: true, ReplyConfig: tc.config, ExitCode: tc.code}
+			want := &slackOutputEvent{ConversationID: c, MessageID: m, Text: "error", IsErrOut: true, ReplyConfig: tc.config, ExitCode: tc.code}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("error output = %#v, want %#v", got, want)
 			}

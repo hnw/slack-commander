@@ -130,17 +130,17 @@ func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawCommandConfig) *pub
 	return replyConfig
 }
 
-func buildCommandSet(configs []*resolvedCommandConfig, factory cmd.RunnerFactory, queue chan *pubsub.CommandOutput) *cmd.CommandSet {
+func buildCommandSet(configs []*resolvedCommandConfig, factory cmd.RunnerFactory, newOutput func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput) *cmd.CommandSet {
 	commands := make([]*cmd.Command, 0, len(configs))
 	for _, config := range configs {
-		commands = append(commands, buildCommand(config, factory, queue))
+		commands = append(commands, buildCommand(config, factory, newOutput))
 	}
 	return cmd.NewCommandSet(commands)
 }
 
-func buildCommand(config *resolvedCommandConfig, factory cmd.RunnerFactory, queue chan *pubsub.CommandOutput) *cmd.Command {
-	replies := buildCommandSet(config.Replies, factory, queue)
-	return cmd.NewCommand(config.CommandConfig, factory(config.RunnerConfig), replies, pubsub.NewSlackOutputHandler(queue, config.ReplyConfig, config.OutputFlushInterval))
+func buildCommand(config *resolvedCommandConfig, factory cmd.RunnerFactory, newOutput func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput) *cmd.Command {
+	replies := buildCommandSet(config.Replies, factory, newOutput)
+	return cmd.NewCommand(config.CommandConfig, factory(config.RunnerConfig), replies, newOutput(config.ReplyConfig, config.OutputFlushInterval))
 }
 
 func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
