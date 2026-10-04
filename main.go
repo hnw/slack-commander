@@ -96,9 +96,10 @@ func run(args []string) int {
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
 	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
+	commands.ConfigureOutput(outputQueue)
 	conversationLocks := &cmd.ConversationLocks{}
-	executor := cmd.NewExecutor(outputQueue)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputQueue, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	executor := cmd.NewExecutor()
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		select {
 		case commandQueue <- input:
 			return true

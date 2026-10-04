@@ -89,7 +89,8 @@ func TestExecutorArgumentBodySendsBodyOnlyToArgv(t *testing.T) {
 	commandSet := testCommandSet([]*testCommandConfig{config}, func(*testExecutionConfig) CommandRunner {
 		return runner
 	})
-	executor := NewExecutor(wq)
+	commandSet.ConfigureOutput(wq)
+	executor := NewExecutor()
 	input := &CommandInput{Text: "todo foo\nbar\n", AllowedCommandIndexes: []int{0}}
 	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
 	executor.Execute(context.Background(), input, nil)
@@ -109,7 +110,8 @@ func TestExecutorRejectsUnresolvedInput(t *testing.T) {
 	}, runner, nil)
 	set := NewCommandSet([]*Command{command})
 	outputs := make(chan *CommandOutput, 10)
-	executor := NewExecutor(outputs)
+	set.ConfigureOutput(outputs)
+	executor := NewExecutor()
 	prepared := &CommandInput{Text: "run", AllowedCommandIndexes: []int{0}}
 	prepared.ResolvedInput = set.ResolveInput(prepared.Text, prepared.AllowedCommandIndexes)
 	executor.Execute(context.Background(), prepared, nil)
@@ -135,7 +137,8 @@ func TestExecutorUsesOnlyListenerAllowedCommandIndexes(t *testing.T) {
 		ParserConfig:  ParserConfig{AllowInChain: true},
 	}, runner, nil)
 	set := NewCommandSet([]*Command{command})
-	executor := NewExecutor(make(chan *CommandOutput, 10))
+	set.ConfigureOutput(make(chan *CommandOutput, 10))
+	executor := NewExecutor()
 	input := &CommandInput{Text: "run", AllowedCommandIndexes: []int{}}
 	input.ResolvedInput = set.ResolveInput(input.Text, input.AllowedCommandIndexes)
 	executor.Execute(context.Background(), input, nil)
@@ -155,7 +158,8 @@ func TestExecutorAppliesGlobalIndexesToReplyCommandSet(t *testing.T) {
 	reply := NewCommand(CommandConfig{Index: 12, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}, ParserConfig: ParserConfig{AllowInChain: true}}, runner, nil)
 	secondReply := NewCommand(CommandConfig{Index: 13, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "finish"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "finish"}}, ParserConfig: ParserConfig{AllowInChain: true}}, runner, nil)
 	replySet := NewCommandSet([]*Command{reply, secondReply})
-	executor := NewExecutor(make(chan *CommandOutput, 10))
+	replySet.ConfigureOutput(make(chan *CommandOutput, 10))
+	executor := NewExecutor()
 	input := &CommandInput{Text: "retry ; finish", ResolvedInput: replySet.ResolveInput("retry ; finish", []int{12, 13}), AllowedCommandIndexes: []int{12, 13}}
 	executor.Execute(context.Background(), input, nil)
 	if calls := runner.Calls(); len(calls) != 2 || calls[0].name != "retry" || calls[1].name != "finish" {
@@ -179,7 +183,8 @@ func TestExecutorRunsNormalizedQueuedRawInputAsStdin(t *testing.T) {
 	set := NewCommandSet([]*Command{command})
 	parsed := set.ResolveInput(text, []int{2})
 	wq := make(chan *CommandOutput, 10)
-	NewExecutor(wq).Execute(context.Background(), &CommandInput{
+	set.ConfigureOutput(wq)
+	NewExecutor().Execute(context.Background(), &CommandInput{
 		Text: text, ResolvedInput: parsed, AllowedCommandIndexes: []int{2},
 	}, nil)
 	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "capture" {
@@ -346,7 +351,8 @@ func runExecutorOnce(
 	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner {
 		return runner
 	})
-	executor := NewExecutor(wq)
+	commandSet.ConfigureOutput(wq)
+	executor := NewExecutor()
 	prepared := &CommandInput{Text: input, AllowedCommandIndexes: allowedIndexes}
 	prepared.ResolvedInput = commandSet.ResolveInput(input, allowedIndexes)
 	executor.Execute(context.Background(), prepared, nil)
@@ -422,7 +428,8 @@ func TestExecutorUsesResolvedInputAfterTextAndACLChange(t *testing.T) {
 	parsed := commands.ResolveInput("todo original\nbody", []int{0})
 	input := &CommandInput{Text: "unmatched replacement", AllowedCommandIndexes: nil, ResolvedInput: parsed}
 	wq := make(chan *CommandOutput, 20)
-	NewExecutor(wq).Execute(context.Background(), input, nil)
+	commands.ConfigureOutput(wq)
+	NewExecutor().Execute(context.Background(), input, nil)
 	if calls := runner.Calls(); len(calls) != 1 || !slices.Equal(calls[0].args, []string{"original", "\nbody"}) {
 		t.Fatalf("runner calls = %#v, want prepared args and stdin body", calls)
 	}
@@ -438,7 +445,8 @@ func TestExecutorUsesResolvedParseError(t *testing.T) {
 	parsed := commands.ResolveInput("todo original", []int{0})
 	parsed.ParseErr = errors.New("prepared parse error")
 	wq := make(chan *CommandOutput, 20)
-	NewExecutor(wq).Execute(context.Background(), &CommandInput{
+	commands.ConfigureOutput(wq)
+	NewExecutor().Execute(context.Background(), &CommandInput{
 		Text: "unmatched replacement", AllowedCommandIndexes: nil, ResolvedInput: parsed,
 	}, nil)
 	if calls := runner.Calls(); len(calls) != 0 {
@@ -470,10 +478,11 @@ func TestExecutorUsesMatchesResolvedBeforeChainExecution(t *testing.T) {
 		t.Fatalf("resolved chain = %#v, want second command and prepared args", input.ResolvedInput.Commands)
 	}
 	second.matcher.keywords = []string{"changed"}
+	commands.ConfigureOutput(wq)
 	commands.commands = []*Command{first}
 	input.Text = "first ; changed replacement"
 	input.AllowedCommandIndexes = []int{0}
-	NewExecutor(wq).Execute(context.Background(), input, nil)
+	NewExecutor().Execute(context.Background(), input, nil)
 	if calls := secondRunner.Calls(); len(calls) != 1 || !slices.Equal(calls[0].args, []string{"prepared"}) {
 		t.Fatalf("second command calls = %#v, want cached match with prepared args", calls)
 	}
@@ -484,7 +493,8 @@ func TestExecutorPropagatesConversationID(t *testing.T) {
 	commandSet := testCommandSet(testCommandConfigs(), func(*testExecutionConfig) CommandRunner {
 		return contextRunner{}
 	})
-	executor := NewExecutor(wq)
+	commandSet.ConfigureOutput(wq)
+	executor := NewExecutor()
 
 	conversation := ConversationID{
 		ChannelID:     "C123",
@@ -605,9 +615,9 @@ func testExecutorIgnoreCasualMessageStartingWithPrefix(t *testing.T) {
 func testExecutorReportsErrorsForUnmatchedCommands(t *testing.T) {
 	t.Helper()
 
-	calls, outputs := runExecutorOnce(t, "x ; y", testCommandConfigs(), []int{0, 1, 2})
-	if len(calls) != 0 {
-		t.Fatalf("expected no calls, got %d", len(calls))
+	calls, outputs := runExecutorOnce(t, "date ; x ; y", testCommandConfigs(), []int{0, 1, 2})
+	if len(calls) != 1 || calls[0].name != "date" {
+		t.Fatalf("calls = %#v, want chain owner date", calls)
 	}
 
 	var errText string

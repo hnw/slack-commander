@@ -31,7 +31,8 @@ func TestRunMatchedCommandTimeoutMessage(t *testing.T) {
 				}
 				command := testRuntimeCommand(&testExecutionConfig{Timeout: 10 * time.Millisecond, TTY: tty}, runner)
 				wq := make(chan *CommandOutput, 10)
-				if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, wq, nil); code != wantCode {
+				NewCommandSet([]*Command{command}).ConfigureOutput(wq)
+				if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != wantCode {
 					t.Fatalf("code = %d, want %d", code, wantCode)
 				}
 				var text strings.Builder
@@ -68,7 +69,8 @@ func TestRunMatchedCommandCancelsBeforeFlushingOutput(t *testing.T) {
 				wq := make(chan *CommandOutput)
 				done := make(chan int, 1)
 				go func() {
-					done <- runMatchedCommand(context.Background(), command, []string{"test"}, "", &CommandInput{}, wq, nil)
+					NewCommandSet([]*Command{command}).ConfigureOutput(wq)
+					done <- runMatchedCommand(context.Background(), command, []string{"test"}, "", &CommandInput{}, nil)
 				}()
 				synctest.Wait()
 				if cause := context.Cause(runner.ctx); !errors.Is(cause, context.Canceled) {
@@ -98,7 +100,8 @@ func TestRunMatchedCommandParentDeadlineDoesNotReportCommandTimeout(t *testing.T
 					defer cancel()
 					command := testRuntimeCommand(&testExecutionConfig{Timeout: timeout, TTY: tty}, &blockingRunner{})
 					wq := make(chan *CommandOutput, 10)
-					if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, wq, nil); code != 143 {
+					NewCommandSet([]*Command{command}).ConfigureOutput(wq)
+					if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != 143 {
 						t.Fatalf("code = %d, want 143", code)
 					}
 					for _, output := range drainOutputs(wq) {

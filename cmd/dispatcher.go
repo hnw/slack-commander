@@ -24,7 +24,6 @@ type CommandDispatcher struct {
 	closed            bool
 	ctx               context.Context
 	executor          *Executor
-	outputQueue       chan *CommandOutput
 	stdinStore        *StdinStore
 	conversationLocks *ConversationLocks
 	enqueue           func(*CommandInput) bool
@@ -35,7 +34,6 @@ type CommandDispatcher struct {
 func NewCommandDispatcher(
 	ctx context.Context,
 	executor *Executor,
-	outputQueue chan *CommandOutput,
 	stdinStore *StdinStore,
 	conversationLocks *ConversationLocks,
 	enqueue func(*CommandInput) bool,
@@ -43,7 +41,6 @@ func NewCommandDispatcher(
 	return &CommandDispatcher{
 		ctx:               ctx,
 		executor:          executor,
-		outputQueue:       outputQueue,
 		stdinStore:        stdinStore,
 		conversationLocks: conversationLocks,
 		enqueue:           enqueue,
@@ -64,18 +61,12 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		return DispatchIgnored
 	}
 	if parseErr {
-		output := &CommandOutput{
-			ReplyConfig:    parsed.Commands[0].Command.config.SystemReplyConfig,
-			ConversationID: input.ConversationID,
-			MessageID:      input.MessageID,
-			Text:           parsed.ParseErr.Error(),
-			IsErrOut:       true,
-			ExitCode:       2,
-		}
+		handler := parsed.Commands[0].Command.output
+		conversation, message, text := input.ConversationID, input.MessageID, parsed.ParseErr.Error()
 		d.asyncWG.Add(1)
 		go func() {
 			defer d.asyncWG.Done()
-			d.outputQueue <- output
+			handler.SystemError(conversation, message, text, SystemErrorParse)
 		}()
 		d.mu.Unlock()
 		return DispatchAccepted

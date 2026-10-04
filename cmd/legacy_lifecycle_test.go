@@ -60,8 +60,11 @@ func testRunWithInput(command Cmd, idle time.Duration, initial string, conversat
 }
 
 func testExecutorWithLifecycle(ctx context.Context, rq chan *CommandInput, wq chan *CommandOutput, registry *testThreadRegistry) {
-	executor := NewExecutor(wq)
+	executor := NewExecutor()
 	for input := range rq {
+		for _, resolved := range input.ResolvedInput.Commands {
+			NewCommandSet([]*Command{resolved.Command}).ConfigureOutput(wq)
+		}
 		var lifecycle StdinLifecycle
 		if registry != nil {
 			lifecycle = testLifecycle{

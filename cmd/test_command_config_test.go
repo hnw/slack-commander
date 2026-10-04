@@ -92,14 +92,14 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
 	commands := testCommandSet(configs, nil)
+	commands.ConfigureOutput(make(chan *CommandOutput, 100))
 	return NewConversationRouter(&StdinStore{}, commands, resolve, newTestDispatcher(enqueue), routeCapacity)
 }
 
 func newTestDispatcher(enqueue func(*CommandInput) bool) *CommandDispatcher {
-	return newTestCommandDispatcher(context.Background(), 100, enqueue)
+	return newTestCommandDispatcher(context.Background(), enqueue)
 }
 
-func newTestCommandDispatcher(ctx context.Context, capacity int, enqueue func(*CommandInput) bool) *CommandDispatcher {
-	outputs := make(chan *CommandOutput, capacity)
-	return NewCommandDispatcher(ctx, NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, enqueue)
+func newTestCommandDispatcher(ctx context.Context, enqueue func(*CommandInput) bool) *CommandDispatcher {
+	return NewCommandDispatcher(ctx, NewExecutor(), &StdinStore{}, &ConversationLocks{}, enqueue)
 }

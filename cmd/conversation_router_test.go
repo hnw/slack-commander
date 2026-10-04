@@ -421,7 +421,7 @@ func TestConversationRouterRestoresRawRootWithTheSameParseMode(t *testing.T) {
 	commands := NewCommandSet([]*Command{root})
 	var queued []*CommandInput
 	var resolved int
-	dispatcher := newTestCommandDispatcher(context.Background(), 10, func(input *CommandInput) bool {
+	dispatcher := newTestCommandDispatcher(context.Background(), func(input *CommandInput) bool {
 		queued = append(queued, input)
 		return true
 	})
@@ -976,7 +976,8 @@ func TestHTTPReplyUsesExecutorOutputPipeline(t *testing.T) {
 	}, NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*"}}), nil)
 	root := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
-	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
 		queueCalls++
 		return true
 	})
@@ -1038,7 +1039,8 @@ func TestHTTPRootBypassesFullQueueAndCachesOwnership(t *testing.T) {
 	}, NewHTTPRunner(httpConfig), NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	queueCalls := 0
-	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
 		queueCalls++
 		return false
 	})

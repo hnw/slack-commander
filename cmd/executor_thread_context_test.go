@@ -59,7 +59,8 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 	wq := make(chan *CommandOutput, 10)
 	runner := &environmentRecordingRunner{}
 	commandSet := testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner })
-	executor := NewExecutor(wq)
+	commandSet.ConfigureOutput(wq)
+	executor := NewExecutor()
 
 	input := &CommandInput{
 		Text:                  "date",

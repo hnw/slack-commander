@@ -209,6 +209,7 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	outputs := make(chan *CommandOutput, 10)
 	done := make(chan int, 1)
 	go func() {
+		NewCommandSet([]*Command{command}).ConfigureOutput(outputs)
 		done <- runMatchedCommand(
 			ctx,
 			command,
@@ -219,7 +220,6 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 			},
 			"initial\n",
 			&CommandInput{ConversationID: ConversationID(key)},
-			outputs,
 			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
@@ -283,13 +283,13 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, singleCmdRunner{command: capture})
 	done := make(chan int, 1)
 	go func() {
+		NewCommandSet([]*Command{command}).ConfigureOutput(make(chan *CommandOutput, 1))
 		done <- runMatchedCommand(
 			ctx,
 			command,
 			[]string{"unused"},
 			"initial",
 			&CommandInput{ConversationID: ConversationID(key)},
-			make(chan *CommandOutput, 1),
 			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
@@ -402,7 +402,8 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+		commands.ConfigureOutput(make(chan *CommandOutput, 10))
+		NewExecutor().Execute(context.Background(), root, store.Lifecycle(conversation))
 		close(done)
 	}()
 	waitForLifecycleSignal(t, firstRunner.started, "stdin command did not start")
@@ -487,7 +488,8 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			}
 			done := make(chan struct{})
 			go func() {
-				NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+				commands.ConfigureOutput(make(chan *CommandOutput, 10))
+				NewExecutor().Execute(context.Background(), root, store.Lifecycle(conversation))
 				close(done)
 			}()
 			select {

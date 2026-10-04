@@ -45,7 +45,8 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 			store.register(conversation, first, reply)
 			outputs := make(chan *CommandOutput, 1)
 			queueCalls := 0
-			dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(outputs), outputs, store, &ConversationLocks{}, func(*CommandInput) bool {
+			NewCommandSet([]*Command{reply}).ConfigureOutput(outputs)
+			dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), store, &ConversationLocks{}, func(*CommandInput) bool {
 				queueCalls++
 				return true
 			})

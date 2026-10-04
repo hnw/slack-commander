@@ -59,9 +59,10 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		Dispatch:      cmd.DispatchExecutor,
 	}, cmd.NewHTTPRunner(httpConfig), nil)
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
-	executor := cmd.NewExecutor(outputs)
+	commands.ConfigureOutput(outputs)
+	executor := cmd.NewExecutor()
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
-	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
+	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 	writerDone := make(chan struct{})
 	writerCtx, cancelWriter := context.WithCancel(context.Background())
@@ -160,7 +161,8 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 				Dispatch:          tc.dispatch,
 				SystemReplyConfig: pubsub.NewSystemReplyConfig(&broadcast),
 			}, nil, nil)
-			dispatcher := newMainTestDispatcher(context.Background(), outputs, nil, nil, func(*cmd.CommandInput) bool {
+			cmd.NewCommandSet([]*cmd.Command{command}).ConfigureOutput(outputs)
+			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool {
 				t.Fatal("parse error entered the command queue")
 				return false
 			})
@@ -300,21 +302,17 @@ func TestRunCheckConfig(t *testing.T) {
 
 func newMainTestDispatcher(
 	ctx context.Context,
-	outputs chan *cmd.CommandOutput,
 	stdinStore *cmd.StdinStore,
 	conversationLocks *cmd.ConversationLocks,
 	enqueue func(*cmd.CommandInput) bool,
 ) *cmd.CommandDispatcher {
-	if outputs == nil {
-		outputs = make(chan *cmd.CommandOutput, 100)
-	}
 	if stdinStore == nil {
 		stdinStore = &cmd.StdinStore{}
 	}
 	if conversationLocks == nil {
 		conversationLocks = &cmd.ConversationLocks{}
 	}
-	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), outputs, stdinStore, conversationLocks, enqueue)
+	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(), stdinStore, conversationLocks, enqueue)
 }
 
 func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
@@ -324,7 +322,7 @@ func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
 			defer cancel()
 			inputs := make(chan *cmd.CommandInput)
 			var workers sync.WaitGroup
-			startWorkers(ctx, 2, inputs, nil, nil, cmd.NewExecutor(nil), &workers)
+			startWorkers(ctx, 2, inputs, nil, nil, cmd.NewExecutor(), &workers)
 			if closeQueue {
 				close(inputs)
 			} else {

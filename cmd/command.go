@@ -74,6 +74,7 @@ const (
 // Command is an instantiated runtime command.
 // Config replies are converted to the runtime CommandSet and are not retained.
 type Command struct {
+	output  CommandOutputHandler
 	config  CommandConfig
 	matcher Matcher
 	runner  CommandRunner

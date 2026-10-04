@@ -49,13 +49,14 @@ timeout = "5s"
 	requests := make(chan *cmd.CommandInput, 10)
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+	commands.ConfigureOutput(outputs)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -129,13 +130,14 @@ allowed_user_ids = ["U-root", "U-b"]
 	outputs := make(chan *cmd.CommandOutput, 30)
 	conversationLocks := &cmd.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
-	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	})
 	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 0)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -330,9 +332,10 @@ accept_reminder = true
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	outputs := make(chan *cmd.CommandOutput, 30)
-	executor := cmd.NewExecutor(outputs)
+	commands.ConfigureOutput(outputs)
+	executor := cmd.NewExecutor()
 	stdinStore := &cmd.StdinStore{}
-	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, outputs, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
 	})
@@ -418,9 +421,10 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 				commands = append(commands, cmd.NewCommand(config, runner, nil))
 			}
 			commandSet := cmd.NewCommandSet(commands)
-			executor := cmd.NewExecutor(make(chan *cmd.CommandOutput, 20))
+			commandSet.ConfigureOutput(make(chan *cmd.CommandOutput, 20))
+			executor := cmd.NewExecutor()
 			var queued *cmd.CommandInput
-			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, make(chan *cmd.CommandOutput, 20), &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 				queued = input
 				return true
 			})

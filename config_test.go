@@ -245,7 +245,7 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	stdinStore := &cmd.StdinStore{}
 	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	queued := false
-	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), nil, stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
+	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
 	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{resolved.Index}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)
@@ -294,7 +294,7 @@ func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
 	}
 	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
 	queued := false
-	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
+	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)

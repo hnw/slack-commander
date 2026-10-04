@@ -43,8 +43,9 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 	stdinStore := &cmd.StdinStore{}
 	conversationLocks := &cmd.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
-	executor := cmd.NewExecutor(outputs)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	executor := cmd.NewExecutor()
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true
@@ -126,8 +127,9 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 	requests, outputs := make(chan *cmd.CommandInput, 2), make(chan *cmd.CommandOutput, 20)
 	stdinStore, locks := &cmd.StdinStore{}, &cmd.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
-	executor := cmd.NewExecutor(outputs)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputs, stdinStore, locks, func(input *cmd.CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	executor := cmd.NewExecutor()
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	})
@@ -275,8 +277,9 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}))
 	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
 	requests := make(chan *cmd.CommandInput, 10)
-	executor := cmd.NewExecutor(outputs)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputs, stdinStore, locks, func(input *cmd.CommandInput) bool {
+	commands.ConfigureOutput(outputs)
+	executor := cmd.NewExecutor()
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *cmd.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true

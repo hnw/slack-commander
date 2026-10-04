@@ -2,6 +2,9 @@
 
 ## 現在の設計判断
 
+- command出力は `Command.output CommandOutputHandler` が所有し、startupで `CommandSet.ConfigureOutput` がreply treeまで設定する。Executor / Dispatcherのconstructorはoutput queueを受け取らず、出力設定・flush intervalを参照しない（`cmd/command_output.go`、`main.go`）。
+- `SystemErrorKind` でparse errorとchain内command not foundを区別する。前者はSystemReplyConfigとExitCode=2、後者はnilのsystem defaultと既存OutputWriter経路を維持する。chainのStart / Finishは先頭Command、各commandのstdout / stderrは各自のhandlerを使う。TTYとtimeout文言の経路は既存どおり。
+- handler境界はfakeで検証し、移行用handlerのqueue形式はそのadapterテストで検証する。Go 1.25で全テスト・race検出・lint・buildを確認した。今回の責務移動とエラー種別の追加は既存挙動を保持する可逆な変更であり、独立ADRは見送る。PR1のinterfaceレビューを経て次PRへ進む。
 - ADR候補: 時間設定を duration として解決し、整数秒の互換は維持しない。整数はgo-tomlによるtime.Durationのdecode結果をそのまま受け入れ、ナノ秒として扱う。旧整数秒設定の誤用を検出するため、`timeout` / `stdin_idle_timeout` は0または1ms以上に制限する。方針を [duration settings](../docs/decisions/2026-10-04-duration-settings.md) に記録した。既存の `Duration` とポインタによる指定有無の区別を再利用し、解決後は `time.Duration` とする。
 - timeout は `runMatchedCommand` が context の生成と表示を管理する。`WithTimeoutCause` と専用の `errCommandTimeout` を使い、command 自身の timeout だけを `context.Cause` で識別する。`Cmd.Run()` / `RunWithStdin(started)` は timeout 値を受け取らず、渡された context に従って停止する。親 context の deadline/cancel・通常の非0終了・143だけでは timeout 表示しない。親 deadline の回帰テストは timeout 設定が0の場合も通常出力・TTYの両方で確認する（`cmd/executor_timeout_test.go`）。TTY は従来の terminal 出力経路を維持する。runner 単体では timeout 文言を出さず、exec / compose / HTTP の deadline 終了で143を返す（`cmd/runner_timeout_test.go`）。依頼に明記された責務移動と判定修正で可逆な変更のため、独立 ADR は見送る。
 - `RawCommandConfig` とその `RawExecutorConfig` は TOML 上の未指定値を保持する decode 用構造とする。root / reply の既定値、継承、制約は `resolveConfig` で一度だけ解決し、後段には resolved `cmd.CommandConfig` だけを渡す。`--check-config` は runner を生成しない。
