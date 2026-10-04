@@ -34,19 +34,6 @@ type MessageID struct {
 	Timestamp string
 }
 
-// CommandOutput carries execution output and input errors through the output queue.
-type CommandOutput struct {
-	ReplyConfig    interface{}
-	ConversationID ConversationID
-	MessageID      MessageID
-	Text           string // コマンドからのテキスト出力（ImageData と排他）
-	ImageData      []byte // sixel を変換した PNG バイト列（Text と排他）
-	IsErrOut       bool
-	Spawned        bool
-	Finished       bool
-	ExitCode       int
-}
-
 // RunnerFactory returns a runner for the given execution definition.
 type RunnerFactory func(config RunnerConfig) CommandRunner
 

@@ -176,39 +176,3 @@ func TestDispatcherParseErrorUsesOutputHandler(t *testing.T) {
 		t.Fatal("unmatched parse error accepted")
 	}
 }
-
-func TestQueuedCommandOutputHandlerPreservesOutputSettings(t *testing.T) {
-	queue := make(chan *CommandOutput, 10)
-	root := NewCommand(CommandConfig{ReplyConfig: "normal", SystemReplyConfig: "system", OutputFlushInterval: time.Hour}, nil, NewCommandSet([]*Command{NewCommand(CommandConfig{ReplyConfig: "reply", SystemReplyConfig: "system"}, nil, nil)}))
-	NewCommandSet([]*Command{root}).ConfigureOutput(queue)
-	c, m := ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID{ChannelID: "C", Timestamp: "2"}
-	root.output.Start(c, m)
-	stdout, stderr := root.output.Stdout(c, m), root.output.Stderr(c, m)
-	_, _ = stdout.Write([]byte("out"))
-	_, _ = stderr.Write([]byte("err"))
-	if len(queue) != 1 {
-		t.Fatal("normal output bypassed flush interval")
-	}
-	_ = stdout.Flush()
-	_ = stderr.Flush()
-	root.output.SystemError(c, m, "system error", SystemErrorParse)
-	root.output.SystemError(c, m, "unknown command", SystemErrorCommandNotFound)
-	root.output.Finish(c, m, 7)
-	want := []*CommandOutput{
-		{ConversationID: c, MessageID: m, Spawned: true},
-		{ConversationID: c, MessageID: m, ReplyConfig: "normal", Text: "out"},
-		{ConversationID: c, MessageID: m, ReplyConfig: "normal", Text: "err", IsErrOut: true},
-		{ConversationID: c, MessageID: m, ReplyConfig: "system", Text: "system error", IsErrOut: true, ExitCode: 2},
-		{ConversationID: c, MessageID: m, Text: "unknown command", IsErrOut: true},
-		{ConversationID: c, MessageID: m, Finished: true, ExitCode: 7},
-	}
-	if got := drainOutputs(queue); !reflect.DeepEqual(got, want) {
-		t.Fatalf("outputs = %#v, want %#v", got, want)
-	}
-	replyOutput := root.replies.commands[0].output.Stdout(c, m)
-	_, _ = replyOutput.Write([]byte("reply"))
-	_ = replyOutput.Flush()
-	if got := <-queue; got.ReplyConfig != "reply" || got.Text != "reply" {
-		t.Fatalf("reply output = %#v", got)
-	}
-}

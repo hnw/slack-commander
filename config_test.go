@@ -84,7 +84,7 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 	} {
 		t.Run(tc.interaction, func(t *testing.T) {
 			raw := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tc.interaction, Replies: []*RawCommandConfig{{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}}
-			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestResolveCommandConfigAssignsDispatchMode(t *testing.T) {
 				RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"},
 				RawRunnerConfig:  cmd.RawRunnerConfig{Runner: tc.runner, Command: "run", Method: "GET", URL: "https://example.com"},
 			}
-			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +136,7 @@ func TestReplyDispatchModeFollowsResolvedRunner(t *testing.T) {
 			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "overridden"}, RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerExec, Command: "run"}},
 		},
 	}
-	resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
+	resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ accept_reminder = false
 	}
 }
 
-func resolveStdinReplyTestConfig(t *testing.T) (*Config, *cmd.CommandConfig, *cmd.CommandConfig) {
+func resolveStdinReplyTestConfig(t *testing.T) (*Config, *resolvedCommandConfig, *resolvedCommandConfig) {
 	t.Helper()
 	reply := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}
 	root := &RawCommandConfig{
@@ -243,7 +243,7 @@ func TestResolveConfigBuildsRawStdinReplyWithResolvedRootACL(t *testing.T) {
 func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	cfg, resolved, rawReply := resolveStdinReplyTestConfig(t)
 	stdinStore := &cmd.StdinStore{}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), make(chan *pubsub.CommandOutput, 100))
 	queued := false
 	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
@@ -259,7 +259,7 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 		ParserConfig:  cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin},
 		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
 		Dispatch:      cmd.DispatchRunner,
-	}, cmd.NewStdinReplyRunner(), nil)
+	}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutputHandler(make(chan *pubsub.CommandOutput, 100), pubsub.ReplyConfig{}, 0))
 	stdinStore.Lifecycle(conversation).StdinReady(endpoint, implicitReply)
 	for _, indexes := range [][]int{{resolved.Index}, {}} {
 		result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
@@ -292,7 +292,7 @@ func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
 	if len(cfg.commandConfigs[0].Replies) != 0 || len(cfg.ListenerConfigs) != 1 {
 		t.Fatalf("oneshot resolved replies/listener candidates = %d/%+v, want none", len(cfg.commandConfigs[0].Replies), cfg.ListenerConfigs)
 	}
-	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	runtime := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), make(chan *pubsub.CommandOutput, 100))
 	queued := false
 	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
@@ -1154,7 +1154,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.interaction, func(t *testing.T) {
 			config := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tt.interaction}
-			resolved, err := resolveCommandConfig(config, cmd.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(config, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestResolvedInputSingleCommand(t *testing.T) {
-	command := NewCommand(CommandConfig{}, nil, nil)
+	command := newTestCommand(CommandConfig{}, nil, nil)
 	for _, tc := range []struct {
 		name  string
 		input *ResolvedInput
@@ -28,8 +28,8 @@ func TestResolvedInputSingleCommand(t *testing.T) {
 }
 
 func TestResolveInputResolvesSingleCommand(t *testing.T) {
-	command := newCommand(
-		CommandConfig{MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "deploy *"}}, ParserConfig: ParserConfig{AllowInChain: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "deploy *"}}, OutputFlushInterval: DefaultOutputFlushInterval},
+	command := newTestCommand(
+		CommandConfig{MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "deploy *"}}, ParserConfig: ParserConfig{AllowInChain: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "deploy *"}}},
 		NewExecRunner(),
 		nil,
 	)
@@ -42,7 +42,7 @@ func TestResolveInputResolvesSingleCommand(t *testing.T) {
 }
 
 func TestCommandSetMatchReturnsCommandAndArgs(t *testing.T) {
-	command := newCommand(
+	command := newTestCommand(
 		CommandConfig{MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "deploy *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "deploy *"}}},
 		NewExecRunner(),
 		nil,
@@ -55,9 +55,9 @@ func TestCommandSetMatchReturnsCommandAndArgs(t *testing.T) {
 }
 
 func TestResolveInputResolvesEveryChainCommand(t *testing.T) {
-	first := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-first *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
-	second := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-second *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
-	third := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "third *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-third *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
+	first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-first *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
+	second := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-second *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
+	third := newTestCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "third *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run-third *"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
 	input := NewCommandSet([]*Command{first, second, third}).ResolveInput("first one && second two || third three", []int{0, 1, 2})
 
 	if input.ParseErr != nil || len(input.Commands) != 3 {
@@ -77,8 +77,8 @@ func TestResolveInputResolvesEveryChainCommand(t *testing.T) {
 }
 
 func TestResolveInputKeepsUnmatchedChainPosition(t *testing.T) {
-	first := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
-	third := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "third"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "third"}}}, nil, nil)
+	first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
+	third := newTestCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "third"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "third"}}}, nil, nil)
 	input := NewCommandSet([]*Command{first, third}).ResolveInput("first && unknown && third", []int{0, 2})
 
 	if input.ParseErr != nil || len(input.Commands) != 3 {
@@ -93,9 +93,9 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 	if DispatchQueue != 0 {
 		t.Fatalf("DispatchQueue = %d, want zero value", DispatchQueue)
 	}
-	queue := NewCommand(CommandConfig{Dispatch: DispatchQueue}, nil, nil)
-	executor := NewCommand(CommandConfig{Dispatch: DispatchExecutor}, nil, nil)
-	runner := NewCommand(CommandConfig{Dispatch: DispatchRunner}, nil, nil)
+	queue := newTestCommand(CommandConfig{Dispatch: DispatchQueue}, nil, nil)
+	executor := newTestCommand(CommandConfig{Dispatch: DispatchExecutor}, nil, nil)
+	runner := newTestCommand(CommandConfig{Dispatch: DispatchRunner}, nil, nil)
 	for _, tc := range []struct {
 		name   string
 		input  *ResolvedInput
@@ -117,8 +117,8 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 		{name: "runner with unmatched", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: runner}, {}}}},
 		{name: "unmatched with runner", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {Command: runner}}}},
 		{name: "unmatched only", input: &ResolvedInput{Commands: []ResolvedCommand{{}, {}}}},
-		{name: "zero dispatch is queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{}, nil, nil)}}}, want: DispatchQueue, wantOK: true},
-		{name: "unknown dispatch invalid", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: NewCommand(CommandConfig{Dispatch: 99}, nil, nil)}}}},
+		{name: "zero dispatch is queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: newTestCommand(CommandConfig{}, nil, nil)}}}, want: DispatchQueue, wantOK: true},
+		{name: "unknown dispatch invalid", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: newTestCommand(CommandConfig{Dispatch: 99}, nil, nil)}}}},
 		{name: "queue and executor", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: queue}, {Command: executor}}}, want: DispatchQueue, wantOK: true},
 		{name: "executor and queue", input: &ResolvedInput{Commands: []ResolvedCommand{{Command: executor}, {Command: queue}}}, want: DispatchQueue, wantOK: true},
 		{name: "nil input"},
@@ -132,20 +132,37 @@ func TestResolvedInputDispatchTarget(t *testing.T) {
 	}
 }
 
-func TestNewCommandDropsConfigReplies(t *testing.T) {
-	command := NewCommand(
-		CommandConfig{Replies: []*CommandConfig{{}}},
-		NewExecRunner(),
-		NewCommandSet(nil),
-	)
-	if command.config.Replies != nil {
-		t.Fatal("runtime command retains config replies")
+func TestNewCommandRequiresOutputHandler(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output CommandOutputHandler
+	}{
+		{name: "nil"},
+		{name: "typed nil", output: (*recordingOutputHandler)(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("nil output handler accepted")
+				}
+			}()
+			NewCommand(CommandConfig{}, nil, nil, tc.output)
+		})
+	}
+}
+
+func TestNewCommandRetainsOutputAndReplies(t *testing.T) {
+	output := &recordingOutputHandler{}
+	replies := NewCommandSet(nil)
+	command := NewCommand(CommandConfig{}, nil, replies, output)
+	if command.output != output || command.replies != replies {
+		t.Fatal("constructor lost output or reply tree")
 	}
 }
 
 func TestCommandSetMatchRestrictsIndexesAndAllowsWildcardFallthrough(t *testing.T) {
-	restricted := NewCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "deploy"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "deploy"}}}, nil, nil)
-	wildcard := NewCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}}}, nil, nil)
+	restricted := newTestCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "deploy"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "deploy"}}}, nil, nil)
+	wildcard := newTestCommand(CommandConfig{Index: 4, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}}}, nil, nil)
 	set := NewCommandSet([]*Command{restricted, wildcard})
 
 	if got, _ := set.Match(newCommandPart("", []string{"deploy"}), []int{4}); got != wildcard {
@@ -163,8 +180,8 @@ func TestCommandSetMatchRestrictsIndexesAndAllowsWildcardFallthrough(t *testing.
 }
 
 func TestCommandSetAllowsAuthorizedDuplicateKeyword(t *testing.T) {
-	denied := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "status *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first *"}}}, nil, nil)
-	allowed := NewCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "status *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second *"}}}, nil, nil)
+	denied := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "status *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first *"}}}, nil, nil)
+	allowed := newTestCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "status *"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second *"}}}, nil, nil)
 	set := NewCommandSet([]*Command{denied, allowed})
 
 	if got, _ := set.Match(newCommandPart("", []string{"status", "daily"}), []int{2}); got != allowed {
@@ -173,8 +190,8 @@ func TestCommandSetAllowsAuthorizedDuplicateKeyword(t *testing.T) {
 }
 
 func TestCommandSetCandidateSemantics(t *testing.T) {
-	first := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
-	second := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}}, nil, nil)
+	first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
+	second := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}}, nil, nil)
 	set := NewCommandSet([]*Command{first, second})
 	for _, tc := range []struct {
 		name    string
@@ -205,7 +222,7 @@ func TestResolveInputUsesInputBodyMode(t *testing.T) {
 		{name: "argument", mode: InputBodyArgument},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			command := NewCommand(CommandConfig{
+			command := newTestCommand(CommandConfig{
 				Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 				RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}}, ParserConfig: ParserConfig{InputBodyMode: tc.mode},
 			}, nil, nil)
@@ -220,7 +237,7 @@ func TestResolveInputUsesInputBodyMode(t *testing.T) {
 
 func TestResolveInputSelectsCommand(t *testing.T) {
 	newCommand := func(index int, keyword, runner string, mode InputBodyMode) *Command {
-		return NewCommand(CommandConfig{
+		return newTestCommand(CommandConfig{
 			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: keyword}},
 			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: runner}},
 			ParserConfig: ParserConfig{InputBodyMode: mode},
@@ -264,7 +281,7 @@ func TestResolveInputSelectsCommand(t *testing.T) {
 }
 
 func TestResolveInputNormalizesRawStdin(t *testing.T) {
-	raw := NewCommand(CommandConfig{
+	raw := newTestCommand(CommandConfig{
 		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "capture"}},
 		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},

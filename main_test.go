@@ -27,6 +27,8 @@ type listenerFailureTransport struct {
 }
 
 func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
+	outputs := make(chan *pubsub.CommandOutput, 10)
+
 	type slackRequest struct {
 		path string
 		form map[string][]string
@@ -50,16 +52,15 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	outputs := make(chan *cmd.CommandOutput, 10)
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
 	command := cmd.NewCommand(cmd.CommandConfig{
 		Index:         0,
 		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
 		RunnerConfig:  httpConfig,
 		Dispatch:      cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil)
+	}, cmd.NewHTTPRunner(httpConfig), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
-	commands.ConfigureOutput(outputs)
+
 	executor := cmd.NewExecutor()
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
 	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
@@ -141,6 +142,8 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 		{name: "reply", dispatch: cmd.DispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			outputs := make(chan *pubsub.CommandOutput, 1)
+
 			type slackRequest struct {
 				path string
 				form url.Values
@@ -155,13 +158,11 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			}))
 			t.Cleanup(server.Close)
 
-			outputs := make(chan *cmd.CommandOutput, 1)
 			broadcast := tc.broadcast
 			command := cmd.NewCommand(cmd.CommandConfig{
-				Dispatch:          tc.dispatch,
-				SystemReplyConfig: pubsub.NewSystemReplyConfig(&broadcast),
-			}, nil, nil)
-			cmd.NewCommandSet([]*cmd.Command{command}).ConfigureOutput(outputs)
+				Dispatch: tc.dispatch,
+			}, nil, nil, pubsub.NewSlackOutputHandler(outputs, *pubsub.NewSystemReplyConfig(&broadcast), 0))
+
 			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool {
 				t.Fatal("parse error entered the command queue")
 				return false

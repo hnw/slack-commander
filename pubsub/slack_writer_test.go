@@ -33,14 +33,14 @@ func TestNewSystemReplyConfig(t *testing.T) {
 }
 
 func TestGetConfigUsesSystemDefault(t *testing.T) {
-	cfg := getConfig(&cmd.CommandOutput{})
+	cfg := getConfig(&CommandOutput{})
 	if cfg.Username != "Slack commander" || cfg.IconEmoji != ":ghost:" || cfg.ReplyBroadcast != nil {
 		t.Fatalf("config = %+v", cfg)
 	}
 }
 
 func TestGetThreadTimestampUsesConversationRoot(t *testing.T) {
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID: cmd.MessageID{
 			ChannelID: "C123",
 			Timestamp: "1700000000.000200",
@@ -58,7 +58,7 @@ func TestGetThreadTimestampUsesConversationRoot(t *testing.T) {
 }
 
 func TestGetThreadTimestampUsesOnlyConversationID(t *testing.T) {
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{},
 	}
@@ -69,7 +69,7 @@ func TestGetThreadTimestampUsesOnlyConversationID(t *testing.T) {
 }
 
 func TestGetReplyBroadcastDefaultsToTrue(t *testing.T) {
-	output := &cmd.CommandOutput{ReplyConfig: &ReplyConfig{}}
+	output := &CommandOutput{ReplyConfig: &ReplyConfig{}}
 
 	if !getReplyBroadcast(output) {
 		t.Fatal("reply broadcast should default to true")
@@ -77,7 +77,7 @@ func TestGetReplyBroadcastDefaultsToTrue(t *testing.T) {
 }
 
 func TestGetReplyBroadcastHonorsExplicitFalse(t *testing.T) {
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		ReplyConfig: &ReplyConfig{ReplyBroadcast: boolPtr(false)},
 	}
 
@@ -102,7 +102,7 @@ func TestPostMessagePostsOneRootThreadReply(t *testing.T) {
 	defer server.Close()
 
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{},
 		ConversationID: cmd.ConversationID{
@@ -191,7 +191,7 @@ func TestPostMessageFormatsAttachments(t *testing.T) {
 			defer server.Close()
 
 			smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
-			output := &cmd.CommandOutput{
+			output := &CommandOutput{
 				MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 				ReplyConfig: &ReplyConfig{OutputFormat: tt.outputFormat},
 				Text:        "*output*",
@@ -242,7 +242,7 @@ func TestPostMessageDisablesBroadcastWhenExplicitlyFalse(t *testing.T) {
 	defer server.Close()
 
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID:   cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		ReplyConfig: &ReplyConfig{ReplyBroadcast: boolPtr(false)},
 		ConversationID: cmd.ConversationID{
@@ -267,7 +267,7 @@ func TestPostMessageDisablesBroadcastWhenExplicitlyFalse(t *testing.T) {
 }
 
 func TestGetOutputChannelUsesConversationID(t *testing.T) {
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID: cmd.MessageID{ChannelID: "C-trigger"},
 		ConversationID: cmd.ConversationID{
 			ChannelID: "C-root",
@@ -283,7 +283,7 @@ func TestGetOutputChannelUsesConversationID(t *testing.T) {
 }
 
 func TestGetOutputChannelUsesOnlyConversationID(t *testing.T) {
-	output := &cmd.CommandOutput{}
+	output := &CommandOutput{}
 
 	if got := getOutputChannel(output); got != "" {
 		t.Fatalf("output channel = %q", got)
@@ -291,7 +291,7 @@ func TestGetOutputChannelUsesOnlyConversationID(t *testing.T) {
 }
 
 func TestGetReactionTimestampUsesTriggeringMessage(t *testing.T) {
-	output := &cmd.CommandOutput{
+	output := &CommandOutput{
 		MessageID: cmd.MessageID{
 			ChannelID: "C123",
 			Timestamp: "1700000000.000200",

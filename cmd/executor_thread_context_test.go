@@ -56,10 +56,10 @@ func (r *environmentRecordingRunner) Commands() []*environmentRecordingCmd {
 }
 
 func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
-	wq := make(chan *CommandOutput, 10)
+	wq := make(chan *observedOutput, 10)
 	runner := &environmentRecordingRunner{}
 	commandSet := testCommandSet(dateConfig(), func(*testExecutionConfig) CommandRunner { return runner })
-	commandSet.ConfigureOutput(wq)
+	observeCommandSet(commandSet, wq)
 	executor := NewExecutor()
 
 	input := &CommandInput{

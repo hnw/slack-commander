@@ -1,13 +1,15 @@
-package cmd
+package pubsub
 
 import (
 	"testing"
 	"time"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 func newTestOutputWriter(interval time.Duration) (*OutputWriter, chan *CommandOutput) {
 	ch := make(chan *CommandOutput, 10)
-	return newOutputWriter(ch, nil, false, ConversationID{}, MessageID{}, interval), ch
+	return newOutputWriter(ch, nil, false, cmd.ConversationID{}, cmd.MessageID{}, interval), ch
 }
 
 func receiveOutput(t *testing.T, ch <-chan *CommandOutput, timeout time.Duration) *CommandOutput {

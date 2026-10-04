@@ -39,7 +39,7 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	wq := make(chan *CommandOutput, 10)
+	wq := make(chan *observedOutput, 10)
 	started := make(chan struct{}, 1)
 	runner := &blockingRunner{started: started}
 	cfgs := []*testCommandConfig{
@@ -47,7 +47,7 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 	}
 
 	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner })
-	commandSet.ConfigureOutput(wq)
+	observeCommandSet(commandSet, wq)
 	executor := NewExecutor()
 	done := make(chan struct{})
 	go func() {
@@ -85,7 +85,7 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 }
 
 func TestExecutorTimeoutCancelsCommand(t *testing.T) {
-	wq := make(chan *CommandOutput, 10)
+	wq := make(chan *observedOutput, 10)
 	started := make(chan struct{}, 1)
 	runner := &blockingRunner{started: started}
 
@@ -94,7 +94,7 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 	}
 
 	commandSet := testCommandSet(cfgs, func(*testExecutionConfig) CommandRunner { return runner })
-	commandSet.ConfigureOutput(wq)
+	observeCommandSet(commandSet, wq)
 	executor := NewExecutor()
 	done := make(chan struct{})
 	go func() {

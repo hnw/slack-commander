@@ -1,10 +1,12 @@
-package cmd
+package pubsub
 
 import (
 	"bytes"
 	"image"
 	_ "image/png"
 	"testing"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 // minimalRedSixel は 4x6 ピクセルの赤い矩形を表す最小限の正しい sixel シーケンス
@@ -21,7 +23,7 @@ var minimalRedSixel = []byte("\x1bPq\"1;1;4;6#1;2;100;0;0#1~~~~\x1b\\")
 func collectRawOutputs(t *testing.T, writes ...[]byte) []*CommandOutput {
 	t.Helper()
 	ch := make(chan *CommandOutput, 100)
-	raw := newRawWriter(ch, nil, false, ConversationID{}, MessageID{})
+	raw := newRawWriter(ch, nil, false, cmd.ConversationID{}, cmd.MessageID{})
 	for _, data := range writes {
 		if _, err := raw.Write(data); err != nil {
 			t.Fatalf("rawWriter.Write error: %v", err)
