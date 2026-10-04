@@ -343,7 +343,7 @@ type blockedIntegrationCommand struct {
 func (*blockedIntegrationCommand) SetStdin(io.Reader)  {}
 func (*blockedIntegrationCommand) SetStdout(io.Writer) {}
 func (*blockedIntegrationCommand) SetStderr(io.Writer) {}
-func (c *blockedIntegrationCommand) Run(int) int {
+func (c *blockedIntegrationCommand) Run(time.Duration) int {
 	c.started <- struct{}{}
 	<-c.release
 	return 0

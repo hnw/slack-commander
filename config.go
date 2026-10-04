@@ -49,9 +49,9 @@ type RawCommandConfig struct {
 
 // RawExecutorConfig preserves whether TOML execution settings were omitted.
 type RawExecutorConfig struct {
-	Timeout          *int  `toml:"timeout"`
-	StdinIdleTimeout *int  `toml:"stdin_idle_timeout"`
-	TTY              *bool `toml:"tty"`
+	Timeout          *Duration `toml:"timeout"`
+	StdinIdleTimeout *Duration `toml:"stdin_idle_timeout"`
+	TTY              *bool     `toml:"tty"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -238,10 +238,10 @@ func commandDispatch(runner string) cmd.DispatchMode {
 
 func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {
 	if raw.Timeout != nil {
-		base.Timeout = *raw.Timeout
+		base.Timeout = time.Duration(*raw.Timeout)
 	}
 	if raw.StdinIdleTimeout != nil {
-		base.StdinIdleTimeout = *raw.StdinIdleTimeout
+		base.StdinIdleTimeout = time.Duration(*raw.StdinIdleTimeout)
 	}
 	if raw.TTY != nil {
 		base.TTY = *raw.TTY
@@ -434,11 +434,8 @@ func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.Runne
 	if err := validateKeywordWildcards(matcher.Keyword); err != nil {
 		return err
 	}
-	if executorConfig.Timeout < 0 {
-		return errors.New("timeout must be >= 0")
-	}
-	if executorConfig.StdinIdleTimeout < 0 {
-		return errors.New("stdin_idle_timeout must be >= 0")
+	if err := validateExecutorDurations(executorConfig); err != nil {
+		return err
 	}
 	if outputFlushInterval < 0 {
 		return errors.New("output_flush_interval must be >= 0")
@@ -461,6 +458,25 @@ func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.Runne
 	}
 	if strings.TrimSpace(runnerConfig.URL) == "" {
 		return errors.New("url is required for http runner")
+	}
+	if executorConfig.StdinIdleTimeout > 0 {
+		return errors.New("stdin_idle_timeout is not supported for http runner")
+	}
+	return nil
+}
+
+func validateExecutorDurations(config cmd.ExecutorConfig) error {
+	if config.Timeout < 0 {
+		return errors.New("timeout must be >= 0")
+	}
+	if config.Timeout > 0 && config.Timeout < time.Millisecond {
+		return errors.New("timeout must be 0 or at least 1ms")
+	}
+	if config.StdinIdleTimeout < 0 {
+		return errors.New("stdin_idle_timeout must be >= 0")
+	}
+	if config.StdinIdleTimeout > 0 && config.StdinIdleTimeout < time.Millisecond {
+		return errors.New("stdin_idle_timeout must be 0 or at least 1ms")
 	}
 	return nil
 }

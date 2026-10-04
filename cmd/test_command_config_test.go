@@ -9,9 +9,9 @@ import (
 // Production configuration is intentionally split across the runtime types.
 type testExecutionConfig struct {
 	Index               int
-	StdinIdleTimeout    int
+	StdinIdleTimeout    time.Duration
 	TTY                 bool
-	Timeout             int
+	Timeout             time.Duration
 	OutputFlushInterval time.Duration
 	AllowInChain        bool
 	InteractiveStdin    bool

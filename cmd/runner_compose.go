@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hnw/compose-exec/compose"
 )
@@ -98,7 +99,7 @@ func (c *composeCmd) SetTTY() {
 	}
 }
 
-func (c *composeCmd) Run(timeout int) int {
+func (c *composeCmd) Run(timeout time.Duration) int {
 	if code, invalid := c.validate(); invalid {
 		return code
 	}
@@ -107,7 +108,7 @@ func (c *composeCmd) Run(timeout int) int {
 
 // RunWithStdin starts the compose command before exposing its stdin writer.
 // The callback owns the writer after it is called.
-func (c *composeCmd) RunWithStdin(timeout int, started func(io.WriteCloser)) int {
+func (c *composeCmd) RunWithStdin(timeout time.Duration, started func(io.WriteCloser)) int {
 	if code, invalid := c.validate(); invalid {
 		return code
 	}
@@ -142,7 +143,7 @@ func (c *composeCmd) validate() (int, bool) {
 	return 0, false
 }
 
-func (c *composeCmd) finish(timeout int, err error) int {
+func (c *composeCmd) finish(timeout time.Duration, err error) int {
 	if err == nil {
 		return 0
 	}
@@ -157,7 +158,7 @@ func (c *composeCmd) finish(timeout int, err error) int {
 		}
 		if timeout > 0 && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
 			if c.stderr != nil {
-				_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%ds)", timeout)
+				_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%s)", timeout)
 			}
 			return 143
 		}

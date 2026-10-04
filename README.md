@@ -201,7 +201,7 @@ echo hello world
 keyword = "agent"
 command = "my-agent"
 interaction = "stdin"
-timeout = 3600
+timeout = "1h"
 ```
 
 たとえばCLIが、
@@ -257,7 +257,7 @@ keyword = "agent"
 command = "my-agent"
 interaction = "stdin"
 tty = true
-timeout = 3600
+timeout = "1h"
 ```
 
 TTY使用時は標準出力と標準エラー出力を1本の端末出力として扱い、一般的な端末制御シーケンスの一部を除去してSlackへ送ります。

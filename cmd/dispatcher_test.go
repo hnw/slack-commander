@@ -36,7 +36,7 @@ func TestAsyncHTTPUsesExecutorOutputPipelineForFailuresAndCancellation(t *testin
 	tests := []struct {
 		name         string
 		url          string
-		timeout      int
+		timeout      time.Duration
 		cancel       bool
 		startedPath  string
 		wantText     string
@@ -45,7 +45,7 @@ func TestAsyncHTTPUsesExecutorOutputPipelineForFailuresAndCancellation(t *testin
 	}{
 		{name: "non-2xx", url: server.URL + "/failure", wantText: "gateway failed", wantExitCode: 1, wantErrOut: true},
 		{name: "request error", url: closedURL, wantText: "Error:", wantExitCode: 127, wantErrOut: true},
-		{name: "timeout", url: server.URL + "/slow", timeout: 1, startedPath: "/slow", wantText: "Timeout exceeded (1s)", wantExitCode: 143, wantErrOut: true},
+		{name: "timeout", url: server.URL + "/slow", timeout: time.Second, startedPath: "/slow", wantText: "Timeout exceeded (1s)", wantExitCode: 143, wantErrOut: true},
 		{name: "context cancellation", url: server.URL + "/cancel", cancel: true, startedPath: "/cancel", wantExitCode: 143},
 	}
 	for _, tc := range tests {

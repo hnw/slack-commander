@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type httpRunner struct {
@@ -58,7 +59,7 @@ func (c *httpCmd) SetStderr(w io.Writer) {
 	c.stderr = w
 }
 
-func (c *httpCmd) Run(timeout int) int {
+func (c *httpCmd) Run(timeout time.Duration) int {
 	if err := c.validateConfig(); err != nil {
 		c.writeErr(err)
 		return 127
@@ -121,7 +122,7 @@ func (c *httpCmd) expandWildcard(value string) string {
 	return strings.ReplaceAll(value, "*", c.wildcard)
 }
 
-func (c *httpCmd) handleRequestError(err error, timeout int) int {
+func (c *httpCmd) handleRequestError(err error, timeout time.Duration) int {
 	if c.ctx != nil {
 		if errors.Is(c.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
 			return 143
@@ -169,8 +170,8 @@ func (c *httpCmd) writeErr(err error) {
 	}
 }
 
-func (c *httpCmd) writeTimeout(timeout int) {
+func (c *httpCmd) writeTimeout(timeout time.Duration) {
 	if c.stderr != nil {
-		_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%ds)", timeout)
+		_, _ = fmt.Fprintf(c.stderr, "Timeout exceeded (%s)", timeout)
 	}
 }

@@ -203,7 +203,7 @@ func runMatchedCommand(
 	if command.config.Timeout > 0 {
 		cmdCtx, cancel = context.WithTimeout(
 			ctx,
-			time.Duration(command.config.Timeout)*time.Second,
+			command.config.Timeout,
 		)
 	} else {
 		cmdCtx, cancel = context.WithCancel(ctx)
@@ -236,7 +236,7 @@ func runMatchedCommand(
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
-	ret := runWithLifecycleInput(execCmd, command.config.Timeout, time.Duration(command.config.StdinIdleTimeout)*time.Second, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
+	ret := runWithLifecycleInput(execCmd, command.config.Timeout, command.config.StdinIdleTimeout, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
 	_ = stdout.Flush()
 	_ = stderr.Flush()
 
@@ -245,7 +245,7 @@ func runMatchedCommand(
 
 func runWithLifecycleInput(
 	command Cmd,
-	timeout int,
+	timeout time.Duration,
 	idle time.Duration,
 	initial string,
 	conversation ConversationID,
@@ -257,7 +257,7 @@ func runWithLifecycleInput(
 
 func runWithLifecycleInputWithLineEnding(
 	command Cmd,
-	timeout int,
+	timeout time.Duration,
 	idle time.Duration,
 	initial string,
 	conversation ConversationID,
@@ -266,7 +266,7 @@ func runWithLifecycleInputWithLineEnding(
 	lineEnding string,
 ) int {
 	runner, ok := command.(interface {
-		RunWithStdin(int, func(io.WriteCloser)) int
+		RunWithStdin(time.Duration, func(io.WriteCloser)) int
 	})
 	if !ok {
 		command.SetStdin(strings.NewReader(initial))
