@@ -19,6 +19,8 @@ import (
 	"github.com/hnw/slack-commander/pubsub"
 )
 
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -31,12 +33,17 @@ func run(args []string) int {
 	verbose := flags.Bool("v", false, "Verbose mode")
 	debug := flags.Bool("debug", false, "Debug mode") // slack-go/slackのdebug mode
 	checkConfig := flags.Bool("check-config", false, "Validate the configuration file and exit")
+	showVersion := flags.Bool("version", false, "Print version and exit")
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
 	if err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Printf("slack-commander %s\n", version)
+		return 0
 	}
 
 	cfg, err := loadConfig(*configFile)

@@ -237,6 +237,13 @@ func TestRunStopsWhenSlackIdentityCannotBeEstablished(t *testing.T) {
 	}
 }
 
+func TestRunVersionSkipsConfig(t *testing.T) {
+	missing := t.TempDir() + "/missing.toml"
+	if got := run([]string{"--version", "--config-file", missing}); got != 0 {
+		t.Fatalf("run(--version) = %d, want 0", got)
+	}
+}
+
 func TestRunCheckConfig(t *testing.T) {
 	if got := run([]string{"--help"}); got != 0 {
 		t.Fatalf("run(--help) = %d, want 0", got)
