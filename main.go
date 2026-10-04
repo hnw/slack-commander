@@ -75,7 +75,6 @@ func run(args []string) int {
 
 	stdinStore := &cmd.StdinStore{}
 	runnerFactory := newRunnerFactory()
-	commands := buildCommandSet(cfg.commandConfigs, runnerFactory)
 
 	api := slack.New(
 		cfg.SlackBotToken,
@@ -95,10 +94,11 @@ func run(args []string) int {
 	// チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、
 	// ack返せない問題への暫定対処。
 	commandQueue := make(chan *cmd.CommandInput, 50)
-	outputQueue := make(chan *cmd.CommandOutput, cfg.NumWorkers)
+	outputQueue := make(chan *pubsub.CommandOutput, cfg.NumWorkers)
+	commands := buildCommandSet(cfg.commandConfigs, runnerFactory, outputQueue)
 	conversationLocks := &cmd.ConversationLocks{}
-	executor := cmd.NewExecutor(outputQueue)
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, outputQueue, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	executor := cmd.NewExecutor()
+	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		select {
 		case commandQueue <- input:
 			return true

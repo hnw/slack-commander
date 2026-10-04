@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"reflect"
 	"slices"
 	"time"
 )
@@ -44,19 +45,14 @@ type ExecutorConfig struct {
 	InteractiveStdin bool
 }
 
-// CommandConfig is one fully resolved, validated command definition.
-// Replies forms the resolved configuration tree.
+// CommandConfig は解決済みのcommand実行設定を保持する。
 type CommandConfig struct {
 	Index int
 	MatcherConfig
 	ParserConfig
 	RunnerConfig
 	ExecutorConfig
-	OutputFlushInterval time.Duration
-	ReplyConfig         interface{}
-	SystemReplyConfig   interface{}
-	Dispatch            DispatchMode
-	Replies             []*CommandConfig
+	Dispatch DispatchMode
 }
 
 // DispatchMode defines how a matched command is dispatched.
@@ -71,31 +67,40 @@ const (
 	DispatchRunner
 )
 
-// Command is an instantiated runtime command.
-// Config replies are converted to the runtime CommandSet and are not retained.
+// Command は出力handlerとreply CommandSetを持つruntime command。
 type Command struct {
+	output  CommandOutputHandler
 	config  CommandConfig
 	matcher Matcher
 	runner  CommandRunner
 	replies *CommandSet
 }
 
-func newCommand(config CommandConfig, runner CommandRunner, replies *CommandSet) *Command {
+func newCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutputHandler) *Command {
 	if runner == nil {
 		runner = NewExecRunner()
 	}
-	config.Replies = nil
+	if output == nil {
+		panic("cmd.NewCommand requires a CommandOutputHandler")
+	}
+	switch value := reflect.ValueOf(output); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			panic("cmd.NewCommand requires a CommandOutputHandler")
+		}
+	}
 	return &Command{
 		config:  config,
+		output:  output,
 		matcher: *newMatcher(config.MatcherConfig),
 		runner:  runner,
 		replies: replies,
 	}
 }
 
-// NewCommand instantiates one runtime command from resolved configuration.
-func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet) *Command {
-	return newCommand(config, runner, replies)
+// NewCommand は生成時に必須のoutput handlerを受け取る。
+func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutputHandler) *Command {
+	return newCommand(config, runner, replies, output)
 }
 
 func (c *Command) match(args []string) []string {

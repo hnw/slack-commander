@@ -34,30 +34,15 @@ type MessageID struct {
 	Timestamp string
 }
 
-// CommandOutput carries execution output and input errors through the output queue.
-type CommandOutput struct {
-	ReplyConfig    interface{}
-	ConversationID ConversationID
-	MessageID      MessageID
-	Text           string // コマンドからのテキスト出力（ImageData と排他）
-	ImageData      []byte // sixel を変換した PNG バイト列（Text と排他）
-	IsErrOut       bool
-	Spawned        bool
-	Finished       bool
-	ExitCode       int
-}
-
 // RunnerFactory returns a runner for the given execution definition.
 type RunnerFactory func(config RunnerConfig) CommandRunner
 
 // Executor executes individual command inputs.
-type Executor struct {
-	outputQueue chan *CommandOutput
-}
+type Executor struct{}
 
 // NewExecutor creates an executor for prepared command inputs.
-func NewExecutor(outputQueue chan *CommandOutput) *Executor {
-	return &Executor{outputQueue: outputQueue}
+func NewExecutor() *Executor {
+	return &Executor{}
 }
 
 // Execute processes one command input without queue or conversation ownership.
@@ -81,7 +66,7 @@ func (e *Executor) Execute(
 	rawBody := ""
 	initialStdin := stdinText
 
-	if len(cmds) == 0 {
+	if len(cmds) == 0 || cmds[0].Command == nil {
 		return
 	}
 	command := cmds[0].Command
@@ -98,7 +83,6 @@ func (e *Executor) Execute(
 		initialStdin,
 		rawBody,
 		input,
-		e.outputQueue,
 		lifecycle,
 	)
 }
@@ -132,7 +116,6 @@ func executeCommands(
 	stdinText string,
 	rawBody string,
 	input *CommandInput,
-	wq chan *CommandOutput,
 	lifecycle StdinLifecycle,
 ) int {
 	ret := 0
@@ -143,24 +126,13 @@ func executeCommands(
 		ret = -1
 		command, args := resolved.Command, resolved.Args
 		if command == nil {
-			ret = writeCommandNotFound(wq, input, resolved.Part)
+			ret = writeCommandNotFound(cmds[0].Command, input, resolved.Part)
 			continue
 		}
 		if i == 0 {
-			// コマンド実行開始を通知
-			wq <- &CommandOutput{
-				ConversationID: input.ConversationID,
-				MessageID:      input.MessageID,
-				Spawned:        true,
-			}
-			// 関数を抜ける時に必ず終了通知を送る
+			command.output.Start(input.ConversationID, input.MessageID)
 			defer func() {
-				wq <- &CommandOutput{
-					ConversationID: input.ConversationID,
-					MessageID:      input.MessageID,
-					Finished:       true,
-					ExitCode:       ret,
-				}
+				command.output.Finish(input.ConversationID, input.MessageID, ret)
 			}()
 		}
 		if rawBody != "" && command.hasTrailingWildcard() {
@@ -170,7 +142,7 @@ func executeCommands(
 		if !command.config.InteractiveStdin {
 			commandLifecycle = nil
 		}
-		ret = runMatchedCommand(ctx, command, args, stdinText, input, wq, commandLifecycle)
+		ret = runMatchedCommand(ctx, command, args, stdinText, input, commandLifecycle)
 	}
 	return ret
 }
@@ -182,10 +154,8 @@ func shouldSkipCommand(cmd *commandPart, ret int) bool {
 	return ret != 0 && cmd.skipIfFailed
 }
 
-func writeCommandNotFound(wq chan *CommandOutput, input *CommandInput, cmd *commandPart) int {
-	syserr := newErrWriter(wq, nil, input.ConversationID, input.MessageID, DefaultOutputFlushInterval)
-	_, _ = fmt.Fprintf(syserr, "コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " "))
-	_ = syserr.Flush()
+func writeCommandNotFound(owner *Command, input *CommandInput, cmd *commandPart) int {
+	owner.output.SystemError(input.ConversationID, input.MessageID, fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " ")), SystemErrorCommandNotFound)
 	return 127
 }
 
@@ -197,7 +167,6 @@ func runMatchedCommand(
 	args []string,
 	stdinText string,
 	input *CommandInput,
-	wq chan *CommandOutput,
 	lifecycle StdinLifecycle,
 ) int {
 	var cmdCtx context.Context
@@ -215,8 +184,8 @@ func runMatchedCommand(
 
 	execCmd := command.runner.CommandContext(cmdCtx, args[0], args[1:]...)
 	setSlackContextEnvironment(execCmd, input.ConversationID)
-	stdout := newStdWriter(wq, command.config.ReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
-	stderr := newErrWriter(wq, command.config.ReplyConfig, input.ConversationID, input.MessageID, command.config.OutputFlushInterval)
+	stdout := command.output.Stdout(input.ConversationID, input.MessageID)
+	stderr := command.output.Stderr(input.ConversationID, input.MessageID)
 	if command.config.TTY {
 		terminal := newTTYOutputNormalizer(stdout)
 		if cmd, ok := execCmd.(interface{ SetTTY() }); ok {

@@ -21,6 +21,8 @@ import (
 func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	for _, rootText := range []string{"agent\nold", "quick ; agent\nold"} {
 		t.Run(strings.ReplaceAll(strings.ReplaceAll(rootText, " ", "_"), "\n", "_"), func(t *testing.T) {
+			outputs := make(chan *pubsub.CommandOutput, 30)
+
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 			}))
@@ -29,16 +31,16 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			requests := make(chan *cmd.CommandInput, 10)
-			outputs := make(chan *cmd.CommandOutput, 30)
+
 			stdinStore := &cmd.StdinStore{}
-			stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 2, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}}, Dispatch: cmd.DispatchRunner}, cmd.NewStdinReplyRunner(), nil)
-			oneshot := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "quick"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/true"}}}, cmd.NewExecRunner(), nil)
-			root := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "agent"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10 * time.Second, InteractiveStdin: true}, OutputFlushInterval: cmd.DefaultOutputFlushInterval}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}))
+			stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 2, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}}, Dispatch: cmd.DispatchRunner}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+			oneshot := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "quick"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/true"}}}, cmd.NewExecRunner(), nil, pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, 0))
+			root := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "agent"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10 * time.Second, InteractiveStdin: true}}, cmd.NewExecRunner(), cmd.NewCommandSet([]*cmd.Command{stdinReply}), pubsub.NewSlackOutputHandler(outputs, pubsub.ReplyConfig{}, pubsub.DefaultOutputFlushInterval))
 			commands := cmd.NewCommandSet([]*cmd.Command{oneshot, root})
 			var queuedCount atomic.Int64
 			queued := make(chan struct{}, 10)
 			conversationLocks := &cmd.ConversationLocks{}
-			router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+			router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 				queuedCount.Add(1)
 				select {
 				case requests <- input:
@@ -49,7 +51,8 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 				}
 			}), 1)
 			var workers sync.WaitGroup
-			startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+
+			startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
 			listenerDone := make(chan struct{})
 			go func() {
 				if err := pubsub.SlackListener(ctx, smc, pubsub.Config{
@@ -100,7 +103,7 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 	}
 }
 
-func awaitThreadStdinReady(t *testing.T, outputs <-chan *cmd.CommandOutput) {
+func awaitThreadStdinReady(t *testing.T, outputs <-chan *pubsub.CommandOutput) {
 	t.Helper()
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
@@ -119,7 +122,7 @@ func awaitThreadStdinReady(t *testing.T, outputs <-chan *cmd.CommandOutput) {
 	}
 }
 
-func awaitThreadStdinOutput(t *testing.T, outputs <-chan *cmd.CommandOutput, want string) {
+func awaitThreadStdinOutput(t *testing.T, outputs <-chan *pubsub.CommandOutput, want string) {
 	t.Helper()
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()

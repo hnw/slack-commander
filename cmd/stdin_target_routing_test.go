@@ -34,7 +34,7 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 			second := newInteractiveStdinSession("", 0, nil)
 			t.Cleanup(func() { first.Close(); second.Close() })
 			runner := &switchingStdinReplyRunner{store: store, conversation: conversation, second: second, closeFirst: closeFirst}
-			reply := NewCommand(CommandConfig{
+			reply := newTestCommand(CommandConfig{
 				Index:         1,
 				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
@@ -43,9 +43,10 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 			}, runner, nil)
 			runner.reply = reply
 			store.register(conversation, first, reply)
-			outputs := make(chan *CommandOutput, 1)
+			outputs := make(chan *observedOutput, 1)
 			queueCalls := 0
-			dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(outputs), outputs, store, &ConversationLocks{}, func(*CommandInput) bool {
+			observeCommandSet(NewCommandSet([]*Command{reply}), outputs)
+			dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), store, &ConversationLocks{}, func(*CommandInput) bool {
 				queueCalls++
 				return true
 			})
@@ -85,7 +86,7 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 func TestDirectStdinReplyIgnoresMissingTargetOrSetter(t *testing.T) {
 	config := CommandConfig{RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}}}
 	input := &CommandInput{Text: "reply"}
-	command := NewCommand(config, NewStdinReplyRunner(), nil)
+	command := newTestCommand(config, NewStdinReplyRunner(), nil)
 	if got := runDirectCommand(command, []string{"stdin-reply"}, input); got != DispatchIgnored {
 		t.Fatalf("runDirectCommand() without target = %v, want ignored", got)
 	}

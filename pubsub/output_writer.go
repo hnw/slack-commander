@@ -1,4 +1,4 @@
-package cmd
+package pubsub
 
 import (
 	"bufio"
@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/hnw/slack-commander/cmd"
 )
 
 // DefaultOutputFlushInterval is the maximum delay before buffered output is emitted.
@@ -24,9 +26,9 @@ type OutputWriter struct {
 
 func newStdWriter(
 	ch chan *CommandOutput,
-	cfg interface{},
-	conversationID ConversationID,
-	messageID MessageID,
+	cfg *ReplyConfig,
+	conversationID cmd.ConversationID,
+	messageID cmd.MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
 	return newOutputWriter(ch, cfg, false, conversationID, messageID, flushInterval)
@@ -34,9 +36,9 @@ func newStdWriter(
 
 func newErrWriter(
 	ch chan *CommandOutput,
-	cfg interface{},
-	conversationID ConversationID,
-	messageID MessageID,
+	cfg *ReplyConfig,
+	conversationID cmd.ConversationID,
+	messageID cmd.MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
 	return newOutputWriter(ch, cfg, true, conversationID, messageID, flushInterval)
@@ -44,10 +46,10 @@ func newErrWriter(
 
 func newOutputWriter(
 	ch chan *CommandOutput,
-	cfg interface{},
+	cfg *ReplyConfig,
 	isErrOut bool,
-	conversationID ConversationID,
-	messageID MessageID,
+	conversationID cmd.ConversationID,
+	messageID cmd.MessageID,
 	flushInterval time.Duration,
 ) *OutputWriter {
 	raw := newRawWriter(ch, cfg, isErrOut, conversationID, messageID)
@@ -117,19 +119,19 @@ func (w *OutputWriter) flushBuffered(sequence uint64) {
 
 type rawWriter struct {
 	Ch             chan *CommandOutput
-	ReplyConfig    interface{}
-	ConversationID ConversationID
-	MessageID      MessageID
+	ReplyConfig    *ReplyConfig
+	ConversationID cmd.ConversationID
+	MessageID      cmd.MessageID
 	IsErrOut       bool
 	buf            []byte
 }
 
 func newRawWriter(
 	ch chan *CommandOutput,
-	cfg interface{},
+	cfg *ReplyConfig,
 	isErrOut bool,
-	conversationID ConversationID,
-	messageID MessageID,
+	conversationID cmd.ConversationID,
+	messageID cmd.MessageID,
 ) *rawWriter {
 	return &rawWriter{
 		Ch:             ch,

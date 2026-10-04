@@ -16,8 +16,7 @@ import (
 )
 
 func newSlackTestDispatcher(enqueue func(*cmd.CommandInput) bool) *cmd.CommandDispatcher {
-	outputs := make(chan *cmd.CommandOutput, 100)
-	return cmd.NewCommandDispatcher(context.Background(), cmd.NewExecutor(outputs), outputs, &cmd.StdinStore{}, &cmd.ConversationLocks{}, enqueue)
+	return cmd.NewCommandDispatcher(context.Background(), cmd.NewExecutor(), &cmd.StdinStore{}, &cmd.ConversationLocks{}, enqueue)
 }
 
 func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
@@ -46,7 +45,7 @@ func TestSlackListenerRejectsInputWithoutOwnIdentity(t *testing.T) {
 				}},
 			}}
 			close(smc.Events)
-			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
+			command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil, NewSlackOutputHandler(make(chan *CommandOutput, 100), ReplyConfig{}, 0))
 			commands := cmd.NewCommandSet([]*cmd.Command{command})
 			queued := 0
 			router := cmd.NewConversationRouter(nil, commands, nil, newSlackTestDispatcher(func(*cmd.CommandInput) bool {
@@ -84,7 +83,7 @@ func TestSlackListenerIdentifiesOwnPostsBeforeAcceptingInput(t *testing.T) {
 		}}
 	}
 	close(smc.Events)
-	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil)
+	command := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, nil, NewSlackOutputHandler(make(chan *CommandOutput, 100), ReplyConfig{}, 0))
 	var queued []string
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
 	router := cmd.NewConversationRouter(nil, commands, nil, newSlackTestDispatcher(func(input *cmd.CommandInput) bool {
@@ -104,8 +103,8 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	userID, ownBotID = "", ""
 	t.Cleanup(func() { userID, ownBotID = previousUserID, previousBotID })
 
-	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}, nil, nil)
-	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}))
+	reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}, nil, nil, NewSlackOutputHandler(make(chan *CommandOutput, 100), ReplyConfig{}, 0))
+	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}), NewSlackOutputHandler(make(chan *CommandOutput, 100), ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	resolverCalls, enqueueCalls := 0, 0
 	router := cmd.NewConversationRouter(nil, commands, func(cmd.ConversationID) (cmd.RootCommandInput, error) {

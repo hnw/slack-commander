@@ -23,6 +23,8 @@ type aclIntegrationRunner struct {
 }
 
 func TestThreadStdinUsesRootCommandACL(t *testing.T) {
+	outputs := make(chan *pubsub.CommandOutput, 30)
+
 	var cfg Config
 	if err := decodeConfigString(`
 slack_bot_token = "xoxb-test"
@@ -45,17 +47,18 @@ timeout = "5s"
 		t.Fatal(err)
 	}
 	stdinStore := &cmd.StdinStore{}
-	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory())
+	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), outputs)
 	requests := make(chan *cmd.CommandInput, 10)
-	outputs := make(chan *cmd.CommandOutput, 30)
+
 	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -88,6 +91,8 @@ timeout = "5s"
 }
 
 func TestThreadStdinChainReplyACLTracksActiveCommand(t *testing.T) {
+	outputs := make(chan *pubsub.CommandOutput, 30)
+
 	var cfg Config
 	if err := decodeConfigString(`
 slack_bot_token = "xoxb-test"
@@ -124,18 +129,19 @@ allowed_user_ids = ["U-root", "U-b"]
 			return cmd.NewStdinReplyRunner()
 		}
 		return runner.forCommand(config.Command)
-	})
+	}, outputs)
 	requests := make(chan *cmd.CommandInput, 10)
-	outputs := make(chan *cmd.CommandOutput, 30)
+
 	conversationLocks := &cmd.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
-	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(outputs), outputs, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+
+	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
 		requests <- input
 		return true
 	})
 	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 0)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(outputs), &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -272,6 +278,8 @@ func (*aclIntegrationCmd) SetStderr(io.Writer) {}
 func (*aclIntegrationCmd) Run() int            { return 0 }
 
 func TestCommandACLThroughSlackListenerAndExecutor(t *testing.T) {
+	outputs := make(chan *pubsub.CommandOutput, 30)
+
 	var cfg Config
 	err := decodeConfigString(`
 slack_bot_token = "xoxb-test"
@@ -315,7 +323,7 @@ accept_reminder = true
 		t.Fatal(err)
 	}
 	runner := &aclIntegrationRunner{}
-	commands := buildCommandSet(cfg.commandConfigs, func(cmd.RunnerConfig) cmd.CommandRunner { return runner })
+	commands := buildCommandSet(cfg.commandConfigs, func(cmd.RunnerConfig) cmd.CommandRunner { return runner }, outputs)
 	queued := make(chan *cmd.CommandInput, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth.test" {
@@ -329,10 +337,10 @@ accept_reminder = true
 	}))
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
-	outputs := make(chan *cmd.CommandOutput, 30)
-	executor := cmd.NewExecutor(outputs)
+
+	executor := cmd.NewExecutor()
 	stdinStore := &cmd.StdinStore{}
-	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, outputs, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 		queued <- input
 		return true
 	})
@@ -415,12 +423,13 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 			}
 			commands := make([]*cmd.Command, 0, len(configs))
 			for _, config := range configs {
-				commands = append(commands, cmd.NewCommand(config, runner, nil))
+				commands = append(commands, cmd.NewCommand(config, runner, nil, pubsub.NewSlackOutputHandler(make(chan *pubsub.CommandOutput, 100), pubsub.ReplyConfig{}, 0)))
 			}
 			commandSet := cmd.NewCommandSet(commands)
-			executor := cmd.NewExecutor(make(chan *cmd.CommandOutput, 20))
+
+			executor := cmd.NewExecutor()
 			var queued *cmd.CommandInput
-			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, make(chan *cmd.CommandOutput, 20), &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
 				queued = input
 				return true
 			})

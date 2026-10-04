@@ -30,8 +30,9 @@ func TestRunMatchedCommandTimeoutMessage(t *testing.T) {
 					}
 				}
 				command := testRuntimeCommand(&testExecutionConfig{Timeout: 10 * time.Millisecond, TTY: tty}, runner)
-				wq := make(chan *CommandOutput, 10)
-				if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, wq, nil); code != wantCode {
+				wq := make(chan *observedOutput, 10)
+				observeCommandSet(NewCommandSet([]*Command{command}), wq)
+				if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != wantCode {
 					t.Fatalf("code = %d, want %d", code, wantCode)
 				}
 				var text strings.Builder
@@ -63,12 +64,13 @@ func TestRunMatchedCommandCancelsBeforeFlushingOutput(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				runner := &completedContextRunner{}
 				command := testRuntimeCommand(&testExecutionConfig{
-					Timeout: time.Second, TTY: tty, OutputFlushInterval: time.Hour,
+					Timeout: time.Second, TTY: tty,
 				}, runner)
-				wq := make(chan *CommandOutput)
+				wq := make(chan *observedOutput)
 				done := make(chan int, 1)
 				go func() {
-					done <- runMatchedCommand(context.Background(), command, []string{"test"}, "", &CommandInput{}, wq, nil)
+					observeCommandSet(NewCommandSet([]*Command{command}), wq)
+					done <- runMatchedCommand(context.Background(), command, []string{"test"}, "", &CommandInput{}, nil)
 				}()
 				synctest.Wait()
 				if cause := context.Cause(runner.ctx); !errors.Is(cause, context.Canceled) {
@@ -97,8 +99,9 @@ func TestRunMatchedCommandParentDeadlineDoesNotReportCommandTimeout(t *testing.T
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					command := testRuntimeCommand(&testExecutionConfig{Timeout: timeout, TTY: tty}, &blockingRunner{})
-					wq := make(chan *CommandOutput, 10)
-					if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, wq, nil); code != 143 {
+					wq := make(chan *observedOutput, 10)
+					observeCommandSet(NewCommandSet([]*Command{command}), wq)
+					if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != 143 {
 						t.Fatalf("code = %d, want 143", code)
 					}
 					for _, output := range drainOutputs(wq) {

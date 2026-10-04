@@ -206,9 +206,10 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, NewExecRunner())
-	outputs := make(chan *CommandOutput, 10)
+	outputs := make(chan *observedOutput, 10)
 	done := make(chan int, 1)
 	go func() {
+		observeCommandSet(NewCommandSet([]*Command{command}), outputs)
 		done <- runMatchedCommand(
 			ctx,
 			command,
@@ -219,7 +220,6 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 			},
 			"initial\n",
 			&CommandInput{ConversationID: ConversationID(key)},
-			outputs,
 			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
@@ -283,13 +283,13 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, singleCmdRunner{command: capture})
 	done := make(chan int, 1)
 	go func() {
+		observeCommandSet(NewCommandSet([]*Command{command}), make(chan *observedOutput, 1))
 		done <- runMatchedCommand(
 			ctx,
 			command,
 			[]string{"unused"},
 			"initial",
 			&CommandInput{ConversationID: ConversationID(key)},
-			make(chan *CommandOutput, 1),
 			testLifecycle{registry: &registry, conversation: ConversationID(key)},
 		)
 	}()
@@ -370,7 +370,7 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 	firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 	secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 	makeReply := func(index int) *Command {
-		return NewCommand(CommandConfig{
+		return newTestCommand(CommandConfig{
 			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 			ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
 			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
@@ -378,12 +378,12 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 		}, nil, nil)
 	}
 	firstReply, secondReply := makeReply(2), makeReply(3)
-	first := NewCommand(CommandConfig{
+	first := newTestCommand(CommandConfig{
 		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
 		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue,
 	}, firstRunner, NewCommandSet([]*Command{firstReply}))
-	second := NewCommand(CommandConfig{
+	second := newTestCommand(CommandConfig{
 		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}},
 		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
 		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue,
@@ -402,7 +402,8 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+		observeCommandSet(commands, make(chan *observedOutput, 10))
+		NewExecutor().Execute(context.Background(), root, store.Lifecycle(conversation))
 		close(done)
 	}()
 	waitForLifecycleSignal(t, firstRunner.started, "stdin command did not start")
@@ -475,10 +476,10 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{}), exitCode: tc.exitCode}
 			secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 			makeReply := func(index int) *Command {
-				return NewCommand(CommandConfig{Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin-reply"}}, Dispatch: DispatchQueue}, nil, nil)
+				return newTestCommand(CommandConfig{Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin-reply"}}, Dispatch: DispatchQueue}, nil, nil)
 			}
-			first := NewCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue}, firstRunner, NewCommandSet([]*Command{makeReply(2)}))
-			second := NewCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue}, secondRunner, NewCommandSet([]*Command{makeReply(3)}))
+			first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue}, firstRunner, NewCommandSet([]*Command{makeReply(2)}))
+			second := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue}, secondRunner, NewCommandSet([]*Command{makeReply(3)}))
 			commands := NewCommandSet([]*Command{first, second})
 			router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
 			root := &CommandInput{Text: tc.chain, ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0, 1}}
@@ -487,7 +488,8 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			}
 			done := make(chan struct{})
 			go func() {
-				NewExecutor(make(chan *CommandOutput, 10)).Execute(context.Background(), root, store.Lifecycle(conversation))
+				observeCommandSet(commands, make(chan *observedOutput, 10))
+				NewExecutor().Execute(context.Background(), root, store.Lifecycle(conversation))
 				close(done)
 			}()
 			select {
@@ -530,7 +532,7 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	rq := make(chan *CommandInput, 1)
-	wq := make(chan *CommandOutput, 10)
+	wq := make(chan *observedOutput, 10)
 	cfg := newTestCommandConfig(
 		&testExecutionConfig{Keyword: "agent", Command: "agent"},
 	)
@@ -612,7 +614,7 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rq := make(chan *CommandInput, 1)
-	wq := make(chan *CommandOutput, 10)
+	wq := make(chan *observedOutput, 10)
 	cfg := newTestCommandConfig(&testExecutionConfig{Keyword: "agent", Command: "agent"})
 	commandSet := testCommandSet([]*testCommandConfig{cfg}, func(*testExecutionConfig) CommandRunner {
 		return singleCmdRunner{probe}
@@ -656,7 +658,7 @@ func TestExecutorPublishesLifecycleOnlyForInteractiveChainCommand(t *testing.T) 
 	close(rq)
 	done := make(chan struct{})
 	go func() {
-		testExecutorWithLifecycle(context.Background(), rq, make(chan *CommandOutput, 10), &registry)
+		testExecutorWithLifecycle(context.Background(), rq, make(chan *observedOutput, 10), &registry)
 		close(done)
 	}()
 	select {

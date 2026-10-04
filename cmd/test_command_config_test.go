@@ -8,23 +8,20 @@ import (
 // testExecutionConfig is a test fixture for constructing runtime Commands.
 // Production configuration is intentionally split across the runtime types.
 type testExecutionConfig struct {
-	Index               int
-	StdinIdleTimeout    time.Duration
-	TTY                 bool
-	Timeout             time.Duration
-	OutputFlushInterval time.Duration
-	AllowInChain        bool
-	InteractiveStdin    bool
-	InputBodyMode       InputBodyMode
-	Keyword             string
-	Command             string
-	Runner              string
-	Method              string
-	URL                 string
-	Headers             map[string]string
-	Body                string
-	ReplyConfig         interface{}
-	SystemReplyConfig   interface{}
+	Index            int
+	StdinIdleTimeout time.Duration
+	TTY              bool
+	Timeout          time.Duration
+	AllowInChain     bool
+	InteractiveStdin bool
+	InputBodyMode    InputBodyMode
+	Keyword          string
+	Command          string
+	Runner           string
+	Method           string
+	URL              string
+	Headers          map[string]string
+	Body             string
 }
 
 type testCommandConfig struct {
@@ -42,17 +39,15 @@ func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Comm
 	if config.Runner == RunnerHTTP {
 		dispatch = DispatchExecutor
 	}
-	return NewCommand(
+	return newTestCommand(
 		CommandConfig{
-			Index:               config.Index,
-			MatcherConfig:       MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: config.Keyword}},
-			RunnerConfig:        RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body}},
-			ParserConfig:        ParserConfig{InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
-			ExecutorConfig:      ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin},
-			OutputFlushInterval: config.OutputFlushInterval,
-			ReplyConfig:         config.ReplyConfig,
-			SystemReplyConfig:   config.SystemReplyConfig,
-			Dispatch:            dispatch,
+			Index:          config.Index,
+			MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: config.Keyword}},
+			RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body}},
+			ParserConfig:   ParserConfig{InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
+			ExecutorConfig: ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin},
+
+			Dispatch: dispatch,
 		},
 		runner,
 		nil,
@@ -75,7 +70,7 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 			if replies == nil {
 				replies = NewCommandSet(nil)
 			}
-			replies.commands = append(replies.commands, NewCommand(CommandConfig{
+			replies.commands = append(replies.commands, newTestCommand(CommandConfig{
 				Index:         1000,
 				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
 				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
@@ -92,14 +87,14 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 
 func newTestConversationRouter(configs []*testCommandConfig, resolve RootInputResolver, enqueue func(*CommandInput) bool, routeCapacity int) *ConversationRouter {
 	commands := testCommandSet(configs, nil)
+	observeCommandSet(commands, make(chan *observedOutput, 100))
 	return NewConversationRouter(&StdinStore{}, commands, resolve, newTestDispatcher(enqueue), routeCapacity)
 }
 
 func newTestDispatcher(enqueue func(*CommandInput) bool) *CommandDispatcher {
-	return newTestCommandDispatcher(context.Background(), 100, enqueue)
+	return newTestCommandDispatcher(context.Background(), enqueue)
 }
 
-func newTestCommandDispatcher(ctx context.Context, capacity int, enqueue func(*CommandInput) bool) *CommandDispatcher {
-	outputs := make(chan *CommandOutput, capacity)
-	return NewCommandDispatcher(ctx, NewExecutor(outputs), outputs, &StdinStore{}, &ConversationLocks{}, enqueue)
+func newTestCommandDispatcher(ctx context.Context, enqueue func(*CommandInput) bool) *CommandDispatcher {
+	return NewCommandDispatcher(ctx, NewExecutor(), &StdinStore{}, &ConversationLocks{}, enqueue)
 }
