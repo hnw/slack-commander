@@ -5,10 +5,10 @@ go 1.25.0
 require (
 	github.com/creack/pty v1.1.24
 	github.com/hnw/compose-exec v0.4.0
-	github.com/mattn/go-shellwords v1.0.12
+	github.com/mattn/go-shellwords v1.0.16
 	github.com/mattn/go-sixel v0.0.8
 	github.com/pelletier/go-toml/v2 v2.4.3
-	github.com/slack-go/slack v0.23.1
+	github.com/slack-go/slack v0.29.0
 )
 
 require (
