@@ -40,6 +40,9 @@ func TestDecodeConfigRejectsInvalidTOML(t *testing.T) {
 			if err == nil {
 				t.Fatal("decodeConfig() accepted invalid configuration")
 			}
+			if strings.Contains(err.Error(), "invalid configuration:") {
+				t.Fatalf("decode error has validation heading: %v", err)
+			}
 			for _, want := range tt.want {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("decodeConfig() error = %q, want it to contain %q", err, want)
@@ -80,7 +83,7 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 	} {
 		t.Run(tc.interaction, func(t *testing.T) {
 			raw := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tc.interaction, Replies: []*RawCommandConfig{{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}}
-			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +114,7 @@ func TestResolveCommandConfigAssignsDispatchMode(t *testing.T) {
 				RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"},
 				RawRunnerConfig:  cmd.RawRunnerConfig{Runner: tc.runner, Command: "run", Method: "GET", URL: "https://example.com"},
 			}
-			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+			resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,7 +135,7 @@ func TestReplyDispatchModeFollowsResolvedRunner(t *testing.T) {
 			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "overridden"}, RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerExec, Command: "run"}},
 		},
 	}
-	resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval)
+	resolved, err := resolveCommandConfig(raw, cmd.DefaultOutputFlushInterval, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,6 +362,13 @@ func TestResolveConfigRejectsACLExpansion(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "not allowed by its parent") {
 					t.Fatalf("resolveConfig() error = %v, want parent ACL error", err)
 				}
+				prefix := "command keyword 'run': "
+				if len(tc.replyIDs) > 0 {
+					prefix = "reply keyword 'reply': "
+				}
+				if !strings.HasPrefix(err.Error(), "invalid configuration:\n  - "+prefix) || !strings.Contains(err.Error(), "is not allowed by its parent") {
+					t.Fatalf("unexpected ACL error format: %v", err)
+				}
 				return
 			}
 			if err != nil {
@@ -444,6 +454,157 @@ func validTestConfig(commands ...*RawCommandConfig) *Config {
 		},
 		NumWorkers: 1,
 		Commands:   commands,
+	}
+}
+
+func TestResolveConfigCollectsTopLevelErrorsBeforeCommands(t *testing.T) {
+	for _, users := range [][]string{nil, {"USLACKBOT"}} {
+		t.Run(strings.Join(users, ","), func(t *testing.T) {
+			negative := Duration(-time.Second)
+			cfg := &Config{
+				PubSubConfig:        PubSubConfig{AllowedUserIDs: users, ReplyConfig: pubsub.ReplyConfig{OutputFormat: "html"}},
+				OutputFlushInterval: &negative,
+				Commands:            []*RawCommandConfig{nil},
+			}
+			err := resolveConfig(cfg)
+			if err == nil {
+				t.Fatal("resolveConfig() accepted invalid top-level settings")
+			}
+			if !strings.HasPrefix(err.Error(), "invalid configuration:\n  - slack_bot_token is required\n  - slack_app_token is required\n") || strings.Contains(err.Error(), "command keyword") || strings.Contains(err.Error(), "reply keyword") {
+				t.Fatalf("unexpected top-level error format: %v", err)
+			}
+			want := []string{"slack_bot_token is required", "slack_app_token is required", "num_workers must be >= 1 (got 0)", `unknown output_format "html"; valid values are "plain", "monospaced", and "markdown"`, "output_flush_interval must be >= 0"}
+			if len(users) == 0 {
+				want = append(want, "open access is disabled by default")
+			} else {
+				want = append(want, "USLACKBOT cannot be used in allowed_user_ids; use accept_reminder for Slack Reminder messages")
+			}
+			for _, message := range want {
+				if !strings.Contains(err.Error(), message) {
+					t.Errorf("resolveConfig() error = %v, want %q", err, message)
+				}
+			}
+			if cfg.commandConfigs != nil || cfg.ListenerConfigs != nil {
+				t.Fatal("command processing started despite top-level errors")
+			}
+		})
+	}
+}
+
+func TestResolveConfigAllowedUserIDs(t *testing.T) {
+	for _, id := range []string{"USLACKBOT", "U123", "B123"} {
+		t.Run(id, func(t *testing.T) {
+			cfg := validTestConfig()
+			cfg.AllowedUserIDs = []string{id}
+			err := resolveConfig(cfg)
+			if id == "USLACKBOT" {
+				want := "USLACKBOT cannot be used in allowed_user_ids; use accept_reminder for Slack Reminder messages"
+				if err == nil || err.Error() != "invalid configuration:\n  - "+want {
+					t.Fatalf("resolveConfig() error = %v, want %q", err, want)
+				}
+			} else if err != nil {
+				t.Fatalf("resolveConfig() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestResolveConfigCollectsCommandErrorsWithoutPartialState(t *testing.T) {
+	cfg := validTestConfig()
+	if err := decodeConfigString(`
+[[commands]]
+keyword = "before"
+command = "date"
+[[commands]]
+keyword = "bad-format"
+output_format = "html"
+timeout = -1
+[[commands]]
+keyword = "bad-acl"
+command = "date"
+[[commands.replies]]
+keyword = "bad-reply-acl"
+command = "date"
+allowed_user_ids = ["U-other"]
+[[commands]]
+keyword = "missing-command"
+[[commands]]
+keyword = "after"
+command = "date"
+`, cfg); err != nil {
+		t.Fatal(err)
+	}
+	err := resolveConfig(cfg)
+	want := []string{"invalid configuration:", `  - command keyword 'bad-format': unknown output_format "html"; valid values are "plain", "monospaced", and "markdown"`, `  - reply keyword 'bad-reply-acl': allowed_user_ids value "U-other" is not allowed by its parent`, `  - command keyword 'missing-command': command is required`}
+	if err == nil {
+		t.Fatal("resolveConfig() accepted invalid commands")
+	}
+	if got := strings.Split(err.Error(), "\n"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveConfig() errors = %q, want %q", got, want)
+	}
+	if len(cfg.commandConfigs) != 2 || cfg.commandConfigs[0].Keyword != "before" || cfg.commandConfigs[1].Keyword != "after" || cfg.commandConfigs[1].Index != 1 {
+		t.Fatalf("resolved commands = %+v, want before and after with consecutive indexes", cfg.commandConfigs)
+	}
+	wantListeners := []pubsub.ListenerConfig{
+		{CommandIndex: 0, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U123"}}},
+		{CommandIndex: 1, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U123"}}},
+	}
+	if !reflect.DeepEqual(cfg.ListenerConfigs, wantListeners) {
+		t.Fatalf("listeners = %+v, want %+v", cfg.ListenerConfigs, wantListeners)
+	}
+}
+
+func TestConfigErrorsIdentifyMissingKeywordsByPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "first command", text: "[[commands]]\ncommand = 'date'", want: "command #1: keyword is required"},
+		{name: "second command after invalid command", text: "[[commands]]\nkeyword = 'foo'\n[[commands]]\ncommand = 'date'", want: "command #2: keyword is required"},
+		{name: "blank command keyword", text: "[[commands]]\nkeyword = ' '\ncommand = 'date'", want: "command #1: keyword is required"},
+		{name: "first reply", text: "[[commands]]\nkeyword = 'foo'\ncommand = 'date'\n[[commands.replies]]\ncommand = 'date'", want: "reply #1 of command keyword 'foo': keyword is required"},
+		{name: "second reply", text: "[[commands]]\nkeyword = 'foo'\ncommand = 'date'\n[[commands.replies]]\nkeyword = 'bar'\ncommand = 'date'\n[[commands.replies]]\ncommand = 'date'", want: "reply #2 of command keyword 'foo': keyword is required"},
+		{name: "blank reply keyword", text: "[[commands]]\nkeyword = 'foo'\ncommand = 'date'\n[[commands.replies]]\nkeyword = ' '\ncommand = 'date'", want: "reply #1 of command keyword 'foo': keyword is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validTestConfig()
+			if err := decodeConfigString(tc.text, cfg); err != nil {
+				t.Fatal(err)
+			}
+			err := resolveConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), "  - "+tc.want) || strings.Contains(err.Error(), "keyword ''") {
+				t.Fatalf("resolveConfig() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigErrorEnumMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  RawCommandConfig
+		want string
+	}{
+		{name: "runner", raw: RawCommandConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: "webhook"}}, want: `unknown runner "webhook"; valid values are "exec", "compose", and "http"`},
+		{name: "interaction", raw: RawCommandConfig{Interaction: "session"}, want: `unknown interaction "session"; valid values are "oneshot", "stdin", and "command"`},
+		{name: "output_format", raw: RawCommandConfig{ReplyConfig: pubsub.ReplyConfig{OutputFormat: "markdownx"}}, want: `unknown output_format "markdownx"; valid values are "plain", "monospaced", and "markdown"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.raw.Keyword = "notify"
+			cfg := validTestConfig(&tc.raw)
+			if err := resolveConfig(cfg); err == nil || err.Error() != "invalid configuration:\n  - command keyword 'notify': "+tc.want {
+				t.Fatalf("resolveConfig() error = %v, want formatted command enum error", err)
+			}
+			if tc.name == "interaction" {
+				return
+			}
+			tc.raw.Keyword = "*"
+			cfg = validTestConfig(&RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "parent"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "date"}, Replies: []*RawCommandConfig{&tc.raw}})
+			if err := resolveConfig(cfg); err == nil || err.Error() != "invalid configuration:\n  - reply keyword '*': "+tc.want {
+				t.Fatalf("resolveConfig() error = %v, want formatted reply enum error", err)
+			}
+		})
 	}
 }
 
@@ -860,7 +1021,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.interaction, func(t *testing.T) {
 			config := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tt.interaction}
-			resolved, err := resolveCommandConfig(config, cmd.DefaultOutputFlushInterval)
+			resolved, err := resolveCommandConfig(config, cmd.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -878,7 +1039,7 @@ func TestValidateConfigHTTPInteraction(t *testing.T) {
 		wantErr     string
 	}{
 		{name: "command is allowed", interaction: cmd.InteractionCommand},
-		{name: "stdin is rejected", interaction: cmd.InteractionStdin, wantErr: "does not support stdin"},
+		{name: "stdin is rejected", interaction: cmd.InteractionStdin, wantErr: `command keyword 'notify': http runner does not support interaction "stdin"; use "oneshot" or "command"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
@@ -1008,7 +1169,7 @@ func TestValidateConfigStdinIdleTimeout(t *testing.T) {
 		{
 			name:    "negative is rejected",
 			timeout: -1,
-			wantErr: "stdin_idle_timeout must be >= 0 for keyword 'agent'",
+			wantErr: "command keyword 'agent': stdin_idle_timeout must be >= 0",
 		},
 		{name: "zero is allowed"},
 		{name: "positive is allowed", timeout: 300},

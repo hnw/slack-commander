@@ -259,8 +259,8 @@ func TestRunCheckConfig(t *testing.T) {
 	if got == 0 {
 		t.Fatal("run(config without keyword) = 0, want non-zero")
 	}
-	if stderr != "keyword is required\n" {
-		t.Fatalf("run(config without keyword) stderr = %q, want %q", stderr, "keyword is required\n")
+	if stderr != "invalid configuration:\n  - command #1: keyword is required\n" {
+		t.Fatalf("run(config without keyword) stderr = %q, want formatted validation error", stderr)
 	}
 
 	invalid := writeConfigFile(t, "unknown = true")
@@ -276,6 +276,9 @@ func TestRunCheckConfig(t *testing.T) {
 	if !strings.Contains(stderr, "unknown field") {
 		t.Fatalf("run(invalid config) stderr = %q, want unknown field error", stderr)
 	}
+	if strings.Contains(stderr, "invalid configuration:") {
+		t.Fatalf("decode error has validation heading: %q", stderr)
+	}
 
 	stderr = captureStderr(t, func() {
 		got = run([]string{"--config-file", missingKeyword})
@@ -283,8 +286,8 @@ func TestRunCheckConfig(t *testing.T) {
 	if got == 0 {
 		t.Fatal("run(config without keyword) = 0, want non-zero")
 	}
-	if stderr != "keyword is required\n" {
-		t.Fatalf("run(config without keyword) stderr = %q, want %q", stderr, "keyword is required\n")
+	if stderr != "invalid configuration:\n  - command #1: keyword is required\n" {
+		t.Fatalf("run(config without keyword) stderr = %q, want formatted validation error", stderr)
 	}
 }
 
