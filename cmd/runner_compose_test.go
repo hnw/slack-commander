@@ -26,6 +26,17 @@ func TestComposeStdinStartFailureDoesNotPublishWriter(t *testing.T) {
 	}
 }
 
+func TestComposeExitErrorPropagatesExitCode(t *testing.T) {
+	var stderr bytes.Buffer
+	c := &composeCmd{stderr: &stderr}
+	if code := c.finish(&compose.ExitError{Code: 42}); code != 42 {
+		t.Fatalf("code=%d", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
 func TestComposeCmdTTYEnablesComposeTTY(t *testing.T) {
 	c := &composeCmd{cmd: &compose.Cmd{}}
 	c.SetTTY()
