@@ -66,7 +66,7 @@ go build
 ./slack-commander --config-file=config.toml
 ```
 
-ビルドにはGo 1.25以降が必要です。
+ビルドにはGo 1.26以降が必要です。
 
 設定だけを検証する場合は`--check-config`を使用できます。
 
@@ -195,6 +195,8 @@ TTY対応は完全な端末エミュレーションではありません。対�
 公式コンテナイメージにはslack-commander本体だけを含めています。
 
 コンテナで運用する場合は、CLIツールをslack-commander自身へ追加するより、実際の処理を別コンテナへ分離し、`compose` runnerから実行する構成を想定しています。
+
+`compose` runnerが接続するDocker Engineは、Docker Engine 28以降が必要です。
 
 Docker socket、Compose projectのパス、credentialやnetworkの分離については [Dockerでの運用](./docs/docker.md) を参照してください。
 
