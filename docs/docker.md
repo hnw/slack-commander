@@ -48,6 +48,8 @@ echo hello
 
 `compose` runnerの設定項目については [設定リファレンス](config.md) を参照してください。
 
+`compose` runnerが接続するDocker Engineは、Docker Engine 28以降が必要です。
+
 ## DooD
 
 slack-commander自身をコンテナで実行し、その中から`compose` runnerを使う場合は、ホスト側のDocker daemonを利用します。

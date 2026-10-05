@@ -11,6 +11,60 @@ import (
 	"time"
 )
 
+func TestComposeRunTransfersStreamsAndExitCode(t *testing.T) {
+	if os.Getenv("SLACK_COMMANDER_COMPOSE_INTEGRATION") != "1" {
+		t.Skip("set SLACK_COMMANDER_COMPOSE_INTEGRATION=1 to run with Docker")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "compose.yaml"),
+		[]byte("services:\n  app:\n    image: busybox:1.36\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, tt := range []struct {
+		name     string
+		command  []string
+		wantCode int
+		wantOut  string
+		wantErr  string
+	}{
+		{
+			name:     "success",
+			command:  []string{"/bin/sh", "-c", "printf 'out'; printf 'err' >&2"},
+			wantCode: 0,
+			wantOut:  "out",
+			wantErr:  "err",
+		},
+		{
+			name:     "non zero exit",
+			command:  []string{"/bin/sh", "-c", "printf 'out'; exit 3"},
+			wantCode: 3,
+			wantOut:  "out",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			command := NewComposeRunner(dir).CommandContext(ctx, "app", tt.command...)
+			var stdout, stderr bytes.Buffer
+			command.SetStdout(&stdout)
+			command.SetStderr(&stderr)
+			if code := command.Run(); code != tt.wantCode {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if got := stdout.String(); got != tt.wantOut {
+				t.Fatalf("stdout=%q", got)
+			}
+			if got := stderr.String(); !strings.Contains(got, tt.wantErr) {
+				t.Fatalf("stderr=%q", got)
+			}
+		})
+	}
+}
+
 func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	if os.Getenv("SLACK_COMMANDER_COMPOSE_INTEGRATION") != "1" {
 		t.Skip("set SLACK_COMMANDER_COMPOSE_INTEGRATION=1 to run with Docker")
