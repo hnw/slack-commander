@@ -53,7 +53,7 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 			defer func() { dispatcher.Close(); dispatcher.Wait() }()
 			router := NewConversationRouter(store, NewCommandSet(nil), nil, dispatcher, 1)
 			input := &CommandInput{Text: "reply body", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
-			if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+			if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted {
 				t.Fatalf("Accept() = %v, %v; want routed", result, err)
 			}
 			if len(runner.args) != 0 {

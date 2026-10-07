@@ -41,6 +41,12 @@
 - producerと最終Flushの完了後にCloseする契約を維持する。context終了後の複数producer drainと非同期HTTP drainをテストで確認する。
 - ADR検討: queue所有者のpubsubへの移動は依頼された可逆な内部変更であり、設定・永続化・外部API契約を変えないため独立ADRは見送る。
 
+## RootInputResolver の context 伝播（2026-10-07、Issue #52）
+
+- `ConversationRouter.Accept` と `RootInputResolver` は呼び出し元の `context.Context` を受け取る。SlackListener の context を message / app mention の両経路から `GetConversationRepliesContext` まで渡し、shutdown 時の履歴取得をキャンセルする。
+- resolver がキャンセル・期限切れを返したときは返信を dispatch せず、route cache へ保存しない。後続の有効な context で同じ conversation の復元を再試行できる。
+- 起点投稿者の ACL と既存の routing 判定は維持する。内部呼び出しの context 追加で、設定・永続化の契約を変えないため独立 ADR は見送る。
+
 ## 既知の境界上の課題
 
 - route cache miss 時の再判定では `RootInputResolver` を通じて transport 側の root text と起点senderの候補indexを取得している。現在の Slack 実装では `pubsub.SlackRootInputResolver` が同期的に取得するため、cmd 側から transport 側へ問い合わせる形が残っている。
