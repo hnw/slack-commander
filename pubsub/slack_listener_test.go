@@ -107,7 +107,7 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 	root := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}), NewSlackOutput(100).NewCommandOutput(ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{root})
 	resolverCalls, enqueueCalls := 0, 0
-	router := cmd.NewConversationRouter(nil, commands, func(cmd.ConversationID) (cmd.RootCommandInput, error) {
+	router := cmd.NewConversationRouter(nil, commands, func(context.Context, cmd.ConversationID) (cmd.RootCommandInput, error) {
 		resolverCalls++
 		return cmd.RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, newSlackTestDispatcher(func(*cmd.CommandInput) bool {
@@ -120,16 +120,16 @@ func TestListenerSkipsEventsWithoutCommandCandidates(t *testing.T) {
 		call func(*cmd.ConversationRouter)
 	}{
 		{name: "root message", call: func(router *cmd.ConversationRouter) {
-			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "run"}, Config{}, router)
+			onMessageEvent(context.Background(), nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "run"}, Config{}, router)
 		}},
 		{name: "thread reply", call: func(router *cmd.ConversationRouter) {
-			onMessageEvent(nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, Config{}, router)
+			onMessageEvent(context.Background(), nil, &slackevents.MessageEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "retry"}, Config{}, router)
 		}},
 		{name: "root app mention", call: func(router *cmd.ConversationRouter) {
-			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "<@BOT> run"}, Config{}, router)
+			onAppMentionEvent(context.Background(), nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "1", Text: "<@BOT> run"}, Config{}, router)
 		}},
 		{name: "thread app mention", call: func(router *cmd.ConversationRouter) {
-			onAppMentionEvent(nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> retry"}, Config{}, router)
+			onAppMentionEvent(context.Background(), nil, &slackevents.AppMentionEvent{User: "U", Channel: "C", TimeStamp: "2", ThreadTimeStamp: "1", Text: "<@BOT> retry"}, Config{}, router)
 		}},
 	} {
 		t.Run(tc.name, func(*testing.T) {

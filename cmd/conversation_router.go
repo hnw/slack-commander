@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"container/list"
+	"context"
 	"sync"
 )
 
 // RootInputResolver はroute cache eviction後に起点senderの候補を解決する。
-type RootInputResolver func(ConversationID) (RootCommandInput, error)
+type RootInputResolver func(context.Context, ConversationID) (RootCommandInput, error)
 
 // RootCommandInput はroute復元時に起点textと候補indexを保持する。
 type RootCommandInput struct {
@@ -41,11 +42,11 @@ func NewConversationRouter(stdinStore *StdinStore, commands *CommandSet, resolve
 }
 
 // Accept はroot入力とthread replyをroutingする。
-func (r *ConversationRouter) Accept(input *CommandInput) (AcceptResult, error) {
+func (r *ConversationRouter) Accept(ctx context.Context, input *CommandInput) (AcceptResult, error) {
 	if input.MessageID.Timestamp == input.ConversationID.RootTimestamp {
 		return r.acceptRoot(input), nil
 	}
-	return r.acceptThreadReply(input)
+	return r.acceptThreadReply(ctx, input)
 }
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
@@ -60,7 +61,7 @@ func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
 	return AcceptRouted
 }
 
-func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResult, error) {
+func (r *ConversationRouter) acceptThreadReply(ctx context.Context, input *CommandInput) (AcceptResult, error) {
 	if entry, found := r.stdinStore.lookup(input.ConversationID); found {
 		if entry.implicitReplyCommand == nil {
 			return AcceptIgnored, nil
@@ -72,7 +73,7 @@ func (r *ConversationRouter) acceptThreadReply(input *CommandInput) (AcceptResul
 		if r.resolveRootInput == nil {
 			return AcceptIgnored, nil
 		}
-		rootInput, err := r.resolveRootInput(input.ConversationID)
+		rootInput, err := r.resolveRootInput(ctx, input.ConversationID)
 		if err != nil {
 			return AcceptIgnored, err
 		}

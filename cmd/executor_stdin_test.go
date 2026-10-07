@@ -397,7 +397,7 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 		return true
 	}), 2)
 	root := &CommandInput{Text: "first ; unknown ; second", ConversationID: conversation, MessageID: MessageID{Timestamp: conversation.RootTimestamp}, AllowedCommandIndexes: []int{0, 1}}
-	if result, err := router.Accept(root); err != nil || result != AcceptRouted {
+	if result, err := router.Accept(context.Background(), root); err != nil || result != AcceptRouted {
 		t.Fatalf("root = %v, %v; want routed", result, err)
 	}
 	done := make(chan struct{})
@@ -454,7 +454,7 @@ func assertActiveReplyCommand(t *testing.T, store *StdinStore, conversation Conv
 func acceptStdinReply(t *testing.T, router *ConversationRouter, conversation ConversationID, index int, timestamp string) AcceptResult {
 	t.Helper()
 	input := &CommandInput{Text: "body", ConversationID: conversation, MessageID: MessageID{Timestamp: timestamp}, AllowedCommandIndexes: []int{index}}
-	result, err := router.Accept(input)
+	result, err := router.Accept(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			commands := NewCommandSet([]*Command{first, second})
 			router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
 			root := &CommandInput{Text: tc.chain, ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0, 1}}
-			if result, err := router.Accept(root); err != nil || result != AcceptRouted {
+			if result, err := router.Accept(context.Background(), root); err != nil || result != AcceptRouted {
 				t.Fatalf("root = %v, %v", result, err)
 			}
 			done := make(chan struct{})
@@ -514,7 +514,7 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			if _, ok := store.lookup(conversation); ok {
 				t.Fatal("skipped stdin command left an active endpoint")
 			}
-			result, err := router.Accept(&CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}})
+			result, err := router.Accept(context.Background(), &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}})
 			if err != nil || result != AcceptIgnored {
 				t.Fatalf("reply matching skipped command ACL = %v, %v; want ignored", result, err)
 			}

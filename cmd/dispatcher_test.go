@@ -68,7 +68,7 @@ func TestAsyncHTTPUsesExecutorOutputPipelineForFailuresAndCancellation(t *testin
 			dispatcher := NewCommandDispatcher(ctx, NewExecutor(), &StdinStore{}, &ConversationLocks{}, nil)
 			router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 			conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-			if result, err := router.Accept(&CommandInput{Text: "lookup", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
+			if result, err := router.Accept(context.Background(), &CommandInput{Text: "lookup", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 				t.Fatalf("Accept() = %v, %v; want routed", result, err)
 			}
 			if tc.startedPath != "" {
@@ -169,11 +169,11 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 				queued = input
 				return true
 			})
-			router := NewConversationRouter(&StdinStore{}, commands, func(ConversationID) (RootCommandInput, error) {
+			router := NewConversationRouter(&StdinStore{}, commands, func(context.Context, ConversationID) (RootCommandInput, error) {
 				return RootCommandInput{Text: "agent", AllowedCommandIndexes: []int{0}}, nil
 			}, dispatcher, 1)
 			input := &CommandInput{Text: tc.text, ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1, 2}}
-			if result, err := router.Accept(input); err != nil || result != AcceptRouted || queued != input {
+			if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queued != input {
 				t.Fatalf("Accept() = %v, %v; queued=%p input=%p", result, err, queued, input)
 			}
 			if requests.Load() != requestCount {
@@ -224,7 +224,7 @@ func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 		Text: "lookup && echo", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"},
 		AllowedCommandIndexes: []int{0, 1},
 	}
-	if result, err := router.Accept(input); err != nil || result != AcceptRouted || queued != input {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queued != input {
 		t.Fatalf("HTTP chain Accept() = %v, %v, queued=%p; want queued input", result, err, queued)
 	}
 	if got := input.ResolvedInput; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
@@ -234,7 +234,7 @@ func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
 	}
 	reply := &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{0}}
-	if result, err := router.Accept(reply); err != nil || result != AcceptIgnored {
+	if result, err := router.Accept(context.Background(), reply); err != nil || result != AcceptIgnored {
 		t.Fatalf("reply to oneshot chain = %v, %v; want ignored", result, err)
 	}
 }
@@ -250,7 +250,7 @@ func TestRootChainWithTrailingUnknownCachesNoReplyCommand(t *testing.T) {
 	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	input := &CommandInput{Text: "foo ; unknown", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
-	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v; want routed", result, err)
 	}
 	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
@@ -749,11 +749,11 @@ func runHTTPParseErrorCase(t *testing.T, isReply bool, timestamp string) {
 	} else {
 		commands = NewCommandSet([]*Command{httpCommand})
 	}
-	router := NewConversationRouter(&StdinStore{}, commands, func(ConversationID) (RootCommandInput, error) {
+	router := NewConversationRouter(&StdinStore{}, commands, func(context.Context, ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "agent", AllowedCommandIndexes: []int{0}}, nil
 	}, dispatcher, 1)
 	input := &CommandInput{Text: "lookup '", ConversationID: conversation, MessageID: message, AllowedCommandIndexes: []int{1}}
-	result, err := router.Accept(input)
+	result, err := router.Accept(context.Background(), input)
 	if err != nil || result != AcceptRouted {
 		t.Fatalf("Accept() = %v, %v, want malformed HTTP input routed to output", result, err)
 	}
@@ -805,7 +805,7 @@ func TestHTTPReplyUsesTheSingleNormalMatchWhenRawCandidateMisses(t *testing.T) {
 			router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
 			defer func() { dispatcher.Close(); dispatcher.Wait() }()
 			conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-			if result, err := router.Accept(&CommandInput{Text: "agent", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
+			if result, err := router.Accept(context.Background(), &CommandInput{Text: "agent", ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 				t.Fatalf("root Accept() = %v, %v", result, err)
 			}
 			reply := &CommandInput{Text: `"accept"`, ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1, 2}}
@@ -813,7 +813,7 @@ func TestHTTPReplyUsesTheSingleNormalMatchWhenRawCandidateMisses(t *testing.T) {
 			if parsed.Commands[0].Command != standardReply || parsed.SingleCommand() != standardReply {
 				t.Fatalf("reply match = (%v, %v), want normal candidate selected", parsed.Commands[0].Command, parsed.SingleCommand())
 			}
-			result, err := router.Accept(reply)
+			result, err := router.Accept(context.Background(), reply)
 			if err != nil || result != AcceptRouted {
 				t.Fatalf("raw/normal reply = %v, %v", result, err)
 			}
@@ -890,7 +890,7 @@ func TestSameConversationHTTPChainRunsSeriallyWithReplies(t *testing.T) {
 
 func acceptRoutedInput(t *testing.T, router *ConversationRouter, input *CommandInput) {
 	t.Helper()
-	if result, err := router.Accept(input); err != nil || result != AcceptRouted {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted {
 		t.Fatalf("Accept(%q) = %v, %v; want routed", input.Text, result, err)
 	}
 }
@@ -961,7 +961,7 @@ func TestDispatcherCloseRejectsNewWorkAndWaitsForOutputDrain(t *testing.T) {
 		})
 	})
 	router := NewConversationRouter(&StdinStore{}, commands, nil, dispatcher, 1)
-	if result, err := router.Accept(&CommandInput{Text: "lookup ; lookup", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
+	if result, err := router.Accept(context.Background(), &CommandInput{Text: "lookup ; lookup", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != AcceptRouted {
 		t.Fatalf("HTTP Accept() = %v, %v", result, err)
 	}
 	select {
@@ -971,7 +971,7 @@ func TestDispatcherCloseRejectsNewWorkAndWaitsForOutputDrain(t *testing.T) {
 	}
 	dispatcher.Close()
 	queueCloseOnce.Do(func() { close(queue) })
-	if result, err := router.Accept(&CommandInput{Text: "echo", ConversationID: ConversationID{ChannelID: "D", RootTimestamp: "2"}, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != AcceptIgnored {
+	if result, err := router.Accept(context.Background(), &CommandInput{Text: "echo", ConversationID: ConversationID{ChannelID: "D", RootTimestamp: "2"}, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != AcceptIgnored {
 		t.Fatalf("dispatch after Close() = %v, %v; want ignored", result, err)
 	}
 	waitDone := make(chan struct{})

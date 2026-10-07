@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -22,7 +23,7 @@ func TestSlackRootInputResolverFetchesRootTextAndCandidates(t *testing.T) {
 
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	resolve := SlackRootInputResolver(smc, Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 7}}})
-	input, err := resolve(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
+	input, err := resolve(context.Background(), cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,7 @@ func TestSlackRootInputResolverAppliesReminderPolicyToOriginalRoot(t *testing.T)
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	input, err := SlackRootInputResolver(smc, Config{ListenerConfigs: []ListenerConfig{
 		{CommandIndex: 1, RawListenerConfig: RawListenerConfig{AllowedUserIDs: []string{"U-only"}, AllowedChannelIDs: []string{"C"}, AcceptReminder: true}},
-	}})(cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
+	}})(context.Background(), cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}

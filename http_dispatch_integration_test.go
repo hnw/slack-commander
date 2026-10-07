@@ -206,7 +206,7 @@ func assertIntegrationSignalBlocked(t *testing.T, started <-chan struct{}, messa
 
 func acceptIntegrationInput(t *testing.T, router *cmd.ConversationRouter, input *cmd.CommandInput) {
 	t.Helper()
-	if result, err := router.Accept(input); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("Accept(%q) = %v, %v; want routed", input.Text, result, err)
 	}
 }
@@ -308,7 +308,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 		dispatcher.Wait()
 	})
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	if result, err := router.Accept(&cmd.CommandInput{Text: "hold", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "hold", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("queued Accept() = %v, %v", result, err)
 	}
 	select {
@@ -316,7 +316,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("queued command did not start")
 	}
-	if result, err := router.Accept(&cmd.CommandInput{Text: "http", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "http", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("HTTP Accept() = %v, %v", result, err)
 	}
 	select {

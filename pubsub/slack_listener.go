@@ -98,9 +98,9 @@ func SlackListener(
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.MessageEvent:
-						onMessageEvent(smc, ev, cfg, router)
+						onMessageEvent(ctx, smc, ev, cfg, router)
 					case *slackevents.AppMentionEvent:
-						onAppMentionEvent(smc, ev, cfg, router)
+						onAppMentionEvent(ctx, smc, ev, cfg, router)
 					default:
 						smc.Debugf("[INFO] Unsupported inner event type: %v", ev)
 					}
@@ -274,6 +274,7 @@ func normalizeSlackText(text string) string {
 }
 
 func onMessageEvent(
+	ctx context.Context,
 	smc *socketmode.Client,
 	ev *slackevents.MessageEvent,
 	cfg Config,
@@ -293,7 +294,7 @@ func onMessageEvent(
 		smc.Debugf("[WARN] conversation router is unavailable; dropping message event command")
 		return
 	}
-	result, err := router.Accept(input)
+	result, err := router.Accept(ctx, input)
 	if err != nil {
 		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return
@@ -306,6 +307,7 @@ func onMessageEvent(
 }
 
 func onAppMentionEvent(
+	ctx context.Context,
 	smc *socketmode.Client,
 	ev *slackevents.AppMentionEvent,
 	cfg Config,
@@ -325,7 +327,7 @@ func onAppMentionEvent(
 		smc.Debugf("[WARN] conversation router is unavailable; dropping app_mention command")
 		return
 	}
-	result, err := router.Accept(input)
+	result, err := router.Accept(ctx, input)
 	if err != nil {
 		log.Printf("[WARN] unable to fetch thread root channel=%s thread=%s: %v", input.ConversationID.ChannelID, input.ConversationID.RootTimestamp, err)
 		return
@@ -337,8 +339,8 @@ func onAppMentionEvent(
 	smc.Debugf("[DEBUG]: command = '%s'", input.Text)
 }
 
-func getThreadRoot(smc *socketmode.Client, conversation cmd.ConversationID) (*slack.Message, error) {
-	messages, _, _, err := smc.GetConversationReplies(&slack.GetConversationRepliesParameters{
+func getThreadRoot(ctx context.Context, smc *socketmode.Client, conversation cmd.ConversationID) (*slack.Message, error) {
+	messages, _, _, err := smc.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: conversation.ChannelID,
 		Timestamp: conversation.RootTimestamp,
 		Inclusive: true,
@@ -357,8 +359,8 @@ func getThreadRoot(smc *socketmode.Client, conversation cmd.ConversationID) (*sl
 
 // SlackRootInputResolver はcache eviction後も起点投稿者のACLでrouteを再判定する。
 func SlackRootInputResolver(smc *socketmode.Client, cfg Config) cmd.RootInputResolver {
-	return func(conversation cmd.ConversationID) (cmd.RootCommandInput, error) {
-		root, err := getThreadRoot(smc, conversation)
+	return func(ctx context.Context, conversation cmd.ConversationID) (cmd.RootCommandInput, error) {
+		root, err := getThreadRoot(ctx, smc, conversation)
 		if err != nil {
 			return cmd.RootCommandInput{}, err
 		}
