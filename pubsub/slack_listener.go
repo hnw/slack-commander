@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -385,20 +387,38 @@ func removeMentionTarget(message string) string {
 	return reMentionTarget.ReplaceAllString(message, "")
 }
 
-// normalizeSlackURLs replaces Slack URL markup with plain text.
-// <url> becomes url, and <url|text> becomes text (or url if text is empty).
 func normalizeSlackURLs(message string) string {
 	return reSlackURL.ReplaceAllStringFunc(message, func(match string) string {
 		submatches := reSlackURL.FindStringSubmatch(match)
 		if len(submatches) < 3 {
 			return match
 		}
-		url, displayText := submatches[1], submatches[2]
-		if displayText != "" {
+		targetURL, displayText := submatches[1], submatches[2]
+		if displayText != "" && !hasMatchingURLHost(targetURL, displayText) {
 			return displayText
 		}
-		return url
+		return targetURL
 	})
+}
+
+// Slack may auto-link plain URLs and abbreviate their display text.
+// Prefer the target URL when the display text appears to refer to
+// the same host, while preserving descriptive link text.
+func hasMatchingURLHost(targetURL, displayText string) bool {
+	parsed, err := url.Parse(targetURL)
+	if err != nil || parsed.Hostname() == "" || strings.ContainsFunc(displayText, unicode.IsSpace) {
+		return false
+	}
+	displayHost := strings.ToLower(displayText)
+	if strings.HasPrefix(displayHost, "https://") {
+		displayHost = strings.TrimPrefix(displayHost, "https://")
+	} else {
+		displayHost = strings.TrimPrefix(displayHost, "http://")
+	}
+	if end := strings.IndexAny(displayHost, "/?#"); end >= 0 {
+		displayHost = displayHost[:end]
+	}
+	return strings.TrimPrefix(displayHost, "www.") == strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www.")
 }
 
 // unescapeMessage

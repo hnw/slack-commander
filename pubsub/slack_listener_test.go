@@ -395,6 +395,58 @@ func TestNormalizeSlackURLs(t *testing.T) {
 	}
 }
 
+func TestNormalizeSlackURLsRestoresMatchingHost(t *testing.T) {
+	const target = "https://www.example.com/article/12345"
+	tests := []struct{ display, want string }{
+		{"", target},
+		{"https://www.example.com/article", target},
+		{"http://example.com/article", target},
+		{"www.example.com/article", target},
+		{"example.com/article", target},
+		{"example.com/entry/.../12345", target},
+		{"example.com/entry/…/12345", target},
+		{"example.com", target},
+		{"EXAMPLE.COM/article", target},
+		{"example.com?foo=bar", target},
+		{"example.com#section", target},
+		{"こちらの記事", "こちらの記事"},
+		{"example.com.evil.org/path", "example.com.evil.org/path"},
+		{"sub.example.com/article", "sub.example.com/article"},
+		{"example.com の解説", "example.com の解説"},
+		{"example.com/article title", "example.com/article title"},
+		{"example.com/\tarticle", "example.com/\tarticle"},
+		{"example.com/　article", "example.com/　article"},
+		{"example.com:8080/article", "example.com:8080/article"},
+		{"example.com@evil.org/article", "example.com@evil.org/article"},
+		{"ftp://example.com/article", "ftp://example.com/article"},
+		{"https://http://example.com/article", "https://http://example.com/article"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.display, func(t *testing.T) {
+			if got := normalizeSlackURLs("<" + target + "|" + tc.display + ">"); got != tc.want {
+				t.Errorf("表示文字列 %q: got %q, want %q", tc.display, got, tc.want)
+			}
+		})
+	}
+	for _, targetURL := range []string{"https://EXAMPLE.COM/article", "https://www.example.com:8080/article"} {
+		if got := normalizeSlackURLs("<" + targetURL + "|www.example.com/article>"); got != targetURL {
+			t.Errorf("normalizeSlackURLs() = %q, want %q", got, targetURL)
+		}
+	}
+	for _, targetURL := range []string{"not-a-url", "https://example.com:%/article"} {
+		if got := normalizeSlackURLs("<" + targetURL + "|example.com/article>"); got != "example.com/article" {
+			t.Errorf("解析できないURLの表示文字列 = %q", got)
+		}
+	}
+}
+
+func TestNewSlackInputRestoresAbbreviatedURL(t *testing.T) {
+	input := NewSlackInput(&slackevents.MessageEvent{}, "wget <https://www.example.com/entry/2026/10/12/200055|example.com/entry/.../200055>")
+	if want := "wget https://www.example.com/entry/2026/10/12/200055"; input.Text != want {
+		t.Errorf("NewSlackInput().Text = %q, want %q", input.Text, want)
+	}
+}
+
 func TestExtractEnvelopeID(t *testing.T) {
 	tests := []struct {
 		name   string
