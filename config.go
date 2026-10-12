@@ -19,6 +19,8 @@ type PubSubConfig = pubsub.Config // TOMLデコード対象のためexportedに�
 // Duration decodes Go duration syntax from TOML strings.
 type Duration time.Duration
 
+const defaultTimeout = 2 * time.Hour
+
 func (d *Duration) UnmarshalText(text []byte) error {
 	value, err := time.ParseDuration(string(text))
 	if err != nil {
@@ -31,6 +33,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type Config struct {
 	PubSubConfig
 	NumWorkers          int       `toml:"num_workers"`
+	Timeout             *Duration `toml:"timeout"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
 	Commands            []*RawCommandConfig
 	commandConfigs      []*resolvedCommandConfig
@@ -150,7 +153,7 @@ func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.D
 	return inherited
 }
 
-func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
+func resolveCommandConfig(raw *RawCommandConfig, inheritedExecutorConfig cmd.ExecutorConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
 	target := fmt.Sprintf("command keyword '%s'", raw.Keyword)
 	if strings.TrimSpace(raw.Keyword) == "" {
 		target = fmt.Sprintf("command #%d", commandNumber)
@@ -167,7 +170,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedOutputFlushInterval ti
 	if _, err := normalizeRunner(&runnerConfig); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	parserConfig, executorConfig := resolveInteraction(interaction, resolveExecutorConfig(cmd.ExecutorConfig{}, raw.RawExecutorConfig))
+	parserConfig, executorConfig := resolveInteraction(interaction, resolveExecutorConfig(inheritedExecutorConfig, raw.RawExecutorConfig))
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, inheritedOutputFlushInterval)
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
@@ -275,6 +278,10 @@ func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (
 
 func resolveConfig(cfg *Config) error {
 	var validationErrors []error
+	executorConfig := resolveExecutorConfig(cmd.ExecutorConfig{Timeout: defaultTimeout}, RawExecutorConfig{Timeout: cfg.Timeout})
+	if err := validateExecutorDurations(executorConfig); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
 	if strings.TrimSpace(cfg.SlackBotToken) == "" {
 		validationErrors = append(validationErrors, errors.New("slack_bot_token is required"))
 	}
@@ -309,7 +316,7 @@ func resolveConfig(cfg *Config) error {
 	listenerDefaults := pubsub.RawListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
 	nextCommandIndex := 0
 	for i, c := range cfg.Commands {
-		resolved, err := resolveCommandConfig(c, outputFlushInterval, i+1)
+		resolved, err := resolveCommandConfig(c, executorConfig, outputFlushInterval, i+1)
 		if err != nil {
 			validationErrors = append(validationErrors, err)
 			continue

@@ -84,7 +84,7 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 	} {
 		t.Run(tc.interaction, func(t *testing.T) {
 			raw := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tc.interaction, Replies: []*RawCommandConfig{{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}}
-			resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestResolveCommandConfigAssignsDispatchMode(t *testing.T) {
 				RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"},
 				RawRunnerConfig:  cmd.RawRunnerConfig{Runner: tc.runner, Command: "run", Method: "GET", URL: "https://example.com"},
 			}
-			resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +136,7 @@ func TestReplyDispatchModeFollowsResolvedRunner(t *testing.T) {
 			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "overridden"}, RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerExec, Command: "run"}},
 		},
 	}
-	resolved, err := resolveCommandConfig(raw, pubsub.DefaultOutputFlushInterval, 1)
+	resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +455,78 @@ func validTestConfig(commands ...*RawCommandConfig) *Config {
 		},
 		NumWorkers: 1,
 		Commands:   commands,
+	}
+}
+
+func TestLoadConfigTimeoutInheritance(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		global, command, reply string
+		wantCommand, wantReply time.Duration
+	}{
+		{name: "未指定は2h", wantCommand: 2 * time.Hour, wantReply: 2 * time.Hour},
+		{name: "globalを継承", global: `timeout = "30m"`, wantCommand: 30 * time.Minute, wantReply: 30 * time.Minute},
+		{name: "commandで上書き", global: `timeout = "30m"`, command: `timeout = "10m"`, wantCommand: 10 * time.Minute, wantReply: 10 * time.Minute},
+		{name: "replyで上書き", global: `timeout = "30m"`, command: `timeout = "10m"`, reply: `timeout = "5m"`, wantCommand: 10 * time.Minute, wantReply: 5 * time.Minute},
+		{name: "globalで無期限", global: `timeout = "0s"`},
+		{name: "commandで無期限", global: `timeout = "30m"`, command: `timeout = "0s"`},
+		{name: "replyで無期限", global: `timeout = "30m"`, command: `timeout = "10m"`, reply: `timeout = "0s"`, wantCommand: 10 * time.Minute},
+		{name: "global無期限を上書き", global: `timeout = "0s"`, command: `timeout = "10m"`, wantCommand: 10 * time.Minute, wantReply: 10 * time.Minute},
+		{name: "command無期限を上書き", command: `timeout = "0s"`, reply: `timeout = "5m"`, wantReply: 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := fmt.Sprintf(`slack_bot_token = "xoxb-test"
+slack_app_token = "xapp-test"
+allowed_user_ids = ["U123"]
+%s
+[[commands]]
+keyword = "run"
+command = "run"
+interaction = "command"
+%s
+[[commands.replies]]
+keyword = "retry"
+command = "retry"
+%s
+`, tc.global, tc.command, tc.reply)
+			cfg, err := loadConfig(writeConfigFile(t, text))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := cfg.commandConfigs[0]
+			if root.Timeout != tc.wantCommand || root.Replies[0].Timeout != tc.wantReply {
+				t.Fatalf("timeout command=%s reply=%s, want command=%s reply=%s", root.Timeout, root.Replies[0].Timeout, tc.wantCommand, tc.wantReply)
+			}
+			if root.StdinIdleTimeout != 0 || root.TTY || root.Replies[0].StdinIdleTimeout != 0 || root.Replies[0].TTY {
+				t.Fatal("timeoutの継承によってstdin_idle_timeoutまたはttyの既定値が変わった")
+			}
+		})
+	}
+}
+
+func TestLoadConfigGlobalTimeoutValidation(t *testing.T) {
+	for _, tc := range []struct {
+		value, wantErr string
+	}{
+		{value: `"-1s"`, wantErr: "timeout must be >= 0"},
+		{value: `"999us"`, wantErr: "timeout must be 0 or at least 1ms"},
+		{value: "-1", wantErr: "timeout must be >= 0"},
+		{value: "999999", wantErr: "timeout must be 0 or at least 1ms"},
+		{value: `"1ms"`},
+		{value: "1000000"},
+		{value: "0"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			text := "slack_bot_token = \"xoxb-test\"\nslack_app_token = \"xapp-test\"\nallowed_user_ids = [\"U123\"]\ntimeout = " + tc.value
+			_, err := loadConfig(writeConfigFile(t, text))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("loadConfig() error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -920,6 +992,7 @@ slack_bot_token = "xoxb-test"
 slack_app_token = "xapp-test"
 allowed_user_ids = ["U123"]
 output_flush_interval = "500ms"
+timeout = "30m"
 
 [[commands]]
 keyword = "date"
@@ -983,6 +1056,7 @@ command = "date"
 
 func TestLoadConfigResolvesInheritedCommandValues(t *testing.T) {
 	cfg, err := loadConfig(writeConfigFile(t, `
+timeout = "30m"
 slack_bot_token = "xoxb-test"
 slack_app_token = "xapp-test"
 allowed_user_ids = ["U123"]
@@ -1059,6 +1133,7 @@ tty = false
 
 func TestLoadConfigResolvesReplyStdinIdleTimeoutZeroOverride(t *testing.T) {
 	cfg, err := loadConfig(writeConfigFile(t, `
+timeout = "30m"
 slack_bot_token = "xoxb-test"
 slack_app_token = "xapp-test"
 allowed_user_ids = ["U123"]
@@ -1154,7 +1229,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.interaction, func(t *testing.T) {
 			config := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tt.interaction}
-			resolved, err := resolveCommandConfig(config, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(config, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

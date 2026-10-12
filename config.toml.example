@@ -2,38 +2,11 @@ slack_bot_token = 'xoxb-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 slack_app_token = 'xapp-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 allowed_user_ids = ['U0123456789']
 allowed_channel_ids = ['C0123456789']
-# allow_unsafe_open_access = true # 非推奨: 全ユーザー・全チャンネルからの実行を許可
-# output_flush_interval = '1s' # コマンド出力を途中送信する最大待ち時間
 
 [[commands]]
 keyword = 'date'
 command = 'date'
-icon_emoji = ':alarm_clock:'
-username = 'Clock'
-# command output は常に thread reply として投稿されます。
-# reply_broadcast = true # 省略時も true。false にすると thread 内だけに投稿します。
-
-[[commands]]
-keyword = 'uname'
-command = 'uname -mrs'
-username = 'OS info'
-icon_emoji = ':computer:'
 
 [[commands]]
 keyword = 'echo *'
 command = '/bin/echo *'
-output_format = 'monospaced'
-# SlackのMarkdown Blockへ出力をそのまま渡す場合は、次を指定します。
-# output_format = 'markdown'
-
-# thread replyを実行中プロセスのstdinへ渡す場合は interaction = 'stdin' を指定します。
-# replyを[[commands.replies]]のcommandとして処理する場合は interaction = 'command' を指定します。
-# 省略時の interaction = 'oneshot' では thread reply を処理しません。
-
-[[commands]]
-keyword = 'notify *'
-runner = 'http'
-method = 'POST'
-url = 'https://example.com/hooks/notify'
-headers = { 'Content-Type' = 'application/json' }
-body = '{"text":"*"}'
