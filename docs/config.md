@@ -11,6 +11,7 @@ slack-commander全体に適用する設定です。
 | [`slack_bot_token`](#slack_bot_token-string) | `string` | — | SlackのBot User OAuth Token |
 | [`slack_app_token`](#slack_app_token-string) | `string` | — | SlackのApp-Level Token |
 | [`num_workers`](#num_workers-int) | `int` | `1` | `exec`と`compose`を実行するワーカー数 |
+| [`timeout`](#timeout-duration) | `duration` | `2h` | 各コマンドの実行全体のタイムアウト |
 | [`output_flush_interval`](#output_flush_interval-duration) | `duration` | `1s` | コマンド出力を途中送信するまでの最大待ち時間 |
 | [`allowed_user_ids`](#allowed_user_ids-string) | `[]string` | 空 | 実行を許可するユーザーID |
 | [`allowed_channel_ids`](#allowed_channel_ids-string) | `[]string` | 空 | 実行を許可するチャンネルID |
@@ -28,7 +29,7 @@ slack-commander全体に適用する設定です。
 | [`keyword`](#keyword-string) | `string` | — | Slackへの入力と照合するキーワード |
 | [`runner`](#runner-string) | `string` | `exec` | コマンドの実行方法 |
 | [`command`](#command-string) | `string` | — | `exec`または`compose`で実行する内容 |
-| [`timeout`](#timeout-duration) | `duration` | `0s` | 実行全体のタイムアウト |
+| [`timeout`](#timeout-duration) | `duration` | globalから継承 | 実行全体のタイムアウト |
 | [`output_flush_interval`](#output_flush_interval-duration) | `duration` | 継承 | コマンド出力を途中送信するまでの最大待ち時間 |
 
 #### 実行許可とスレッド
@@ -490,9 +491,12 @@ HTTP runnerでは使用できず、`tty = true`とも併用できません。
 整数を指定した場合はナノ秒として扱われます。
 `0`または`1ms`以上を指定してください。
 
-省略するか`"0s"`を指定すると、実行時間に上限を設けません。
-数値の`0`も同様です。
+トップレベル、`[[commands]]`、`[[commands.replies]]`で指定できます。省略時は親の設定を継承し、すべて未指定の場合は`2h`になります。
+
+明示的に`"0s"`を指定すると、実行時間に上限を設けません。
 負の値は指定できません。
+
+タイムアウトは各コマンドの実行ごとに適用され、コマンドチェーン全体の実行時間は制限しません。
 
 `stdin_idle_timeout`は無入力時に標準入力を閉じる設定ですが、`timeout`は処理全体の実行時間を制限します。
 
