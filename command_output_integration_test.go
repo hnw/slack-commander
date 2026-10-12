@@ -44,7 +44,7 @@ func TestRuntimeReplyTreeHasCommandSpecificOutput(t *testing.T) {
 	router := cmd.NewConversationRouter(&cmd.StdinStore{}, commands, nil, dispatcher, 1)
 	for i, text := range []string{"root", "reply"} {
 		input := &cmd.CommandInput{Text: text, ConversationID: cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: cmd.MessageID{ChannelID: "C", Timestamp: []string{"1", "2"}[i]}, AllowedCommandIndexes: []int{i}}
-		if result, err := router.Accept(input); err != nil || result != cmd.AcceptRouted || accepted != input {
+		if result, err := router.Accept(context.Background(), input); err != nil || result != cmd.AcceptRouted || accepted != input {
 			t.Fatalf("Accept = %v, %v, accepted=%p", result, err, accepted)
 		}
 		cmd.NewExecutor().Execute(context.Background(), accepted, nil)

@@ -247,7 +247,7 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	queued := false
 	router := cmd.NewConversationRouter(stdinStore, runtime, nil, newMainTestDispatcher(context.Background(), stdinStore, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1"}
-	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{resolved.Index}}); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{resolved.Index}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)
 	}
 	queued = false
@@ -262,12 +262,12 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutput(100).NewCommandOutput(pubsub.ReplyConfig{}, 0))
 	stdinStore.Lifecycle(conversation).StdinReady(endpoint, implicitReply)
 	for _, indexes := range [][]int{{resolved.Index}, {}} {
-		result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
+		result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
 		if err != nil || result != cmd.AcceptIgnored || queued {
 			t.Fatalf("reply candidates %v result = %v, err = %v, queued = %v", indexes, result, err, queued)
 		}
 	}
-	result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{rawReply.Index}})
+	result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{rawReply.Index}})
 	if err != nil || result != cmd.AcceptRouted || queued {
 		t.Fatalf("stdin explicit keyword result = %v, err = %v, queued = %v", result, err, queued)
 	}
@@ -296,11 +296,11 @@ func TestBuildCommandSetIgnoresConfiguredRepliesForOneshot(t *testing.T) {
 	queued := false
 	router := cmd.NewConversationRouter(nil, runtime, nil, newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool { queued = true; return true }), 1)
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	if result, err := router.Accept(&cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "agent", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
 		t.Fatalf("root Accept() = %v, %v", result, err)
 	}
 	queued = false
-	result, err := router.Accept(&cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}})
+	result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}})
 	if err != nil || result != cmd.AcceptIgnored || queued {
 		t.Fatalf("oneshot reply result = %v, err = %v, queued = %v", result, err, queued)
 	}
