@@ -45,7 +45,7 @@ func TestSlackCommandOutputStreamsAndLifecycle(t *testing.T) {
 
 func TestSlackCommandOutputSystemErrors(t *testing.T) {
 	broadcast := false
-	reply := ReplyConfig{Username: "custom", IconEmoji: ":robot_face:", OutputFormat: OutputFormatMarkdown, ReplyBroadcast: &broadcast}
+	reply := ReplyConfig{Username: "custom", IconEmoji: ":robot_face:", IconURL: "https://example.com/icon.png", OutputFormat: OutputFormatMarkdown, ReplyBroadcast: &broadcast}
 	c, m := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}, cmd.MessageID{ChannelID: "C", Timestamp: "2"}
 	for _, tc := range []struct {
 		name   string
@@ -53,7 +53,7 @@ func TestSlackCommandOutputSystemErrors(t *testing.T) {
 		config *ReplyConfig
 		code   int
 	}{
-		{name: "parse", kind: cmd.SystemErrorParse, config: NewSystemReplyConfig(&broadcast), code: 2},
+		{name: "parse", kind: cmd.SystemErrorParse, config: &ReplyConfig{Username: "Slack commander", IconEmoji: ":ghost:", ReplyBroadcast: &broadcast}, code: 2},
 		{name: "not found", kind: cmd.SystemErrorCommandNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

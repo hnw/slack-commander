@@ -153,7 +153,7 @@ func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.D
 	return inherited
 }
 
-func resolveCommandConfig(raw *RawCommandConfig, inheritedExecutorConfig cmd.ExecutorConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
+func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.ReplyConfig, inheritedExecutorConfig cmd.ExecutorConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
 	target := fmt.Sprintf("command keyword '%s'", raw.Keyword)
 	if strings.TrimSpace(raw.Keyword) == "" {
 		target = fmt.Sprintf("command #%d", commandNumber)
@@ -178,7 +178,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedExecutorConfig cmd.Exe
 	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
 		return nil, fmt.Errorf("%s: http runner does not support interaction %q; use %q or %q", target, cmd.InteractionStdin, cmd.InteractionOneshot, cmd.InteractionCommand)
 	}
-	config := &resolvedCommandConfig{CommandConfig: cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: raw.ReplyConfig}
+	config := &resolvedCommandConfig{CommandConfig: cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolveReplyConfig(inheritedReplyConfig, raw)}
 	configuredReplies := make([]*resolvedCommandConfig, 0, len(raw.Replies))
 	for i, reply := range raw.Replies {
 		resolved, err := resolveReplyCommandConfig(config, reply, i+1)
@@ -316,7 +316,7 @@ func resolveConfig(cfg *Config) error {
 	listenerDefaults := pubsub.RawListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
 	nextCommandIndex := 0
 	for i, c := range cfg.Commands {
-		resolved, err := resolveCommandConfig(c, executorConfig, outputFlushInterval, i+1)
+		resolved, err := resolveCommandConfig(c, cfg.ReplyConfig, executorConfig, outputFlushInterval, i+1)
 		if err != nil {
 			validationErrors = append(validationErrors, err)
 			continue
