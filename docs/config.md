@@ -13,6 +13,11 @@ slack-commander全体に適用する設定です。
 | [`num_workers`](#num_workers-int) | `int` | `1` | `exec`と`compose`を実行するワーカー数 |
 | [`timeout`](#timeout-duration) | `duration` | `2h` | 各コマンドの実行全体のタイムアウト |
 | [`output_flush_interval`](#output_flush_interval-duration) | `duration` | `1s` | コマンド出力を途中送信するまでの最大待ち時間 |
+| [`username`](#username-string) | `string` | — | 投稿時のユーザー名 |
+| [`icon_emoji`](#icon_emoji-string) | `string` | — | 投稿時に使うSlack絵文字 |
+| [`icon_url`](#icon_url-string) | `string` | — | 投稿時に使うアイコンのURL |
+| [`output_format`](#output_format-string) | `string` | `plain` | 実行結果の表示形式 |
+| [`reply_broadcast`](#reply_broadcast-bool) | `bool` | `true` | スレッドへの返信をチャンネルにも表示する |
 | [`allowed_user_ids`](#allowed_user_ids-string) | `[]string` | 空 | 実行を許可するユーザーID |
 | [`allowed_channel_ids`](#allowed_channel_ids-string) | `[]string` | 空 | 実行を許可するチャンネルID |
 | [`allow_unsafe_open_access`](#allow_unsafe_open_access-bool) | `bool` | `false` | ユーザーとチャンネルを制限せずに起動することを許可する |
@@ -36,8 +41,8 @@ slack-commander全体に適用する設定です。
 
 | 項目 | 型 | 既定値 | 概要 |
 | --- | --- | --- | --- |
-| [`allowed_user_ids`](#allowed_user_ids-string) | `[]string` | 継承 | このコマンドを実行できるユーザーID |
-| [`allowed_channel_ids`](#allowed_channel_ids-string) | `[]string` | 継承 | このコマンドを実行できるチャンネルID |
+| [`allowed_user_ids`](#allowed_user_ids-string) | `[]string` | globalから継承 | このコマンドを実行できるユーザーID |
+| [`allowed_channel_ids`](#allowed_channel_ids-string) | `[]string` | globalから継承 | このコマンドを実行できるチャンネルID |
 | [`accept_reminder`](#accept_reminder-bool) | `bool` | `false` | Slackのリマインダーからの入力を受け付ける |
 | [`interaction`](#interaction-string) | `string` | `oneshot` | スレッドへの返信の扱い |
 | [`replies`](#replies) | `[[commands.replies]]` | — | `interaction = "command"`で使用する返信用コマンド |
@@ -61,11 +66,11 @@ slack-commander全体に適用する設定です。
 
 | 項目 | 型 | 既定値 | 概要 |
 | --- | --- | --- | --- |
-| [`username`](#username-string) | `string` | — | 投稿時のユーザー名 |
-| [`icon_emoji`](#icon_emoji-string) | `string` | — | 投稿時に使うSlack絵文字 |
-| [`icon_url`](#icon_url-string) | `string` | — | 投稿時に使うアイコンのURL |
-| [`output_format`](#output_format-string) | `string` | `plain` | 実行結果の表示形式 |
-| [`reply_broadcast`](#reply_broadcast-bool) | `bool` | `true` | スレッドへの返信をチャンネルにも表示する |
+| [`username`](#username-string) | `string` | globalから継承 | 投稿時のユーザー名 |
+| [`icon_emoji`](#icon_emoji-string) | `string` | globalから継承 | 投稿時に使うSlack絵文字 |
+| [`icon_url`](#icon_url-string) | `string` | globalから継承 | 投稿時に使うアイコンのURL |
+| [`output_format`](#output_format-string) | `string` | globalから継承 | 実行結果の表示形式 |
+| [`reply_broadcast`](#reply_broadcast-bool) | `bool` | globalから継承 | スレッドへの返信をチャンネルにも表示する |
 
 ### 返信用コマンド
 
@@ -452,7 +457,7 @@ Slackへ結果を投稿するときのユーザー名を指定します。
 使用できる値は次の3つです。
 
 * `plain`: Slackの添付メッセージ（attachment）の本文として表示する。
-省略時はこの形式
+どの階層でも指定しない場合はこの形式
 * `monospaced`: 出力全体をコードブロックとして表示する
 * `markdown`: 出力文字列をそのままSlackのMarkdown Blockとして表示する
 
@@ -462,7 +467,7 @@ Slackへ結果を投稿するときのユーザー名を指定します。
 
 実行結果は、起点となったSlackメッセージのスレッドへ返信として投稿します。
 
-省略時は`true`で、返信をチャンネルにも表示します。
+どの階層でも指定しない場合は`true`で、返信をチャンネルにも表示します。
 
 `false`にするとスレッド内だけに表示します。
 

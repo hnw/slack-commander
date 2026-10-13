@@ -84,7 +84,7 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 	} {
 		t.Run(tc.interaction, func(t *testing.T) {
 			raw := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tc.interaction, Replies: []*RawCommandConfig{{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "retry"}}}}
-			resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, pubsub.ReplyConfig{}, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestResolveCommandConfigAssignsDispatchMode(t *testing.T) {
 				RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"},
 				RawRunnerConfig:  cmd.RawRunnerConfig{Runner: tc.runner, Command: "run", Method: "GET", URL: "https://example.com"},
 			}
-			resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(raw, pubsub.ReplyConfig{}, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +136,7 @@ func TestReplyDispatchModeFollowsResolvedRunner(t *testing.T) {
 			{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "overridden"}, RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerExec, Command: "run"}},
 		},
 	}
-	resolved, err := resolveCommandConfig(raw, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
+	resolved, err := resolveCommandConfig(raw, pubsub.ReplyConfig{}, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1229,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.interaction, func(t *testing.T) {
 			config := &RawCommandConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}, RawRunnerConfig: cmd.RawRunnerConfig{Command: "run"}, Interaction: tt.interaction}
-			resolved, err := resolveCommandConfig(config, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
+			resolved, err := resolveCommandConfig(config, pubsub.ReplyConfig{}, cmd.ExecutorConfig{Timeout: defaultTimeout}, pubsub.DefaultOutputFlushInterval, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1482,6 +1482,81 @@ reply_broadcast = false
 	}
 	if cfg.Commands[2].ReplyBroadcast == nil || *cfg.Commands[2].ReplyBroadcast {
 		t.Fatal("reply_broadcast = false was not decoded")
+	}
+}
+
+func TestLoadConfigSlackOutputInheritance(t *testing.T) {
+	global := "username = 'global'\nicon_emoji = ':globe_with_meridians:'\nicon_url = 'https://example.com/global.png'\noutput_format = 'markdown'\nreply_broadcast = true\n"
+	overrides := "username = 'command'\nicon_emoji = ':robot_face:'\nicon_url = 'https://example.com/command.png'\noutput_format = 'monospaced'\nreply_broadcast = false\n"
+	broadcast, threadOnly := true, false
+	globalReply := pubsub.ReplyConfig{Username: "global", IconEmoji: ":globe_with_meridians:", IconURL: "https://example.com/global.png", OutputFormat: "markdown", ReplyBroadcast: &broadcast}
+	commandReply := pubsub.ReplyConfig{Username: "command", IconEmoji: ":robot_face:", IconURL: "https://example.com/command.png", OutputFormat: "monospaced", ReplyBroadcast: &threadOnly}
+	for _, tc := range []struct {
+		name, global, command, reply string
+		wantCommand, wantReply       pubsub.ReplyConfig
+	}{
+		{name: "built-in defaults remain unset"},
+		{name: "global inherited", global: global, wantCommand: globalReply, wantReply: globalReply},
+		{
+			name: "command overrides all", global: global,
+			command:     overrides,
+			wantCommand: commandReply, wantReply: commandReply,
+		},
+		{
+			name: "partial overrides preserve ancestors", global: global, command: "username = 'command'\nreply_broadcast = false\n", reply: "icon_emoji = ':memo:'\noutput_format = 'plain'\nreply_broadcast = true\n",
+			wantCommand: pubsub.ReplyConfig{Username: "command", IconEmoji: globalReply.IconEmoji, IconURL: globalReply.IconURL, OutputFormat: "markdown", ReplyBroadcast: &threadOnly},
+			wantReply:   pubsub.ReplyConfig{Username: "command", IconEmoji: ":memo:", IconURL: globalReply.IconURL, OutputFormat: "plain", ReplyBroadcast: &broadcast},
+		},
+		{
+			name: "reply overrides all", global: global,
+			reply:       overrides,
+			wantCommand: globalReply, wantReply: commandReply,
+		},
+		{
+			name: "false global overridden by true command", global: "reply_broadcast = false\n", command: "reply_broadcast = true\n", reply: "reply_broadcast = false\n",
+			wantCommand: pubsub.ReplyConfig{ReplyBroadcast: &broadcast}, wantReply: pubsub.ReplyConfig{ReplyBroadcast: &threadOnly},
+		},
+		{
+			name: "false global inherited", global: "reply_broadcast = false\n",
+			wantCommand: pubsub.ReplyConfig{ReplyBroadcast: &threadOnly}, wantReply: pubsub.ReplyConfig{ReplyBroadcast: &threadOnly},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U123']\n" + tc.global +
+				"[[commands]]\nkeyword = 'parent'\ncommand = 'echo'\ninteraction = 'command'\n" + tc.command +
+				"[[commands.replies]]\nkeyword = 'reply'\ncommand = 'echo'\n" + tc.reply +
+				"[[commands]]\nkeyword = 'stdin'\ncommand = 'cat'\ninteraction = 'stdin'\n" + tc.command
+			cfg, err := loadConfig(writeConfigFile(t, text))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, command := range cfg.commandConfigs {
+				if !reflect.DeepEqual(command.ReplyConfig, tc.wantCommand) {
+					t.Errorf("command %d output = %+v, want %+v", i, command.ReplyConfig, tc.wantCommand)
+				}
+				want := tc.wantReply
+				if i == 1 {
+					want = tc.wantCommand
+				}
+				if !reflect.DeepEqual(command.Replies[0].ReplyConfig, want) {
+					t.Errorf("command %d reply output = %+v, want %+v", i, command.Replies[0].ReplyConfig, want)
+				}
+			}
+			var raw Config
+			if err := decodeConfigString(text, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg.ReplyConfig, raw.ReplyConfig) || !reflect.DeepEqual(cfg.Commands, raw.Commands) {
+				t.Fatal("resolution changed explicitly configured values")
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsInvalidGlobalOutputFormat(t *testing.T) {
+	_, err := loadConfig(writeConfigFile(t, "slack_bot_token = 'xoxb-test'\nslack_app_token = 'xapp-test'\nallowed_user_ids = ['U123']\noutput_format = 'html'\n[[commands]]\nkeyword = 'echo'\ncommand = 'echo'\noutput_format = 'plain'\n"))
+	if err == nil || !strings.Contains(err.Error(), `unknown output_format "html"`) {
+		t.Fatalf("loadConfig() error = %v, want invalid global output_format", err)
 	}
 }
 
