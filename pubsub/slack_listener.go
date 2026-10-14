@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -440,15 +441,7 @@ func normalizeQuotes(message string) string {
 }
 
 func isAllowedID(allowedIDs []string, id string) bool {
-	if len(allowedIDs) == 0 {
-		return true
-	}
-	for _, allowed := range allowedIDs {
-		if id == allowed {
-			return true
-		}
-	}
-	return false
+	return len(allowedIDs) == 0 || slices.Contains(allowedIDs, id)
 }
 
 func filterCommandIndexes(configs []ListenerConfig, userID, channelID string, reminder, reply bool) []int {

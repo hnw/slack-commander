@@ -119,22 +119,7 @@ func (c *execCmd) run(stdin execStdin) int {
 	}
 
 	stdin.started()
-	err := c.cmd.Wait()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			if exitError.ExitCode() == -1 {
-				// https://pkg.go.dev/os#ProcessState.ExitCode
-				// -1 if the process hasn't exited or was terminated by a signal.
-				return 143 // 128+15(SIGTERM)
-			}
-			return exitError.ExitCode()
-		}
-		if c.cmd.Stderr != nil {
-			_, _ = fmt.Fprintf(c.cmd.Stderr, "Error: %v", err)
-		}
-		return 127
-	}
-	return c.cmd.ProcessState.ExitCode()
+	return c.exitCode(c.cmd.Wait(), c.cmd.Stderr)
 }
 
 func (c *execCmd) runTTY(stdin execStdin) int {
