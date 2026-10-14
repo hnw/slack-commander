@@ -304,11 +304,8 @@ func parse(line string) ([]*commandPart, error) {
 		args, err := parser.Parse(line)
 		if len(args) == 0 {
 			if prevOperator == "" {
-				end := 2
-				if len(line) < 2 {
-					end = len(line)
-				}
-				prevOperator = string([]rune(line)[0:end])
+				runes := []rune(line)
+				prevOperator = string(runes[:min(2, len(runes))])
 			}
 			err = errors.New("Parse error near `" + prevOperator + "'")
 		}
@@ -320,7 +317,7 @@ func parse(line string) ([]*commandPart, error) {
 			// 文字列末尾までparseした
 			return cmds, nil
 		}
-		i := parser.Position
+		i := len(string([]rune(line)[:parser.Position]))
 		token := line[i:]
 		operators := []string{";", "&&", "||"}
 		prevOperator = ""
