@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -233,7 +234,7 @@ type aclSwitchCommandRunner struct {
 	name   string
 }
 
-func (r aclSwitchCommandRunner) CommandContext(context.Context, string, ...string) cmd.Cmd {
+func (r aclSwitchCommandRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
 	return aclSwitchCommand(r)
 }
 
@@ -265,8 +266,13 @@ func (c aclSwitchCommand) RunWithStdin(start func(io.WriteCloser)) int {
 	return 0
 }
 
-func (r *aclIntegrationRunner) CommandContext(_ context.Context, name string, _ ...string) cmd.Cmd {
-	r.calls = append(r.calls, name)
+type aclIntegrationCommandRunner struct {
+	runner *aclIntegrationRunner
+	name   string
+}
+
+func (r aclIntegrationCommandRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
+	r.runner.calls = append(r.runner.calls, r.name)
 	return &aclIntegrationCmd{}
 }
 
@@ -323,7 +329,9 @@ accept_reminder = true
 		t.Fatal(err)
 	}
 	runner := &aclIntegrationRunner{}
-	commands := buildCommandSet(cfg.commandConfigs, func(cmd.RunnerConfig) cmd.CommandRunner { return runner }, testOutputFactory(outputs))
+	commands := buildCommandSet(cfg.commandConfigs, func(config cmd.RunnerConfig) cmd.CommandRunner {
+		return aclIntegrationCommandRunner{runner: runner, name: strings.Fields(config.Command)[0]}
+	}, testOutputFactory(outputs))
 	queued := make(chan *cmd.CommandInput, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth.test" {
@@ -415,15 +423,12 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &aclIntegrationRunner{}
-			configs := []cmd.CommandConfig{
-				{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "status"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "status"}}},
-				{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "deploy"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "deploy"}}},
-				{Index: 2, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, ParserConfig: cmd.ParserConfig{AllowInChain: true}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "generic *"}}},
-				{Index: 3, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "interact"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "interact"}}},
-			}
+			configs := []*resolvedCommandConfig{{CommandConfig: cmd.CommandConfig{Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "status"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "status"}}}, {CommandConfig: cmd.CommandConfig{Index: 1, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "deploy"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "deploy"}}}, {CommandConfig: cmd.CommandConfig{Index: 2, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "generic *"}}}, {CommandConfig: cmd.CommandConfig{Index: 3}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "interact"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "interact"}}}}
 			commands := make([]*cmd.Command, 0, len(configs))
 			for _, config := range configs {
-				commands = append(commands, cmd.NewCommand(config, runner, nil, testOutputFactory(make(chan *observedCommandOutput, 100))(pubsub.ReplyConfig{}, 0)))
+				commands = append(commands, buildCommand(config, func(config cmd.RunnerConfig) cmd.CommandRunner {
+					return aclIntegrationCommandRunner{runner: runner, name: strings.Fields(config.Command)[0]}
+				}, testOutputFactory(make(chan *observedCommandOutput, 100))))
 			}
 			commandSet := cmd.NewCommandSet(commands)
 
@@ -435,7 +440,7 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 			})
 			defer func() { dispatcher.Close(); dispatcher.Wait() }()
 			input := &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed}
-			input.ResolvedInput = commandSet.ResolveInput(tt.text, tt.allowed)
+			input.Commands, input.ParseErr = commandSet.Resolve(tt.text, tt.allowed)
 			result := dispatcher.Dispatch(input)
 			if len(tt.want) == 0 {
 				if result != cmd.DispatchIgnored || queued != nil {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -27,7 +28,7 @@ func TestExecSessionEOF(t *testing.T) {
 			conversation = ConversationID{ChannelID: "C", RootTimestamp: "1"}
 			want += "\n"
 		}
-		command := NewExecRunner().CommandContext(ctx, "/bin/cat")
+		command := &execCmd{cmd: exec.CommandContext(ctx, "/bin/cat")}
 		var out bytes.Buffer
 		command.SetStdout(&out)
 		code := testRunWithInput(command, 30*time.Millisecond, "raw input", conversation, &registry)
@@ -80,7 +81,7 @@ func TestExecutorIdleUnregistersBeforeProcessExit(t *testing.T) {
 func TestExecutorFiniteCanExitWithoutConsumingStdin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "exit 0")
+	command := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")}
 	if code := testRunWithInput(
 		command,
 		0,
@@ -96,7 +97,7 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	var registry testThreadRegistry
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	command := NewExecRunner().CommandContext(context.Background(), "/no-such-live-command")
+	command := &execCmd{cmd: exec.CommandContext(context.Background(), "/no-such-live-command")}
 	if code := testRunWithInput(command, 0, "initial", conversation, &registry); code != 127 {
 		t.Fatalf("code=%d", code)
 	}
@@ -111,13 +112,13 @@ func TestExecutorStdinStartFailureAndFiniteFallback(t *testing.T) {
 	if err != nil || string(got) != "no-final-newline" || registry.lookup(key) != nil {
 		t.Fatalf("finite input changed: %q err=%v", got, err)
 	}
-	compose := NewComposeRunner("").CommandContext(context.Background(), "unused")
+	compose := NewComposeRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "unused"}}, "").CommandContext(context.Background(), nil, false)
 	if _, live := compose.(interface {
 		RunWithStdin(func(io.WriteCloser)) int
 	}); !live {
 		t.Fatalf("compose runner %T lacks interactive stdin", compose)
 	}
-	http := NewHTTPRunner(RunnerConfig{}).CommandContext(context.Background(), "unused")
+	http := NewHTTPRunner(RunnerConfig{}).CommandContext(context.Background(), nil, false)
 	if _, live := http.(interface {
 		RunWithStdin(func(io.WriteCloser)) int
 	}); live {
@@ -157,7 +158,7 @@ func TestExecutorStdinRemovesOnTimeoutAndCancel(t *testing.T) {
 		t.Cleanup(cancel)
 		var registry testThreadRegistry
 		key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-		command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "read value")
+		command := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "read value")}
 		done := make(chan int, 1)
 		go func() {
 			done <- testRunWithInput(command, 0, "", ConversationID{ChannelID: "C", RootTimestamp: "1"}, &registry)
@@ -187,7 +188,7 @@ func TestInteractiveExecCanExitWithoutConsumingStdin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var registry testThreadRegistry
-	command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "exit 0")
+	command := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")}
 	code := testRunWithInput(
 		command,
 		0,
@@ -205,23 +206,17 @@ func TestTTYCommandNormalizesMergedOutputAndRoutesThreadInput(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	command := testRuntimeCommand(&testExecutionConfig{TTY: true}, NewExecRunner())
+	command := testRuntimeCommand(&testExecutionConfig{TTY: true, Command: "/bin/sh -c *"}, nil)
 	outputs := make(chan *observedOutput, 10)
 	done := make(chan int, 1)
 	go func() {
 		observeCommandSet(NewCommandSet([]*Command{command}), outputs)
 		done <- runMatchedCommand(
-			ctx,
-			command,
-			[]string{
-				"/bin/sh",
-				"-c",
+			ctx, ResolvedCommand{Command: command, Wildcard: []string{
 				"IFS= read -r first; IFS= read -r second; printf '\\033[31m%s|%s\\033[0m\\r\\n' \"$first\" \"$second\"; printf ERR >&2",
-			},
-			"initial\n",
+			}, HasWildcard: true, StdinText: "initial\n"},
 			&CommandInput{ConversationID: ConversationID(key)},
-			testLifecycle{registry: &registry, conversation: ConversationID(key)},
-		)
+			testLifecycle{registry: &registry, conversation: ConversationID(key)})
 	}()
 
 	endpoint := waitForInteractiveStdin(t, &registry, key)
@@ -285,13 +280,9 @@ func TestTTYCommandTerminatesInitialAndReplyWithCR(t *testing.T) {
 	go func() {
 		observeCommandSet(NewCommandSet([]*Command{command}), make(chan *observedOutput, 1))
 		done <- runMatchedCommand(
-			ctx,
-			command,
-			[]string{"unused"},
-			"initial",
+			ctx, ResolvedCommand{Command: command, StdinText: "initial"},
 			&CommandInput{ConversationID: ConversationID(key)},
-			testLifecycle{registry: &registry, conversation: ConversationID(key)},
-		)
+			testLifecycle{registry: &registry, conversation: ConversationID(key)})
 	}()
 	endpoint := waitForInteractiveStdin(t, &registry, key)
 	if err := endpoint.TrySend("reply"); err != nil {
@@ -333,7 +324,7 @@ func (c *stdinTestCmd) RunWithStdin(started func(io.WriteCloser)) int {
 
 type singleCmdRunner struct{ command Cmd }
 
-func (r singleCmdRunner) CommandContext(context.Context, string, ...string) Cmd { return r.command }
+func (r singleCmdRunner) CommandContext(context.Context, []string, bool) Cmd { return r.command }
 
 type lifecycleSwitchRunner struct {
 	started  chan struct{}
@@ -341,7 +332,7 @@ type lifecycleSwitchRunner struct {
 	exitCode int
 }
 
-func (r *lifecycleSwitchRunner) CommandContext(context.Context, string, ...string) Cmd {
+func (r *lifecycleSwitchRunner) CommandContext(context.Context, []string, bool) Cmd {
 	return lifecycleSwitchCmd{runner: r}
 }
 
@@ -370,23 +361,17 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 	firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 	secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 	makeReply := func(index int) *Command {
-		return newTestCommand(CommandConfig{
-			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-			ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
-			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-			Dispatch:     DispatchQueue,
+		return newTestCommand(testExecutionConfig{
+			Index: index, Keyword: "*", InputBodyMode: InputBodyRawStdin, Runner: RunnerStdinReply, Command: "stdin-reply",
+			Dispatch: DispatchQueue,
 		}, nil, nil)
 	}
 	firstReply, secondReply := makeReply(2), makeReply(3)
-	first := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue,
+	first := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "first", AllowInChain: true, InteractiveStdin: true, Command: "first", Dispatch: DispatchQueue,
 	}, firstRunner, NewCommandSet([]*Command{firstReply}))
-	second := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue,
+	second := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "second", AllowInChain: true, InteractiveStdin: true, Command: "second", Dispatch: DispatchQueue,
 	}, secondRunner, NewCommandSet([]*Command{secondReply}))
 	commands := NewCommandSet([]*Command{first, second})
 	var replies []*CommandInput
@@ -429,7 +414,7 @@ func TestExecutorSwitchesActiveStdinReplyCommandWithinChain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("executor did not finish")
 	}
-	if len(replies) != 2 || replies[0].ResolvedInput.Commands[0].Command != firstReply || replies[1].ResolvedInput.Commands[0].Command != secondReply {
+	if len(replies) != 2 || replies[0].Commands[0].Command != firstReply || replies[1].Commands[0].Command != secondReply {
 		t.Fatalf("routed reply commands = %+v, want first then second", replies)
 	}
 }
@@ -476,10 +461,10 @@ func TestExecutorDoesNotRegisterSkippedStdinCommands(t *testing.T) {
 			firstRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{}), exitCode: tc.exitCode}
 			secondRunner := &lifecycleSwitchRunner{started: make(chan struct{}), finish: make(chan struct{})}
 			makeReply := func(index int) *Command {
-				return newTestCommand(CommandConfig{Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin-reply"}}, Dispatch: DispatchQueue}, nil, nil)
+				return newTestCommand(testExecutionConfig{Index: index, Keyword: "*", Command: "stdin-reply", Dispatch: DispatchQueue}, nil, nil)
 			}
-			first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, Dispatch: DispatchQueue}, firstRunner, NewCommandSet([]*Command{makeReply(2)}))
-			second := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}}, ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, Dispatch: DispatchQueue}, secondRunner, NewCommandSet([]*Command{makeReply(3)}))
+			first := newTestCommand(testExecutionConfig{Index: 0, Keyword: "first", AllowInChain: true, InteractiveStdin: true, Command: "first", Dispatch: DispatchQueue}, firstRunner, NewCommandSet([]*Command{makeReply(2)}))
+			second := newTestCommand(testExecutionConfig{Index: 1, Keyword: "second", AllowInChain: true, InteractiveStdin: true, Command: "second", Dispatch: DispatchQueue}, secondRunner, NewCommandSet([]*Command{makeReply(3)}))
 			commands := NewCommandSet([]*Command{first, second})
 			router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(*CommandInput) bool { return true }), 1)
 			root := &CommandInput{Text: tc.chain, ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0, 1}}
@@ -547,7 +532,7 @@ func TestExecutorInteractiveStdinPublishesAfterInitialIsOrdered(t *testing.T) {
 		ConversationID:        ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		AllowedCommandIndexes: []int{0},
 	}
-	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 	rq <- input
 	close(rq)
 	done := make(chan struct{})
@@ -620,7 +605,7 @@ func TestExecutorDoesNotPublishLiveStdinWithoutInteractiveStdin(t *testing.T) {
 		return singleCmdRunner{probe}
 	})
 	input := &CommandInput{Text: "agent\ninitial", ConversationID: key, AllowedCommandIndexes: []int{0}}
-	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 	rq <- input
 	close(rq)
 	done := make(chan struct{})
@@ -652,7 +637,7 @@ func TestExecutorPublishesLifecycleOnlyForInteractiveChainCommand(t *testing.T) 
 		return singleCmdRunner{oneshotProbe}
 	})
 	input := &CommandInput{Text: "stdin ; oneshot", ConversationID: key, AllowedCommandIndexes: []int{0, 1}}
-	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 	rq := make(chan *CommandInput, 1)
 	rq <- input
 	close(rq)

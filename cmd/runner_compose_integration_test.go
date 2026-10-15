@@ -28,27 +28,29 @@ func TestComposeRunTransfersStreamsAndExitCode(t *testing.T) {
 	defer cancel()
 	for _, tt := range []struct {
 		name     string
-		command  []string
+		command  string
+		wildcard []string
 		wantCode int
 		wantOut  string
 		wantErr  string
 	}{
 		{
 			name:     "success",
-			command:  []string{"/bin/sh", "-c", "printf 'out'; printf 'err' >&2"},
+			command:  `app /bin/sh -c 'printf out; printf err >&2'`,
 			wantCode: 0,
 			wantOut:  "out",
 			wantErr:  "err",
 		},
 		{
 			name:     "non zero exit",
-			command:  []string{"/bin/sh", "-c", "printf 'out'; exit 3"},
+			command:  `app /bin/sh -c 'printf out; exit 3'`,
 			wantCode: 3,
 			wantOut:  "out",
 		},
+		{name: "multiline wildcard", command: "app echo * *", wildcard: []string{"foo", "bar\nbody\n"}, wantOut: "foo bar\nbody\n foo bar\nbody\n\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			command := NewComposeRunner(dir).CommandContext(ctx, "app", tt.command...)
+			command := NewComposeRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: tt.command}}, dir).CommandContext(ctx, tt.wildcard, tt.wildcard != nil)
 			var stdout, stderr bytes.Buffer
 			command.SetStdout(&stdout)
 			command.SetStderr(&stderr)
@@ -79,13 +81,8 @@ func TestComposeStdinForwardsInitialAndReply(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	command := NewComposeRunner(dir).CommandContext(
-		ctx,
-		"app",
-		"/bin/sh",
-		"-c",
-		"IFS= read -r first; IFS= read -r second; printf '%s|%s\\n' \"$first\" \"$second\"",
-	)
+	config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: `app /bin/sh -c 'IFS= read -r first; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`}}
+	command := NewComposeRunner(config, dir).CommandContext(ctx, nil, false)
 	var output bytes.Buffer
 	var stderr bytes.Buffer
 	command.SetStdout(&output)
@@ -154,13 +151,8 @@ func TestComposeTTYProvidesTerminalAndMergedStream(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	command := NewComposeRunner(dir).CommandContext(
-		ctx,
-		"app",
-		"/bin/sh",
-		"-c",
-		"test -t 0 && test -t 1 && test -t 2; IFS= read -r line; printf 'tty:%s' \"$line\"; printf ':stderr' >&2",
-	)
+	config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: `app /bin/sh -c 'test -t 0 && test -t 1 && test -t 2; IFS= read -r line; printf "tty:%s" "$line"; printf :stderr >&2'`}}
+	command := NewComposeRunner(config, dir).CommandContext(ctx, nil, false)
 	command.(interface{ SetTTY() }).SetTTY()
 	var output bytes.Buffer
 	command.SetStdout(&output)
@@ -196,7 +188,7 @@ func TestComposeTTYCancellationRemovesThreadInput(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	command := NewComposeRunner(dir).CommandContext(ctx, "app", "/bin/sh", "-c", "sleep 30")
+	command := NewComposeRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "app /bin/sh -c 'sleep 30'"}}, dir).CommandContext(ctx, nil, false)
 	command.(interface{ SetTTY() }).SetTTY()
 	var output bytes.Buffer
 	command.SetStdout(&output)
@@ -240,7 +232,7 @@ func TestComposeStdinIdleEOF(t *testing.T) {
 	defer cancel()
 	var registry testThreadRegistry
 	key := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	command := NewComposeRunner(dir).CommandContext(ctx, "app", "wc", "-l")
+	command := NewComposeRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "app wc -l"}}, dir).CommandContext(ctx, nil, false)
 	var output bytes.Buffer
 	command.SetStdout(&output)
 	done := make(chan int, 1)

@@ -50,13 +50,13 @@ func (r *ConversationRouter) Accept(ctx context.Context, input *CommandInput) (A
 }
 
 func (r *ConversationRouter) acceptRoot(input *CommandInput) AcceptResult {
-	input.ResolvedInput = r.commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = r.commands.Resolve(input.Text, input.AllowedCommandIndexes)
 	result := r.acceptDispatchResult(r.dispatcher.Dispatch(input))
 	if result != AcceptRouted {
 		return result
 	}
-	if resolvedInputExecutable(input.ResolvedInput) {
-		r.routes.store(input.ConversationID, explicitReplyCommand(input.ResolvedInput))
+	if resolvedInputExecutable(input) {
+		r.routes.store(input.ConversationID, explicitReplyCommand(input))
 	}
 	return AcceptRouted
 }
@@ -77,7 +77,8 @@ func (r *ConversationRouter) acceptThreadReply(ctx context.Context, input *Comma
 		if err != nil {
 			return AcceptIgnored, err
 		}
-		root := r.commands.ResolveInput(rootInput.Text, rootInput.AllowedCommandIndexes)
+		commands, parseErr := r.commands.Resolve(rootInput.Text, rootInput.AllowedCommandIndexes)
+		root := &CommandInput{Commands: commands, ParseErr: parseErr}
 		if !resolvedInputExecutable(root) {
 			r.routes.store(input.ConversationID, nil)
 			return AcceptIgnored, nil
@@ -92,8 +93,8 @@ func (r *ConversationRouter) acceptThreadReply(ctx context.Context, input *Comma
 }
 
 func (r *ConversationRouter) routeThreadReply(replyCommands *CommandSet, stdinTarget *InteractiveStdin, input *CommandInput) (AcceptResult, error) {
-	input.ResolvedInput = replyCommands.ResolveInput(input.Text, input.AllowedCommandIndexes)
-	if stdinTarget != nil && resolvedInputExecutable(input.ResolvedInput) {
+	input.Commands, input.ParseErr = replyCommands.Resolve(input.Text, input.AllowedCommandIndexes)
+	if stdinTarget != nil && resolvedInputExecutable(input) {
 		input.stdinTarget = stdinTarget
 	}
 	return r.acceptDispatchResult(r.dispatcher.Dispatch(input)), nil
@@ -165,7 +166,7 @@ func (r *conversationRoutes) store(conversation ConversationID, explicitReplyCom
 	r.lru.Remove(oldest)
 }
 
-func explicitReplyCommand(parsed *ResolvedInput) *Command {
+func explicitReplyCommand(parsed *CommandInput) *Command {
 	if parsed == nil || len(parsed.Commands) != 1 {
 		return nil
 	}

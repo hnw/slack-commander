@@ -41,7 +41,7 @@ type environmentRecordingRunner struct {
 	release  <-chan struct{}
 }
 
-func (r *environmentRecordingRunner) CommandContext(context.Context, string, ...string) Cmd {
+func (r *environmentRecordingRunner) CommandContext(context.Context, []string, bool) Cmd {
 	command := &environmentRecordingCmd{started: r.started, release: r.release}
 	r.mu.Lock()
 	r.commands = append(r.commands, command)
@@ -70,7 +70,7 @@ func TestExecutorPassesSlackContextEnvironment(t *testing.T) {
 			RootTimestamp: "1700000000.000100",
 		},
 	}
-	input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 	executor.Execute(context.Background(), input, nil)
 
 	commands := runner.Commands()

@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestExecCmdSetEnvOverridesExistingSlackContext(t *testing.T) {
-	command := NewExecRunner().CommandContext(context.Background(), "/usr/bin/env").(*execCmd)
+	command := &execCmd{cmd: exec.CommandContext(context.Background(), "/usr/bin/env")}
 	command.cmd.Env = []string{"SLACK_CHANNEL_ID=static"}
 	command.SetEnv([]string{
 		"SLACK_CHANNEL_ID=C123",
@@ -42,7 +44,7 @@ func TestExecStdin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			c := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", tt.command).(*execCmd)
+			c := NewExecRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "/bin/sh -c *"}}).CommandContext(ctx, []string{tt.command}, true).(*execCmd)
 			var out bytes.Buffer
 			c.SetStdout(&out)
 			started := false
@@ -64,12 +66,12 @@ func TestExecStdin(t *testing.T) {
 func TestExecTTYProvidesTerminalAndLiveInput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := NewExecRunner().CommandContext(
+	c := &execCmd{cmd: exec.CommandContext(
 		ctx,
 		"/bin/sh",
 		"-c",
 		"test -t 0 && test -t 1 && test -t 2; IFS= read -r line; printf 'tty:%s' \"$line\"",
-	).(*execCmd)
+	)}
 	c.SetTTY()
 	var out bytes.Buffer
 	c.SetStdout(&out)
@@ -88,12 +90,12 @@ func TestExecTTYProvidesTerminalAndLiveInput(t *testing.T) {
 func TestExecTTYInitialInputWithoutConversationKeepsOutputOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := NewExecRunner().CommandContext(
+	c := &execCmd{cmd: exec.CommandContext(
 		ctx,
 		"/bin/sh",
 		"-c",
 		"IFS= read -r line; sleep 0.1; printf 'done:%s' \"$line\"",
-	).(*execCmd)
+	)}
 	c.SetTTY()
 	var out bytes.Buffer
 	c.SetStdout(&out)
@@ -108,12 +110,12 @@ func TestExecTTYInitialInputWithoutConversationKeepsOutputOpen(t *testing.T) {
 func TestExecTTYSessionCloseDoesNotCloseTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := NewExecRunner().CommandContext(
+	c := &execCmd{cmd: exec.CommandContext(
 		ctx,
 		"/bin/sh",
 		"-c",
 		"IFS= read -r line; printf ready; sleep 0.1; printf ':done:%s' \"$line\"",
-	).(*execCmd)
+	)}
 	c.SetTTY()
 	output := make(stdinOutputChannel, 10)
 	c.SetStdout(output)
@@ -156,7 +158,7 @@ func TestExecTTYSessionCloseDoesNotCloseTerminal(t *testing.T) {
 func TestExecTTYClosesMasterAfterProcessExit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "printf done").(*execCmd)
+	c := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "printf done")}
 	c.SetTTY()
 	writerReady := make(chan io.WriteCloser, 1)
 	if code := c.RunWithStdin(func(stdin io.WriteCloser) { writerReady <- stdin }); code != 0 {
@@ -170,7 +172,7 @@ func TestExecTTYClosesMasterAfterProcessExit(t *testing.T) {
 
 func TestExecTTYCancellationStopsProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "sleep 30 & wait").(*execCmd)
+	c := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 30 & wait")}
 	c.SetTTY()
 	done := make(chan int, 1)
 	go func() { done <- c.RunWithStdin(nil) }()
@@ -189,7 +191,7 @@ func TestExecTTYCancellationStopsProcessGroup(t *testing.T) {
 func TestExecStdinWaitsForEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	c := NewExecRunner().CommandContext(ctx, "/usr/bin/wc", "-l").(*execCmd)
+	c := &execCmd{cmd: exec.CommandContext(ctx, "/usr/bin/wc", "-l")}
 	var out bytes.Buffer
 	c.SetStdout(&out)
 	var input io.WriteCloser
@@ -220,7 +222,7 @@ func (w stdinOutputChannel) Write(data []byte) (int, error) {
 func TestExecStdinProcessesSeparateAwkReplies(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := NewExecRunner().CommandContext(ctx, "/usr/bin/awk", "{print; fflush(); if (NR == 2) exit}").(*execCmd)
+	c := &execCmd{cmd: exec.CommandContext(ctx, "/usr/bin/awk", "{print; fflush(); if (NR == 2) exit}")}
 	output := make(stdinOutputChannel, 4)
 	c.SetStdout(output)
 	started := make(chan io.WriteCloser, 1)
@@ -260,5 +262,32 @@ func TestExecStdinProcessesSeparateAwkReplies(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("did not finish")
+	}
+}
+
+func TestExecRunnerCommandArgs(t *testing.T) {
+	for _, tc := range []struct {
+		template    string
+		wildcard    []string
+		hasWildcard bool
+		want        []string
+	}{
+		{"ping -c4 8.8.8.8", nil, false, []string{"ping", "-c4", "8.8.8.8"}},
+		{"ping * -c4", []string{"-i2", "8.8.8.8"}, true, []string{"ping", "-i2", "8.8.8.8", "-c4"}},
+		{`/bin/sh -c "ping *"`, []string{"-i2", "8.8.8.8"}, true, []string{"/bin/sh", "-c", "ping -i2 8.8.8.8"}},
+		{"echo *", []string{"foo bar", "baz"}, true, []string{"echo", "foo bar", "baz"}},
+		{`echo "*"`, []string{"foo bar", "baz"}, true, []string{"echo", "foo bar baz"}},
+		{`echo '*'`, []string{"foo bar", "baz"}, true, []string{"echo", `foo\ bar baz`}},
+		{"echo *", []string{}, true, []string{"echo"}},
+		{`echo "*"`, []string{}, true, []string{"echo", ""}},
+		{"echo *", nil, false, []string{"echo", "*"}},
+		{"echo * *", []string{"foo bar"}, true, []string{"echo", "foo bar", "foo bar"}},
+		{"echo *", []string{"foo", "bar\nbody\n"}, true, []string{"echo", "foo", "bar\nbody\n"}},
+	} {
+		runner := NewExecRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: tc.template}})
+		command := runner.CommandContext(context.Background(), tc.wildcard, tc.hasWildcard).(*execCmd)
+		if !slices.Equal(command.cmd.Args, tc.want) {
+			t.Fatalf("template=%q argv=%q want=%q", tc.template, command.cmd.Args, tc.want)
+		}
 	}
 }

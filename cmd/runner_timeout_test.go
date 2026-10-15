@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -14,7 +15,7 @@ func TestExecDeadlineReturns143WithoutTimeoutMessage(t *testing.T) {
 		t.Run(map[bool]string{false: "plain", true: "tty"}[tty], func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			command := NewExecRunner().CommandContext(ctx, "/bin/sh", "-c", "sleep 10").(*execCmd)
+			command := &execCmd{cmd: exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 10")}
 			if tty {
 				command.SetTTY()
 			}
@@ -61,7 +62,7 @@ func TestHTTPDeadlineReturns143WithoutTimeoutMessage(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	command := NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{URL: server.URL}}).CommandContext(ctx, "test")
+	command := NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{URL: server.URL}}).CommandContext(ctx, nil, false)
 	var stderr bytes.Buffer
 	command.SetStderr(&stderr)
 	if code := command.Run(); code != 143 {

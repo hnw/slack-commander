@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,14 +55,10 @@ func TestAsyncHTTPUsesExecutorOutputPipelineForFailuresAndCancellation(t *testin
 			defer cancel()
 			outputs := make(chan *observedOutput, 20)
 			config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: tc.url}}
-			command := newTestCommand(CommandConfig{
-				Index:         0,
-				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
-				RunnerConfig:  config,
-				Dispatch:      DispatchExecutor,
-				ExecutorConfig: ExecutorConfig{
-					Timeout: tc.timeout,
-				},
+			command := newTestCommand(testExecutionConfig{
+				Index: 0, Keyword: "lookup", Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body,
+				Dispatch: DispatchExecutor,
+				Timeout:  tc.timeout,
 			}, NewHTTPRunner(config), nil)
 			commands := NewCommandSet([]*Command{command})
 			observeCommandSet(commands, outputs)
@@ -139,28 +136,15 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 		t.Run(tc.text, func(t *testing.T) {
 			requestCount := requests.Load()
 			httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
-			httpCommand := newTestCommand(CommandConfig{
-				Index:         1,
-				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}},
-				RunnerConfig:  httpConfig,
-				ParserConfig:  ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor,
+			httpCommand := newTestCommand(testExecutionConfig{
+				Index: 1, Keyword: "lookup *", Runner: httpConfig.Runner, Command: httpConfig.Command, Method: httpConfig.Method, URL: httpConfig.URL, Headers: httpConfig.Headers, Body: httpConfig.Body, AllowInChain: true, Dispatch: DispatchExecutor,
 			}, NewHTTPRunner(httpConfig), nil)
-			execCommand := newTestCommand(CommandConfig{
-				Index:         2,
-				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "echo *"}},
-				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "/bin/echo *"}},
-				ParserConfig:  ParserConfig{AllowInChain: true},
-			}, NewExecRunner(), nil)
+			execCommand := newTestCommand(testExecutionConfig{
+				Index: 2, Keyword: "echo *", Command: "/bin/echo *", AllowInChain: true,
+			}, nil, nil)
 			replies := NewCommandSet([]*Command{httpCommand, execCommand})
-			root := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "agent"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "agent"}}}, nil, replies)
+			root := newTestCommand(testExecutionConfig{Index: 0, Keyword: "agent", Command: "agent"}, nil, replies)
 			commands := NewCommandSet([]*Command{root})
-			if commands.ResolveInput("agent", []int{0}).Commands[0].Command != root {
-				t.Fatal("test root did not match resolver input")
-			}
-			parsed := replies.ResolveInput(tc.text, []int{1, 2})
-			if parsed.Commands[0].Command != httpCommand {
-				t.Fatalf("reply match = %p, want HTTP command %p", parsed.Commands[0].Command, httpCommand)
-			}
 			outputs := make(chan *observedOutput, 30)
 			observeCommandSet(commands, outputs)
 			executor := NewExecutor()
@@ -203,14 +187,12 @@ func TestMixedChainsUseQueueAndKeepOperators(t *testing.T) {
 
 func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
-	httpCommand := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
-		RunnerConfig: httpConfig, ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor,
+	httpCommand := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "lookup", Runner: httpConfig.Runner, Command: httpConfig.Command, Method: httpConfig.Method, URL: httpConfig.URL, Headers: httpConfig.Headers, Body: httpConfig.Body, AllowInChain: true, Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(httpConfig), nil)
-	second := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "echo"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "/bin/echo"}}, ParserConfig: ParserConfig{AllowInChain: true},
-	}, NewExecRunner(), nil)
+	second := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "echo", Command: "/bin/echo", AllowInChain: true,
+	}, nil, nil)
 	commands := NewCommandSet([]*Command{httpCommand, second})
 	var queued *CommandInput
 	dispatcher := newTestCommandDispatcher(context.Background(), func(input *CommandInput) bool {
@@ -227,8 +209,8 @@ func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queued != input {
 		t.Fatalf("HTTP chain Accept() = %v, %v, queued=%p; want queued input", result, err, queued)
 	}
-	if got := input.ResolvedInput; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
-		t.Fatalf("ResolvedInput = %#v, want two commands with HTTP first match", got)
+	if got := input; got == nil || len(got.Commands) != 2 || got.Commands[0].Command != httpCommand {
+		t.Fatalf("CommandInput = %#v, want two commands with HTTP first match", got)
 	}
 	if got, ok := router.routes.lookup(conversation); !ok || got != nil {
 		t.Fatalf("cached reply command = %v, %v; want negative cache for chain", got, ok)
@@ -240,10 +222,8 @@ func TestMixedRootChainStaysQueuedAndCachesNoReplyCommand(t *testing.T) {
 }
 
 func TestRootChainWithTrailingUnknownCachesNoReplyCommand(t *testing.T) {
-	foo := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "foo"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "foo"}},
-		ParserConfig: ParserConfig{AllowInChain: true},
+	foo := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "foo", Command: "foo", AllowInChain: true,
 	}, nil, nil)
 	commands := NewCommandSet([]*Command{foo})
 	dispatcher := newTestCommandDispatcher(context.Background(), func(*CommandInput) bool { return true })
@@ -263,26 +243,23 @@ func TestDispatcherQueuesChainsAndExecutorKeepsOperators(t *testing.T) {
 		operator string
 		want     []string
 	}{
-		{operator: ";", want: []string{"direct", "echo"}},
-		{operator: "&&", want: []string{"direct", "echo"}},
-		{operator: "||", want: []string{"direct"}},
+		{operator: ";", want: []string{"original", "later"}},
+		{operator: "&&", want: []string{"original", "later"}},
+		{operator: "||", want: []string{"original"}},
 	} {
 		t.Run(tc.operator, func(t *testing.T) {
 			runner := &fakeRunner{}
-			first := newTestCommand(CommandConfig{
-				Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run *"}},
-				RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "direct *"}},
-				ParserConfig: ParserConfig{AllowInChain: true},
+			first := newTestCommand(testExecutionConfig{
+				Index: 1, Keyword: "run *", Command: "direct *", AllowInChain: true,
 			}, runner, nil)
-			second := newTestCommand(CommandConfig{
-				Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "echo *"}},
-				RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}},
-				ParserConfig: ParserConfig{AllowInChain: true},
+			second := newTestCommand(testExecutionConfig{
+				Index: 2, Keyword: "echo *", Command: "echo *", AllowInChain: true,
 			}, runner, nil)
 			set := NewCommandSet([]*Command{first, second})
 			observeCommandSet(set, make(chan *observedOutput, 20))
 			text := "run original " + tc.operator + " echo later"
-			input := &CommandInput{Text: text, ResolvedInput: set.ResolveInput(text, []int{1, 2}), AllowedCommandIndexes: []int{1, 2}}
+			input := &CommandInput{Text: text, AllowedCommandIndexes: []int{1, 2}}
+			input.Commands, input.ParseErr = set.Resolve(text, []int{1, 2})
 			var queued *CommandInput
 			dispatcher := newTestCommandDispatcher(context.Background(), func(got *CommandInput) bool {
 				queued = got
@@ -300,7 +277,7 @@ func TestDispatcherQueuesChainsAndExecutorKeepsOperators(t *testing.T) {
 				t.Fatalf("executor calls = %#v, want %v", calls, tc.want)
 			}
 			for i, name := range tc.want {
-				if calls[i].name != name {
+				if !slices.Equal(calls[i].wildcard, []string{name}) {
 					t.Fatalf("executor calls = %#v, want %v", calls, tc.want)
 				}
 			}
@@ -310,13 +287,10 @@ func TestDispatcherQueuesChainsAndExecutorKeepsOperators(t *testing.T) {
 
 func TestQueuedExecChainKeepsCommandNotFoundExitCode(t *testing.T) {
 	runner := &fakeRunner{}
-	exec := newTestCommand(CommandConfig{
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "echo *"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "echo *"}},
-		ParserConfig:  ParserConfig{AllowInChain: true},
-	}, runner, nil)
+	exec := newTestCommand(testExecutionConfig{Keyword: "echo *", Command: "echo *", AllowInChain: true}, runner, nil)
 	commands := NewCommandSet([]*Command{exec})
-	input := &CommandInput{Text: "echo first ; unknown", ResolvedInput: commands.ResolveInput("echo first ; unknown", []int{0})}
+	input := &CommandInput{Text: "echo first ; unknown"}
+	input.Commands, input.ParseErr = commands.Resolve("echo first ; unknown", []int{0})
 	outputs := make(chan *observedOutput, 10)
 	var queued *CommandInput
 	observeCommandSet(commands, outputs)
@@ -335,25 +309,20 @@ func TestQueuedExecChainKeepsCommandNotFoundExitCode(t *testing.T) {
 }
 
 func TestQueuePolicyWinsForMixedChains(t *testing.T) {
-	http := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "http"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "https://example.com"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor,
+	http := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "http", Runner: RunnerHTTP, Method: "GET", URL: "https://example.com", AllowInChain: true, Dispatch: DispatchExecutor,
 	}, &fakeRunner{}, nil)
-	exec := newTestCommand(CommandConfig{
-		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "exec"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "exec"}},
-		ParserConfig: ParserConfig{AllowInChain: true},
+	exec := newTestCommand(testExecutionConfig{
+		Index: 2, Keyword: "exec", Command: "exec", AllowInChain: true,
 	}, &fakeRunner{}, nil)
-	compose := newTestCommand(CommandConfig{
-		Index: 3, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "compose"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerCompose, Command: "compose"}},
-		ParserConfig: ParserConfig{AllowInChain: true},
+	compose := newTestCommand(testExecutionConfig{
+		Index: 3, Keyword: "compose", Runner: RunnerCompose, Command: "compose", AllowInChain: true,
 	}, &fakeRunner{}, nil)
 	set := NewCommandSet([]*Command{http, exec, compose})
 	for _, text := range []string{"http ; exec", "exec ; http", "exec ; compose"} {
 		t.Run(text, func(t *testing.T) {
-			input := &CommandInput{Text: text, ResolvedInput: set.ResolveInput(text, []int{1, 2, 3})}
+			input := &CommandInput{Text: text}
+			input.Commands, input.ParseErr = set.Resolve(text, []int{1, 2, 3})
 			var queued *CommandInput
 			dispatcher := newTestCommandDispatcher(context.Background(), func(got *CommandInput) bool {
 				queued = got
@@ -368,10 +337,9 @@ func TestQueuePolicyWinsForMixedChains(t *testing.T) {
 
 func TestDispatcherSendsParseErrorBeforePolicyDispatch(t *testing.T) {
 	runner := &fakeRunner{}
-	command := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run *"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "direct *"}},
-		Dispatch:     DispatchRunner,
+	command := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "run *", Command: "direct *",
+		Dispatch: DispatchRunner,
 	}, runner, nil)
 	outputs := make(chan *observedOutput, 1)
 	queueCalls := 0
@@ -380,7 +348,7 @@ func TestDispatcherSendsParseErrorBeforePolicyDispatch(t *testing.T) {
 		queueCalls++
 		return true
 	})
-	input := &CommandInput{Text: "malformed", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{ChannelID: "C", Timestamp: "2"}, ResolvedInput: &ResolvedInput{Commands: []ResolvedCommand{{Command: command, Args: []string{"run"}}}, ParseErr: errors.New("prepared parse error")}}
+	input := &CommandInput{Text: "malformed", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: MessageID{ChannelID: "C", Timestamp: "2"}, Commands: []ResolvedCommand{{Command: command}}, ParseErr: errors.New("prepared parse error")}
 	if got := dispatcher.Dispatch(input); got != DispatchAccepted {
 		t.Fatalf("Dispatch() = %v, want parse error accepted", got)
 	}
@@ -399,13 +367,13 @@ func TestDispatcherSendsParseErrorBeforePolicyDispatch(t *testing.T) {
 
 func TestDispatcherWaitIncludesBlockedParseErrorOutput(t *testing.T) {
 	outputs := make(chan *observedOutput)
-	command := newTestCommand(CommandConfig{Dispatch: DispatchQueue}, nil, nil)
+	command := newTestCommand(testExecutionConfig{Dispatch: DispatchQueue}, nil, nil)
 	observeCommandSet(NewCommandSet([]*Command{command}), outputs)
 	dispatcher := NewCommandDispatcher(context.Background(), nil, &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
 		t.Fatal("parse error was queued")
 		return false
 	})
-	input := &CommandInput{ResolvedInput: &ResolvedInput{Commands: []ResolvedCommand{{Command: command}}, ParseErr: errors.New("blocked")}}
+	input := &CommandInput{Commands: []ResolvedCommand{{Command: command}}, ParseErr: errors.New("blocked")}
 	if got := dispatcher.Dispatch(input); got != DispatchAccepted {
 		t.Fatalf("Dispatch() = %v, want accepted", got)
 	}
@@ -442,9 +410,7 @@ func TestDispatcherIgnoresInputWithoutResolvedInput(t *testing.T) {
 }
 
 func TestDispatcherIgnoresInputsWithoutMatchedCommands(t *testing.T) {
-	command := newTestCommand(CommandConfig{
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "known"}},
-	}, nil, nil)
+	command := newTestCommand(testExecutionConfig{Keyword: "known"}, nil, nil)
 	commands := NewCommandSet([]*Command{command})
 	queueCalls := 0
 	observeCommandSet(commands, make(chan *observedOutput, 1))
@@ -453,7 +419,8 @@ func TestDispatcherIgnoresInputsWithoutMatchedCommands(t *testing.T) {
 		return true
 	})
 	for _, text := range []string{"", "unknown", "unknown ; unknown"} {
-		input := &CommandInput{Text: text, ResolvedInput: commands.ResolveInput(text, []int{0})}
+		input := &CommandInput{Text: text}
+		input.Commands, input.ParseErr = commands.Resolve(text, []int{0})
 		if got := dispatcher.Dispatch(input); got != DispatchIgnored {
 			t.Fatalf("Dispatch(%q) = %v, want ignored", text, got)
 		}
@@ -465,13 +432,11 @@ func TestDispatcherIgnoresInputsWithoutMatchedCommands(t *testing.T) {
 
 func TestDispatcherIgnoresChainsWhoseFirstCommandIsUnmatched(t *testing.T) {
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
-	http := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "http"}},
-		RunnerConfig: httpConfig, ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor,
+	http := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "http", Runner: httpConfig.Runner, Command: httpConfig.Command, Method: httpConfig.Method, URL: httpConfig.URL, Headers: httpConfig.Headers, Body: httpConfig.Body, AllowInChain: true, Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(httpConfig), nil)
-	queue := newTestCommand(CommandConfig{
-		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "exec"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchQueue,
+	queue := newTestCommand(testExecutionConfig{
+		Index: 2, Keyword: "exec", AllowInChain: true, Dispatch: DispatchQueue,
 	}, nil, nil)
 	commands := NewCommandSet([]*Command{http, queue})
 	queueCalls := 0
@@ -485,7 +450,8 @@ func TestDispatcherIgnoresChainsWhoseFirstCommandIsUnmatched(t *testing.T) {
 		"unknown ; http", "unknown && http", "unknown || http",
 		"unknown ; exec", "unknown && exec", "unknown || exec",
 	} {
-		input := &CommandInput{Text: text, ResolvedInput: commands.ResolveInput(text, []int{1, 2})}
+		input := &CommandInput{Text: text}
+		input.Commands, input.ParseErr = commands.Resolve(text, []int{1, 2})
 		if got := dispatcher.Dispatch(input); got != DispatchIgnored {
 			t.Fatalf("Dispatch(%q) = %v, want ignored", text, got)
 		}
@@ -498,15 +464,11 @@ func TestDispatcherIgnoresChainsWhoseFirstCommandIsUnmatched(t *testing.T) {
 }
 
 func TestDispatcherEnforcesAllowInChainBeforeDispatch(t *testing.T) {
-	first := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}},
-		ParserConfig: ParserConfig{AllowInChain: true},
+	first := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "first", Command: "first", AllowInChain: true,
 	}, nil, nil)
-	blocked := newTestCommand(CommandConfig{
-		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "blocked"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "blocked"}},
-		ParserConfig: ParserConfig{AllowInChain: false},
+	blocked := newTestCommand(testExecutionConfig{
+		Index: 2, Keyword: "blocked", Command: "blocked", AllowInChain: false,
 	}, nil, nil)
 	set := NewCommandSet([]*Command{first, blocked})
 	for _, tc := range []struct {
@@ -527,10 +489,11 @@ func TestDispatcherEnforcesAllowInChainBeforeDispatch(t *testing.T) {
 				queued = true
 				return true
 			})
-			input := &CommandInput{Text: tc.text, ResolvedInput: set.ResolveInput(tc.text, []int{1, 2})}
+			input := &CommandInput{Text: tc.text}
+			input.Commands, input.ParseErr = set.Resolve(tc.text, []int{1, 2})
 			if got := dispatcher.Dispatch(input); got != tc.want {
-				target, targetOK := input.ResolvedInput.DispatchTarget()
-				t.Fatalf("Dispatch() = %v, want %v; resolved=%#v target=(%v,%v)", got, tc.want, input.ResolvedInput, target, targetOK)
+				target, targetOK := dispatchTarget(input.Commands)
+				t.Fatalf("Dispatch() = %v, want %v; resolved=%#v target=(%v,%v)", got, tc.want, input, target, targetOK)
 			}
 			if queued != (tc.want == DispatchAccepted) {
 				t.Fatalf("queued = %v, want accepted=%v", queued, tc.want == DispatchAccepted)
@@ -540,17 +503,16 @@ func TestDispatcherEnforcesAllowInChainBeforeDispatch(t *testing.T) {
 }
 
 func TestDispatcherReportsParseErrorBeforeChainPolicy(t *testing.T) {
-	command := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}},
-		ParserConfig: ParserConfig{AllowInChain: false},
+	command := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "first", AllowInChain: false,
 	}, nil, nil)
 	outputs := make(chan *observedOutput, 1)
 	observeCommandSet(NewCommandSet([]*Command{command}), outputs)
 	dispatcher := NewCommandDispatcher(context.Background(), nil, &StdinStore{}, &ConversationLocks{}, nil)
-	input := &CommandInput{ResolvedInput: &ResolvedInput{
+	input := &CommandInput{
 		Commands: []ResolvedCommand{{Command: command}, {Command: command}},
 		ParseErr: errors.New("parse failure"),
-	}}
+	}
 	if got := dispatcher.Dispatch(input); got != DispatchAccepted {
 		t.Fatalf("Dispatch() = %v, want parse error accepted", got)
 	}
@@ -562,7 +524,7 @@ func TestDispatcherReportsParseErrorBeforeChainPolicy(t *testing.T) {
 }
 
 func TestDispatcherKeepsParseErrorSilentWhenFirstPartIsUnmatched(t *testing.T) {
-	command := newTestCommand(CommandConfig{Dispatch: DispatchQueue}, nil, nil)
+	command := newTestCommand(testExecutionConfig{Dispatch: DispatchQueue}, nil, nil)
 	outputs := make(chan *observedOutput, 1)
 	queueCalls := 0
 	observeCommandSet(NewCommandSet([]*Command{command}), outputs)
@@ -570,17 +532,17 @@ func TestDispatcherKeepsParseErrorSilentWhenFirstPartIsUnmatched(t *testing.T) {
 		queueCalls++
 		return true
 	})
-	input := &CommandInput{ResolvedInput: &ResolvedInput{
+	input := &CommandInput{
 		Commands: []ResolvedCommand{{}, {Command: command}},
 		ParseErr: errors.New("malformed"),
-	}}
+	}
 	if got := dispatcher.Dispatch(input); got != DispatchIgnored || queueCalls != 0 || len(outputs) != 0 {
 		t.Fatalf("Dispatch()=%v queueCalls=%d outputs=%d; want silent ignored input", got, queueCalls, len(outputs))
 	}
 }
 
 func TestDispatcherRejectsRunnerChain(t *testing.T) {
-	runner := newTestCommand(CommandConfig{Dispatch: DispatchRunner}, nil, nil)
+	runner := newTestCommand(testExecutionConfig{Dispatch: DispatchRunner}, nil, nil)
 	queued := false
 	dispatcher := newTestCommandDispatcher(context.Background(), func(*CommandInput) bool {
 		queued = true
@@ -590,7 +552,7 @@ func TestDispatcherRejectsRunnerChain(t *testing.T) {
 		{{Command: runner}, {}},
 		{{}, {Command: runner}},
 	} {
-		input := &CommandInput{ResolvedInput: &ResolvedInput{Commands: commands}}
+		input := &CommandInput{Commands: commands}
 		if got := dispatcher.Dispatch(input); got != DispatchIgnored || queued {
 			t.Fatalf("Dispatch() = %v; queued=%v, want invalid runner chain ignored", got, queued)
 		}
@@ -602,7 +564,7 @@ func TestDispatcherRunnerBypassesConversationLockAndExecutor(t *testing.T) {
 	locks := &ConversationLocks{}
 	unlock := locks.Lock(conversation)
 	runner := &fakeRunner{}
-	command := newTestCommand(CommandConfig{Dispatch: DispatchRunner}, runner, nil)
+	command := newTestCommand(testExecutionConfig{Dispatch: DispatchRunner, Command: "reply"}, runner, nil)
 	outputs := make(chan *observedOutput, 10)
 	queued := false
 	observeCommandSet(NewCommandSet([]*Command{command}), outputs)
@@ -613,8 +575,7 @@ func TestDispatcherRunnerBypassesConversationLockAndExecutor(t *testing.T) {
 	result := make(chan DispatchResult, 1)
 	go func() {
 		result <- dispatcher.Dispatch(&CommandInput{
-			ConversationID: conversation,
-			ResolvedInput:  &ResolvedInput{Commands: []ResolvedCommand{{Command: command, Args: []string{"reply"}}}},
+			ConversationID: conversation, Commands: []ResolvedCommand{{Command: command}},
 		})
 	}()
 	select {
@@ -631,9 +592,8 @@ func TestDispatcherRunnerBypassesConversationLockAndExecutor(t *testing.T) {
 
 func testHTTPCommand(index int, keyword string, inputBodyMode InputBodyMode) *Command {
 	config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
-	return newTestCommand(CommandConfig{
-		Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: keyword}},
-		RunnerConfig: config, ParserConfig: ParserConfig{InputBodyMode: inputBodyMode}, Dispatch: DispatchExecutor,
+	return newTestCommand(testExecutionConfig{
+		Index: index, Keyword: keyword, Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body, InputBodyMode: inputBodyMode, Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(config), nil)
 }
 
@@ -667,12 +627,11 @@ func TestHTTPOnlyChainsUseExecutorAndKeepTheirOperators(t *testing.T) {
 		t.Run(tc.text, func(t *testing.T) {
 			before := requests.Load()
 			config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
-			command := newTestCommand(CommandConfig{
-				Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}},
-				RunnerConfig: config, ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor,
+			command := newTestCommand(testExecutionConfig{
+				Index: 1, Keyword: "lookup *", Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body, AllowInChain: true, Dispatch: DispatchExecutor,
 			}, NewHTTPRunner(config), nil)
-			parsed := NewCommandSet([]*Command{command}).ResolveInput(tc.text, []int{1})
-			input := &CommandInput{Text: tc.text, ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, ResolvedInput: parsed}
+			input := &CommandInput{Text: tc.text, ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}}
+			input.Commands, input.ParseErr = NewCommandSet([]*Command{command}).Resolve(tc.text, []int{1})
 			outputs := make(chan *observedOutput, 30)
 			queued := false
 			observeCommandSet(NewCommandSet([]*Command{command}), outputs)
@@ -741,9 +700,8 @@ func runHTTPParseErrorCase(t *testing.T, isReply bool, timestamp string) {
 	message := MessageID{ChannelID: "C", Timestamp: timestamp}
 	var commands *CommandSet
 	if isReply {
-		root := newTestCommand(CommandConfig{
-			Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "agent"}},
-			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "agent"}},
+		root := newTestCommand(testExecutionConfig{
+			Index: 0, Keyword: "agent", Command: "agent",
 		}, nil, NewCommandSet([]*Command{httpCommand}))
 		commands = NewCommandSet([]*Command{root})
 	} else {
@@ -781,19 +739,16 @@ func TestHTTPReplyUsesTheSingleNormalMatchWhenRawCandidateMisses(t *testing.T) {
 			var standardReply *Command
 			if tc.standardHTTP {
 				config := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: "http://127.0.0.1:1"}}
-				standardReply = newTestCommand(CommandConfig{
-					Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "accept"}},
-					RunnerConfig: config, Dispatch: DispatchExecutor,
+				standardReply = newTestCommand(testExecutionConfig{
+					Index: 2, Keyword: "accept", Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body, Dispatch: DispatchExecutor,
 				}, &fakeRunner{}, nil)
 			} else {
-				standardReply = newTestCommand(CommandConfig{
-					Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "accept"}},
-					RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "accept"}},
-				}, NewExecRunner(), nil)
+				standardReply = newTestCommand(testExecutionConfig{
+					Index: 2, Keyword: "accept", Command: "accept",
+				}, nil, nil)
 			}
-			root := newTestCommand(CommandConfig{
-				Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "agent"}},
-				RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "agent"}},
+			root := newTestCommand(testExecutionConfig{
+				Index: 0, Keyword: "agent", Command: "agent",
 			}, nil, NewCommandSet([]*Command{httpReply, standardReply}))
 			commands := NewCommandSet([]*Command{root})
 			observeCommandSet(commands, make(chan *observedOutput, 10))
@@ -809,10 +764,6 @@ func TestHTTPReplyUsesTheSingleNormalMatchWhenRawCandidateMisses(t *testing.T) {
 				t.Fatalf("root Accept() = %v, %v", result, err)
 			}
 			reply := &CommandInput{Text: `"accept"`, ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1, 2}}
-			parsed := root.replies.ResolveInput(reply.Text, reply.AllowedCommandIndexes)
-			if parsed.Commands[0].Command != standardReply || parsed.SingleCommand() != standardReply {
-				t.Fatalf("reply match = (%v, %v), want normal candidate selected", parsed.Commands[0].Command, parsed.SingleCommand())
-			}
 			result, err := router.Accept(context.Background(), reply)
 			if err != nil || result != AcceptRouted {
 				t.Fatalf("raw/normal reply = %v, %v", result, err)
@@ -853,8 +804,8 @@ func TestSameConversationHTTPChainRunsSeriallyWithReplies(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
-	httpCommand := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}}, RunnerConfig: httpConfig, ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor}, NewHTTPRunner(httpConfig), nil)
-	root := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "agent"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "agent"}}}, nil, NewCommandSet([]*Command{httpCommand}))
+	httpCommand := newTestCommand(testExecutionConfig{Index: 1, Keyword: "lookup *", Runner: httpConfig.Runner, Command: httpConfig.Command, Method: httpConfig.Method, URL: httpConfig.URL, Headers: httpConfig.Headers, Body: httpConfig.Body, AllowInChain: true, Dispatch: DispatchExecutor}, NewHTTPRunner(httpConfig), nil)
+	root := newTestCommand(testExecutionConfig{Index: 0, Keyword: "agent", Command: "agent"}, nil, NewCommandSet([]*Command{httpCommand}))
 	commands := NewCommandSet([]*Command{root})
 	outputs := make(chan *observedOutput, 30)
 	queued := make(chan *CommandInput, 2)
@@ -926,8 +877,8 @@ func TestDispatcherCloseRejectsNewWorkAndWaitsForOutputDrain(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	outputs := make(chan *observedOutput, 1)
 	commands := NewCommandSet([]*Command{
-		newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL}}, ParserConfig: ParserConfig{AllowInChain: true}, Dispatch: DispatchExecutor}, NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL}}), nil),
-		newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "echo"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "/bin/echo"}}}, NewExecRunner(), nil),
+		newTestCommand(testExecutionConfig{Index: 0, Keyword: "lookup", Runner: RunnerHTTP, Method: "GET", URL: server.URL, AllowInChain: true, Dispatch: DispatchExecutor}, NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL}}), nil),
+		newTestCommand(testExecutionConfig{Index: 1, Keyword: "echo", Command: "/bin/echo"}, nil, nil),
 	})
 	queue := make(chan *CommandInput, 1)
 	observeCommandSet(commands, outputs)

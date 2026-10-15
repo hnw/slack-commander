@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// testExecutionConfig is a test fixture for constructing runtime Commands.
-// Production configuration is intentionally split across the runtime types.
 type testExecutionConfig struct {
 	Index            int
 	StdinIdleTimeout time.Duration
@@ -22,6 +20,7 @@ type testExecutionConfig struct {
 	URL              string
 	Headers          map[string]string
 	Body             string
+	Dispatch         DispatchMode
 }
 
 type testCommandConfig struct {
@@ -35,23 +34,11 @@ func newTestCommandConfig(config *testExecutionConfig) *testCommandConfig {
 }
 
 func testRuntimeCommand(config *testExecutionConfig, runner CommandRunner) *Command {
-	dispatch := DispatchQueue
-	if config.Runner == RunnerHTTP {
-		dispatch = DispatchExecutor
+	definition := *config
+	if definition.Runner == RunnerHTTP {
+		definition.Dispatch = DispatchExecutor
 	}
-	return newTestCommand(
-		CommandConfig{
-			Index:          config.Index,
-			MatcherConfig:  MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: config.Keyword}},
-			RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body}},
-			ParserConfig:   ParserConfig{InputBodyMode: config.InputBodyMode, AllowInChain: config.AllowInChain},
-			ExecutorConfig: ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin},
-
-			Dispatch: dispatch,
-		},
-		runner,
-		nil,
-	)
+	return newTestCommand(definition, runner, nil)
 }
 
 func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionConfig) CommandRunner) *CommandSet {
@@ -70,16 +57,16 @@ func testCommandSet(configs []*testCommandConfig, factory func(*testExecutionCon
 			if replies == nil {
 				replies = NewCommandSet(nil)
 			}
-			replies.commands = append(replies.commands, newTestCommand(CommandConfig{
-				Index:         1000,
-				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
-				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-				Dispatch:      DispatchRunner,
+			replies.commands = append(replies.commands, newTestCommand(testExecutionConfig{
+				Index: 1000, Keyword: "*", InputBodyMode: InputBodyRawStdin, Runner: RunnerStdinReply, Command: "stdin-reply",
+				Dispatch: DispatchRunner,
 			}, NewStdinReplyRunner(), nil))
 		}
-		command := testRuntimeCommand(definition, runner)
-		command.replies = replies
+		runtimeConfig := *definition
+		if runtimeConfig.Runner == RunnerHTTP {
+			runtimeConfig.Dispatch = DispatchExecutor
+		}
+		command := newTestCommand(runtimeConfig, runner, replies)
 		commands = append(commands, command)
 	}
 	return NewCommandSet(commands)

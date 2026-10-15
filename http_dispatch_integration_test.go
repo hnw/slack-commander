@@ -29,17 +29,12 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
 	httpCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index:         0,
-		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}},
-		RunnerConfig:  httpConfig,
-		ParserConfig:  cmd.ParserConfig{AllowInChain: true},
-		Dispatch:      cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+		Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true},
+		Dispatch: cmd.DispatchExecutor,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	echoCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index:         1,
-		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "echo *"}},
-		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/echo *"}},
-	}, cmd.NewExecRunner(), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+		Index: 1,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "echo *"}}), cmd.NewExecRunner(cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/echo *"}}), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, echoCommand})
 	requests := make(chan *cmd.CommandInput, 10)
 
@@ -119,14 +114,12 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 	t.Cleanup(server.Close)
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
 	httpCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}},
-		RunnerConfig: httpConfig, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+		Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.DispatchExecutor,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	queuedStarted, queuedRelease := make(chan struct{}, 1), make(chan struct{})
 	queuedCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}},
-		RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}},
-	}, blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+		Index: 1,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, queuedCommand})
 	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	requests := make(chan *cmd.CommandInput, 2)
@@ -152,12 +145,20 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 		dispatcher.Wait()
 	}()
 	chainText := "http one ; http two"
-	chainInput := &cmd.CommandInput{Text: chainText, ConversationID: conversation, ResolvedInput: commands.ResolveInput(chainText, []int{0})}
+	chainInput := &cmd.CommandInput{Text: chainText, ConversationID: conversation}
+	chainInput.Commands, chainInput.ParseErr = commands.Resolve(chainText, []int{0})
+	if chainInput.ParseErr != nil {
+		t.Fatal(chainInput.ParseErr)
+	}
 	if got := dispatcher.Dispatch(chainInput); got != cmd.DispatchAccepted {
 		t.Fatalf("HTTP chain Dispatch() = %v", got)
 	}
 	waitForIntegrationPath(t, started, "/one")
-	queuedInput := &cmd.CommandInput{Text: "hold", ConversationID: conversation, ResolvedInput: commands.ResolveInput("hold", []int{1})}
+	queuedInput := &cmd.CommandInput{Text: "hold", ConversationID: conversation}
+	queuedInput.Commands, queuedInput.ParseErr = commands.Resolve("hold", []int{1})
+	if queuedInput.ParseErr != nil {
+		t.Fatal(queuedInput.ParseErr)
+	}
 	if got := dispatcher.Dispatch(queuedInput); got != cmd.DispatchAccepted {
 		t.Fatalf("queued command Dispatch() = %v", got)
 	}
@@ -280,8 +281,8 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	locks := &cmd.ConversationLocks{}
 
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}, RunnerConfig: httpConfig, Dispatch: cmd.DispatchExecutor}, cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "hold"}}}, blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}), testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, Dispatch: cmd.DispatchExecutor}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}), testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
 	requests := make(chan *cmd.CommandInput, 10)
 
@@ -341,7 +342,7 @@ type blockedIntegrationRunner struct {
 	release <-chan struct{}
 }
 
-func (r blockedIntegrationRunner) CommandContext(context.Context, string, ...string) cmd.Cmd {
+func (r blockedIntegrationRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
 	return &blockedIntegrationCommand{started: r.started, release: r.release}
 }
 

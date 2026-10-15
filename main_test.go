@@ -54,11 +54,9 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 
 	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
 	command := cmd.NewCommand(cmd.CommandConfig{
-		Index:         0,
-		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}},
-		RunnerConfig:  httpConfig,
-		Dispatch:      cmd.DispatchExecutor,
-	}, cmd.NewHTTPRunner(httpConfig), nil, outputs.NewCommandOutput(pubsub.ReplyConfig{}, 0))
+		Index:    0,
+		Dispatch: cmd.DispatchExecutor,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}}), cmd.NewHTTPRunner(httpConfig), nil, outputs.NewCommandOutput(pubsub.ReplyConfig{}, 0))
 	commands := cmd.NewCommandSet([]*cmd.Command{command})
 
 	executor := cmd.NewExecutor()
@@ -88,7 +86,7 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		MessageID:             cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		AllowedCommandIndexes: []int{0},
 	}
-	input.ResolvedInput = commands.ResolveInput(input.Text, input.AllowedCommandIndexes)
+	input.Commands, input.ParseErr = commands.Resolve(input.Text, input.AllowedCommandIndexes)
 	if result := dispatcher.Dispatch(input); result != cmd.DispatchAccepted {
 		t.Fatalf("Dispatch() = %v, want accepted", result)
 	}
@@ -161,7 +159,7 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			broadcast := tc.broadcast
 			command := cmd.NewCommand(cmd.CommandConfig{
 				Dispatch: tc.dispatch,
-			}, nil, nil, outputs.NewCommandOutput(*pubsub.NewSystemReplyConfig(&broadcast), 0))
+			}, cmd.NewMatcher(cmd.MatcherConfig{}), cmd.NewExecRunner(cmd.RunnerConfig{}), nil, outputs.NewCommandOutput(*pubsub.NewSystemReplyConfig(&broadcast), 0))
 
 			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool {
 				t.Fatal("parse error entered the command queue")
@@ -170,10 +168,8 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			input := &cmd.CommandInput{
 				ConversationID: cmd.ConversationID{ChannelID: "C123", RootTimestamp: tc.rootTS},
 				MessageID:      cmd.MessageID{ChannelID: "C123", Timestamp: tc.msgTS},
-				ResolvedInput: &cmd.ResolvedInput{
-					Commands: []cmd.ResolvedCommand{{Command: command}},
-					ParseErr: errors.New("Parse error: malformed input"),
-				},
+				Commands:       []cmd.ResolvedCommand{{Command: command}},
+				ParseErr:       errors.New("Parse error: malformed input"),
 			}
 			if got := dispatcher.Dispatch(input); got != cmd.DispatchAccepted {
 				t.Fatalf("Dispatch() = %v, want accepted", got)

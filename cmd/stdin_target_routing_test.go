@@ -15,14 +15,14 @@ type switchingStdinReplyRunner struct {
 	args         []string
 }
 
-func (r *switchingStdinReplyRunner) CommandContext(ctx context.Context, name string, args ...string) Cmd {
-	r.args = append([]string(nil), args...)
+func (r *switchingStdinReplyRunner) CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd {
+	r.args = append([]string(nil), wildcard...)
 	first, _ := r.store.lookup(r.conversation)
 	r.store.register(r.conversation, r.second, r.reply)
 	if r.closeFirst {
 		first.endpoint.Close()
 	}
-	return NewStdinReplyRunner().CommandContext(ctx, name, args...)
+	return NewStdinReplyRunner().CommandContext(ctx, wildcard, hasWildcard)
 }
 
 func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
@@ -34,12 +34,9 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 			second := newInteractiveStdinSession("", 0, nil)
 			t.Cleanup(func() { first.Close(); second.Close() })
 			runner := &switchingStdinReplyRunner{store: store, conversation: conversation, second: second, closeFirst: closeFirst}
-			reply := newTestCommand(CommandConfig{
-				Index:         1,
-				MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-				ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
-				RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-				Dispatch:      DispatchRunner,
+			reply := newTestCommand(testExecutionConfig{
+				Index: 1, Keyword: "*", InputBodyMode: InputBodyRawStdin, Runner: RunnerStdinReply, Command: "stdin-reply",
+				Dispatch: DispatchRunner,
 			}, runner, nil)
 			runner.reply = reply
 			store.register(conversation, first, reply)
@@ -84,10 +81,10 @@ func TestRouterKeepsSelectedStdinEndpointAcrossStoreSwitch(t *testing.T) {
 }
 
 func TestDirectStdinReplyIgnoresMissingTargetOrSetter(t *testing.T) {
-	config := CommandConfig{RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}}}
+	config := testExecutionConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}
 	input := &CommandInput{Text: "reply"}
 	command := newTestCommand(config, NewStdinReplyRunner(), nil)
-	if got := runDirectCommand(command, []string{"stdin-reply"}, input); got != DispatchIgnored {
+	if got := runDirectCommand(ResolvedCommand{Command: command, StdinText: "reply"}, input); got != DispatchIgnored {
 		t.Fatalf("runDirectCommand() without target = %v, want ignored", got)
 	}
 
@@ -95,8 +92,8 @@ func TestDirectStdinReplyIgnoresMissingTargetOrSetter(t *testing.T) {
 	t.Cleanup(endpoint.Close)
 	input.stdinTarget = endpoint
 	runner := &fakeRunner{}
-	command.runner = runner
-	if got := runDirectCommand(command, []string{"stdin-reply"}, input); got != DispatchIgnored {
+	command = newTestCommand(config, runner, nil)
+	if got := runDirectCommand(ResolvedCommand{Command: command, StdinText: "reply"}, input); got != DispatchIgnored {
 		t.Fatalf("runDirectCommand() without target setter = %v, want ignored", got)
 	}
 	if got := runner.Inputs(); len(got) != 0 {

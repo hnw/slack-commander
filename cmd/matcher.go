@@ -1,25 +1,10 @@
 package cmd
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mattn/go-shellwords"
-)
-
-var wildcardReplacer = strings.NewReplacer(
-	`\`, `\\`,
-	` `, `\ `,
-	"\t", "\\\t",
-	"`", "\\`",
-	`(`, `\(`,
-	`)`, `\)`,
-	`"`, `\"`,
-	`'`, `\'`,
-	`;`, `\;`,
-	`&`, `\&`,
-	`|`, `\|`,
-	`<`, `\<`,
-	`>`, `\>`,
 )
 
 // Matcher matches parsed keywords to a configured command.
@@ -28,32 +13,39 @@ type Matcher struct {
 	keywords []string
 }
 
-func newMatcher(config MatcherConfig) *Matcher {
+// NewMatcher はkeywordの引用符やバックスラッシュを構文として解釈しない。
+func NewMatcher(config MatcherConfig) *Matcher {
 	return &Matcher{
 		config:   config,
 		keywords: strings.Fields(config.Keyword),
 	}
 }
 
-// Matcherの定義に従い、キーワード配列をコマンド配列に変換して返す
-// キーワード配列がマッチしなかった場合はnilを返す
-func (m *Matcher) match(keywords []string) ([]string, bool) {
-	hasWildcard := containsWildcard(m.keywords)
-	wildcard, ok := matchKeywords(m.keywords, keywords, hasWildcard)
-	return wildcard, ok
-}
+func (m *Matcher) match(text string) (ResolvedCommand, bool) {
+	if m.config.InputBodyMode == InputBodyRawStdin {
+		_, ok := matchKeywords(m.keywords, []string{text}, slices.Contains(m.keywords, "*"))
+		return ResolvedCommand{StdinText: text}, ok
+	}
+	line, body, _ := strings.Cut(text, "\n")
+	tokens, _ := shellwords.NewParser().Parse(line)
+	if len(tokens) == 0 {
+		tokens = strings.Fields(line)
+	}
 
-func (m *Matcher) hasTrailingWildcard() bool {
-	return len(m.keywords) > 0 && m.keywords[len(m.keywords)-1] == "*"
-}
-
-func containsWildcard(keywords []string) bool {
-	for _, v := range keywords {
-		if v == "*" {
-			return true
+	hasWildcard := slices.Contains(m.keywords, "*")
+	wildcard, ok := matchKeywords(m.keywords, tokens, hasWildcard)
+	result := ResolvedCommand{Wildcard: wildcard, HasWildcard: hasWildcard}
+	if m.config.InputBodyMode == InputBodyStdin {
+		result.StdinText = body
+	} else if body != "" && len(m.keywords) > 0 && m.keywords[len(m.keywords)-1] == "*" {
+		result.Wildcard = slices.Clone(wildcard)
+		if len(result.Wildcard) == 0 {
+			result.Wildcard = append(result.Wildcard, "\n"+body)
+		} else {
+			result.Wildcard[len(result.Wildcard)-1] += "\n" + body
 		}
 	}
-	return false
+	return result, ok
 }
 
 func matchKeywords(template []string, keywords []string, hasWildcard bool) ([]string, bool) {
@@ -71,7 +63,6 @@ func matchKeywords(template []string, keywords []string, hasWildcard bool) ([]st
 	wildcard := []string{}
 	for i, v := range template {
 		if v == "*" {
-			// wildcard match
 			delta := len(keywords) - len(template)
 			wildcard = keywords[i : i+delta+1]
 			j = delta
@@ -83,32 +74,4 @@ func matchKeywords(template []string, keywords []string, hasWildcard bool) ([]st
 		}
 	}
 	return wildcard, true
-}
-
-func buildHTTPArgs(hasWildcard bool, wildcard []string) []string {
-	if hasWildcard {
-		return []string{RunnerHTTP, strings.Join(wildcard, " ")}
-	}
-	return []string{RunnerHTTP}
-}
-
-func buildCommandArgs(line string, hasWildcard bool, wildcard []string) []string {
-	// コマンド定義中のワイルドカードを展開してからshellwordsでparseする
-	if hasWildcard {
-		line = expandWildcard(line, wildcard)
-	}
-	parser := shellwords.NewParser()
-	args, err := parser.Parse(line)
-	if err != nil || parser.Position >= 0 {
-		return nil
-	}
-	return args
-}
-
-func expandWildcard(line string, wildcard []string) string {
-	replaced := make([]string, len(wildcard))
-	for i, v := range wildcard {
-		replaced[i] = wildcardReplacer.Replace(v)
-	}
-	return strings.ReplaceAll(line, "*", strings.Join(replaced, " "))
 }

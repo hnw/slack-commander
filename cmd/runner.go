@@ -6,8 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mattn/go-shellwords"
 
 	"github.com/creack/pty"
 )
@@ -22,25 +25,30 @@ type Cmd interface {
 
 // CommandRunner creates Cmd instances for a given command.
 type CommandRunner interface {
-	CommandContext(ctx context.Context, name string, arg ...string) Cmd
+	CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd
 }
 
-type execRunner struct{}
+type execRunner struct{ config RunnerConfig }
 
 // NewExecRunner returns a runner backed by os/exec.
-func NewExecRunner() CommandRunner {
-	return &execRunner{}
+func NewExecRunner(config RunnerConfig) CommandRunner {
+	return &execRunner{config: config}
 }
 
-func (r *execRunner) CommandContext(ctx context.Context, name string, arg ...string) Cmd {
-	return &execCmd{cmd: exec.CommandContext(ctx, name, arg...)} //nolint:gosec // G204 -- executing configured commands is the purpose of this runner.
+func (r *execRunner) CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd {
+	args, err := buildCommandArgs(r.config.Command, hasWildcard, wildcard)
+	if err != nil {
+		return &execCmd{cmd: exec.CommandContext(ctx, ""), buildErr: err}
+	}
+	return &execCmd{cmd: exec.CommandContext(ctx, args[0], args[1:]...)} //nolint:gosec // G204 -- executing configured commands is the purpose of this runner.
 }
 
 type execCmd struct {
-	cmd    *exec.Cmd
-	tty    bool
-	stdout io.Writer
-	stderr io.Writer
+	buildErr error
+	cmd      *exec.Cmd
+	tty      bool
+	stdout   io.Writer
+	stderr   io.Writer
 }
 
 type ttyInputWriter struct {
@@ -93,6 +101,12 @@ func (c *execCmd) RunWithStdin(started func(io.WriteCloser)) int {
 }
 
 func (c *execCmd) run(stdin execStdin) int {
+	if c.buildErr != nil {
+		if c.stderr != nil {
+			_, _ = fmt.Fprint(c.stderr, c.buildErr)
+		}
+		return 127
+	}
 	if c.tty {
 		return c.runTTY(stdin)
 	}
@@ -176,4 +190,44 @@ func (c *execCmd) exitCode(err error, stderr io.Writer) int {
 		return 127
 	}
 	return c.cmd.ProcessState.ExitCode()
+}
+
+var wildcardReplacer = strings.NewReplacer(
+	"\n", "\\\n",
+	`\`, `\\`,
+	` `, `\ `,
+	"\t", "\\\t",
+	"`", "\\`",
+	`(`, `\(`,
+	`)`, `\)`,
+	`"`, `\"`,
+	`'`, `\'`,
+	`;`, `\;`,
+	`&`, `\&`,
+	`|`, `\|`,
+	`<`, `\<`,
+	`>`, `\>`,
+)
+
+func buildCommandArgs(line string, hasWildcard bool, wildcard []string) ([]string, error) {
+	if hasWildcard {
+		line = expandWildcard(line, wildcard)
+	}
+	parser := shellwords.NewParser()
+	args, err := parser.Parse(line)
+	if err != nil {
+		return nil, err
+	}
+	if parser.Position >= 0 || len(args) == 0 {
+		return nil, fmt.Errorf("invalid command: %q", line)
+	}
+	return args, nil
+}
+
+func expandWildcard(line string, wildcard []string) string {
+	replaced := make([]string, len(wildcard))
+	for i, v := range wildcard {
+		replaced[i] = wildcardReplacer.Replace(v)
+	}
+	return strings.ReplaceAll(line, "*", strings.Join(replaced, " "))
 }

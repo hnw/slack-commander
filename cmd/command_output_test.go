@@ -53,11 +53,12 @@ func (h *recordingOutputHandler) SystemError(c ConversationID, m MessageID, text
 }
 
 func outputHandlerInput(set *CommandSet, text string) *CommandInput {
-	return &CommandInput{
+	input := &CommandInput{
 		ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		MessageID:      MessageID{ChannelID: "C", Timestamp: "2"},
-		ResolvedInput:  set.ResolveInput(text, []int{0, 1}),
 	}
+	input.Commands, input.ParseErr = set.Resolve(text, []int{0, 1})
+	return input
 }
 
 func assertOutputCalls(t *testing.T, handler *recordingOutputHandler, input *CommandInput, want []recordedOutputCall) {
@@ -156,7 +157,7 @@ func TestDispatcherParseErrorUsesOutput(t *testing.T) {
 	command := testRuntimeCommand(&testExecutionConfig{Keyword: "run *", Command: "run *"}, &fakeRunner{})
 	command.output = handler
 	input := outputHandlerInput(NewCommandSet([]*Command{command}), "run '")
-	if input.ResolvedInput.ParseErr == nil {
+	if input.ParseErr == nil {
 		t.Fatal("expected parse error")
 	}
 	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool { t.Fatal("parse error queued"); return false })
@@ -164,11 +165,11 @@ func TestDispatcherParseErrorUsesOutput(t *testing.T) {
 		t.Fatal("parse error rejected")
 	}
 	snapshot := *input
-	parseText := input.ResolvedInput.ParseErr.Error()
+	parseText := input.ParseErr.Error()
 	input.ConversationID = ConversationID{ChannelID: "changed"}
 	input.MessageID = MessageID{Timestamp: "changed"}
-	input.ResolvedInput.Commands[0].Command = nil
-	input.ResolvedInput.ParseErr = errors.New("unmatched")
+	input.Commands[0].Command = nil
+	input.ParseErr = errors.New("unmatched")
 	dispatcher.Close()
 	dispatcher.Wait()
 	assertOutputCalls(t, handler, &snapshot, []recordedOutputCall{{method: "system", text: parseText}})

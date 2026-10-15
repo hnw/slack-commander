@@ -13,8 +13,9 @@ import (
 )
 
 type composeRunner struct {
-	dir   string
-	files []string
+	config RunnerConfig
+	dir    string
+	files  []string
 
 	once    sync.Once
 	project *compose.Project
@@ -23,11 +24,12 @@ type composeRunner struct {
 
 // NewComposeRunner returns a runner backed by compose-exec.
 // If dir is empty, it defaults to the current working directory.
-func NewComposeRunner(dir string, files ...string) CommandRunner {
+func NewComposeRunner(config RunnerConfig, dir string, files ...string) CommandRunner {
 	dupFiles := append([]string(nil), files...)
 	return &composeRunner{
-		dir:   dir,
-		files: dupFiles,
+		dir:    dir,
+		config: config,
+		files:  dupFiles,
 	}
 }
 
@@ -49,7 +51,11 @@ func (r *composeRunner) load() {
 	r.project = project
 }
 
-func (r *composeRunner) CommandContext(ctx context.Context, name string, arg ...string) Cmd {
+func (r *composeRunner) CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd {
+	args, err := buildCommandArgs(r.config.Command, hasWildcard, wildcard)
+	if err != nil {
+		return &composeCmd{loadErr: err}
+	}
 	r.once.Do(r.load)
 	if r.loadErr != nil {
 		return &composeCmd{loadErr: r.loadErr}
@@ -57,7 +63,7 @@ func (r *composeRunner) CommandContext(ctx context.Context, name string, arg ...
 	if ctx == nil {
 		panic("nil Context")
 	}
-	return &composeCmd{cmd: r.project.CommandContext(ctx, name, arg...), ctx: ctx}
+	return &composeCmd{cmd: r.project.CommandContext(ctx, args[0], args[1:]...), ctx: ctx}
 }
 
 type composeCmd struct {

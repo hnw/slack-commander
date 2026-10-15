@@ -42,6 +42,8 @@ type Config struct {
 
 type resolvedCommandConfig struct {
 	cmd.CommandConfig
+	cmd.MatcherConfig
+	cmd.RunnerConfig
 	ReplyConfig         pubsub.ReplyConfig
 	OutputFlushInterval time.Duration
 	Replies             []*resolvedCommandConfig
@@ -144,7 +146,7 @@ func buildCommandSet(configs []*resolvedCommandConfig, factory cmd.RunnerFactory
 
 func buildCommand(config *resolvedCommandConfig, factory cmd.RunnerFactory, newOutput func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput) *cmd.Command {
 	replies := buildCommandSet(config.Replies, factory, newOutput)
-	return cmd.NewCommand(config.CommandConfig, factory(config.RunnerConfig), replies, newOutput(config.ReplyConfig, config.OutputFlushInterval))
+	return cmd.NewCommand(config.CommandConfig, cmd.NewMatcher(config.MatcherConfig), factory(config.RunnerConfig), replies, newOutput(config.ReplyConfig, config.OutputFlushInterval))
 }
 
 func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
@@ -171,7 +173,8 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 	if _, err := normalizeRunner(&runnerConfig); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	parserConfig, executorConfig := resolveInteraction(interaction, resolveExecutorConfig(inheritedExecutorConfig, raw.RawExecutorConfig))
+	parserConfig, bodyMode, executorConfig := resolveInteraction(interaction, resolveExecutorConfig(inheritedExecutorConfig, raw.RawExecutorConfig))
+	matcherConfig.InputBodyMode = bodyMode
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, inheritedOutputFlushInterval)
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
@@ -179,7 +182,7 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
 		return nil, fmt.Errorf("%s: http runner does not support interaction %q; use %q or %q", target, cmd.InteractionStdin, cmd.InteractionOneshot, cmd.InteractionCommand)
 	}
-	config := &resolvedCommandConfig{CommandConfig: cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolveReplyConfig(inheritedReplyConfig, raw)}
+	config := &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: cmd.CommandConfig{ParserConfig: parserConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolveReplyConfig(inheritedReplyConfig, raw)}
 	configuredReplies := make([]*resolvedCommandConfig, 0, len(raw.Replies))
 	for i, reply := range raw.Replies {
 		resolved, err := resolveReplyCommandConfig(config, reply, i+1)
@@ -192,15 +195,14 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 	case cmd.InteractionCommand:
 		config.Replies = configuredReplies
 	case cmd.InteractionStdin:
-		replyParserConfig := parserConfig
-		replyParserConfig.InputBodyMode = cmd.InputBodyRawStdin
-		config.Replies = []*resolvedCommandConfig{{CommandConfig: cmd.CommandConfig{
-			MatcherConfig:  cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}},
-			ParserConfig:   replyParserConfig,
-			RunnerConfig:   cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
-			ExecutorConfig: executorConfig,
-			Dispatch:       cmd.DispatchRunner,
-		}, ReplyConfig: config.ReplyConfig, OutputFlushInterval: config.OutputFlushInterval}}
+		config.Replies = []*resolvedCommandConfig{{
+			MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}, InputBodyMode: cmd.InputBodyRawStdin},
+			RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply}},
+			CommandConfig: cmd.CommandConfig{
+				ExecutorConfig: executorConfig,
+				Dispatch:       cmd.DispatchRunner,
+			}, ReplyConfig: config.ReplyConfig, OutputFlushInterval: config.OutputFlushInterval,
+		}}
 	}
 	return config, nil
 }
@@ -224,6 +226,7 @@ func resolveReplyCommandConfig(parent *resolvedCommandConfig, raw *RawCommandCon
 	if _, err := normalizeRunner(&runnerConfig); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
+	matcherConfig.InputBodyMode = parent.InputBodyMode
 	executorConfig := resolveExecutorConfig(parent.ExecutorConfig, raw.RawExecutorConfig)
 	outputFlushInterval := resolveOutputFlushInterval(raw.OutputFlushInterval, parent.OutputFlushInterval)
 	resolvedReplyConfig := resolveReplyConfig(parent.ReplyConfig, raw)
@@ -233,7 +236,7 @@ func resolveReplyCommandConfig(parent *resolvedCommandConfig, raw *RawCommandCon
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	return &resolvedCommandConfig{CommandConfig: cmd.CommandConfig{MatcherConfig: matcherConfig, ParserConfig: parent.ParserConfig, RunnerConfig: runnerConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolvedReplyConfig}, nil
+	return &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: cmd.CommandConfig{ParserConfig: cmd.ParserConfig{AllowInChain: false}, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolvedReplyConfig}, nil
 }
 
 func commandDispatch(runner string) cmd.DispatchMode {
@@ -256,24 +259,21 @@ func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.E
 	return base
 }
 
-func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ParserConfig, cmd.ExecutorConfig) {
+func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ParserConfig, cmd.InputBodyMode, cmd.ExecutorConfig) {
 	parserConfig := cmd.ParserConfig{}
 	switch interaction {
 	case cmd.InteractionStdin:
 		parserConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = true
-		parserConfig.InputBodyMode = cmd.InputBodyStdin
-		return parserConfig, executorConfig
+		return parserConfig, cmd.InputBodyStdin, executorConfig
 	case cmd.InteractionCommand:
 		parserConfig.AllowInChain = false
 		executorConfig.InteractiveStdin = false
-		parserConfig.InputBodyMode = cmd.InputBodyArgument
-		return parserConfig, executorConfig
+		return parserConfig, cmd.InputBodyArgument, executorConfig
 	default:
 		parserConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = false
-		parserConfig.InputBodyMode = cmd.InputBodyStdin
-		return parserConfig, executorConfig
+		return parserConfig, cmd.InputBodyStdin, executorConfig
 	}
 }
 

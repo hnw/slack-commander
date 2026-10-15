@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/mattn/go-shellwords"
 )
 
 // RawMatcherConfig decodes matcher settings from TOML.
@@ -14,12 +19,12 @@ type RawMatcherConfig struct {
 // MatcherConfig contains the settings needed to match a command.
 type MatcherConfig struct {
 	RawMatcherConfig
+	InputBodyMode InputBodyMode
 }
 
 // ParserConfig contains input parsing policy.
 type ParserConfig struct {
-	AllowInChain  bool
-	InputBodyMode InputBodyMode
+	AllowInChain bool
 }
 
 // RawRunnerConfig decodes runner settings from TOML.
@@ -48,9 +53,7 @@ type ExecutorConfig struct {
 // CommandConfig は解決済みのcommand実行設定を保持する。
 type CommandConfig struct {
 	Index int
-	MatcherConfig
 	ParserConfig
-	RunnerConfig
 	ExecutorConfig
 	Dispatch DispatchMode
 }
@@ -77,10 +80,7 @@ type Command struct {
 }
 
 // NewCommand requires a CommandOutput at construction time.
-func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet, output CommandOutput) *Command {
-	if runner == nil {
-		runner = NewExecRunner()
-	}
+func NewCommand(config CommandConfig, matcher *Matcher, runner CommandRunner, replies *CommandSet, output CommandOutput) *Command {
 	if output == nil {
 		panic("cmd.NewCommand requires a CommandOutput")
 	}
@@ -93,153 +93,154 @@ func NewCommand(config CommandConfig, runner CommandRunner, replies *CommandSet,
 	return &Command{
 		config:  config,
 		output:  output,
-		matcher: *newMatcher(config.MatcherConfig),
+		matcher: *matcher,
 		runner:  runner,
 		replies: replies,
 	}
 }
 
-func (c *Command) match(args []string) []string {
-	wildcard, ok := c.matcher.match(args)
-	if !ok {
-		return nil
-	}
-	if c.config.Runner == RunnerHTTP {
-		return buildHTTPArgs(containsWildcard(c.matcher.keywords), wildcard)
-	}
-	return buildCommandArgs(c.config.Command, containsWildcard(c.matcher.keywords), wildcard)
-}
+// CommandSet は先に定義された許可済み候補を優先する。
+type CommandSet struct{ commands []*Command }
 
-func (c *Command) hasTrailingWildcard() bool {
-	return c.matcher.hasTrailingWildcard()
-}
-
-// CommandSet groups runtime commands that may match the same input.
-type CommandSet struct {
-	commands []*Command
-}
-
-// ResolvedCommand contains a command-line part and its resolved runtime command.
+// ResolvedCommand のErrは入力全体を停止せず、チェーン内の実行失敗として扱う。
 type ResolvedCommand struct {
-	Part    *commandPart
-	Command *Command
-	Args    []string
+	skipIfSucceeded bool
+	skipIfFailed    bool
+	Err             error
+	Command         *Command
+	Wildcard        []string
+	HasWildcard     bool
+	StdinText       string
 }
 
-// ResolvedInput contains the parsed input and resolved commands.
-type ResolvedInput struct {
-	Commands  []ResolvedCommand
-	ParseErr  error
-	StdinText string
-}
-
-// SingleCommand returns the command when the input is a valid single command.
-func (p *ResolvedInput) SingleCommand() *Command {
-	if p == nil || p.ParseErr != nil || len(p.Commands) != 1 {
-		return nil
-	}
-	return p.Commands[0].Command
-}
-
-// DispatchTarget returns the aggregate dispatch destination of the matched commands.
-func (p *ResolvedInput) DispatchTarget() (DispatchMode, bool) {
-	if p == nil {
-		return 0, false
-	}
-	target := DispatchQueue
-	found := false
-	for _, resolved := range p.Commands {
-		if resolved.Command == nil {
-			continue
-		}
-		current := resolved.Command.config.Dispatch
-		switch current {
-		case DispatchQueue:
-			target = DispatchQueue
-		case DispatchExecutor:
-			if !found || target != DispatchQueue {
-				target = DispatchExecutor
-			}
-		case DispatchRunner:
-			if len(p.Commands) != 1 {
-				return 0, false
-			}
-			return DispatchRunner, true
-		default:
-			return 0, false
-		}
-		found = true
-	}
-	return target, found
-}
-
-// NewCommandSet groups commands that may be matched against the same input.
 func NewCommandSet(commands []*Command) *CommandSet {
 	return &CommandSet{commands: commands}
 }
 
-// Match returns the first matching command and its runner arguments.
-func (s *CommandSet) Match(input *commandPart, allowedIndexes []int) (*Command, []string) {
-	if s == nil || input == nil {
-		return nil, nil
+// Resolve は構文エラーでも先頭の出力先へ通知できるよう、部分的な照合結果を返す。
+func (s *CommandSet) Resolve(text string, allowedIndexes []int) ([]ResolvedCommand, error) {
+	line, _, multiline := strings.Cut(text, "\n")
+	parts, parseErr := parseCommands(line)
+	first := s.match(text, allowedIndexes)
+	if first.Command != nil && first.Command.matcher.config.InputBodyMode == InputBodyRawStdin {
+		return []ResolvedCommand{first}, nil
 	}
-	return s.match(allowedIndexes, func(*Command) *commandPart { return input })
+	resolved := make([]ResolvedCommand, len(parts))
+	for i, part := range parts {
+		result := first
+		if i > 0 {
+			result = s.match(part.text, allowedIndexes)
+		}
+		if result.Command == nil {
+			result.Err = fmt.Errorf("コマンドが見つかりませんでした: %s", strings.Join(part.args, " "))
+		}
+		result.skipIfSucceeded, result.skipIfFailed = part.skipIfSucceeded, part.skipIfFailed
+		resolved[i] = result
+	}
+	if len(parts) > 1 {
+		for i := range resolved {
+			resolved[i].StdinText = ""
+		}
+		if multiline {
+			return resolved, errors.New("コマンドチェーンでは複数行入力を使用できません")
+		}
+	}
+	return resolved, parseErr
 }
 
-// ResolveInput parses the input and resolves each command before dispatch.
-func (s *CommandSet) ResolveInput(text string, allowedIndexes []int) *ResolvedInput {
-	cmdMsg, stdinText := splitCommandInput(text)
-	commands, parseErr := parseCommands(cmdMsg)
-	input := &ResolvedInput{ParseErr: parseErr, StdinText: stdinText}
-	rawInput := &commandPart{args: []string{text}}
-	firstCommand, firstArgs := s.match(allowedIndexes, func(command *Command) *commandPart {
-		if command.config.InputBodyMode == InputBodyRawStdin {
-			return rawInput
-		}
-		if len(commands) == 0 {
-			return nil
-		}
-		return commands[0]
-	})
-	if firstCommand != nil && firstCommand.config.InputBodyMode == InputBodyRawStdin {
-		input.Commands = []ResolvedCommand{{Part: rawInput, Command: firstCommand, Args: firstArgs}}
-		input.ParseErr = nil
-		input.StdinText = text
-		return input
-	}
-	input.Commands = make([]ResolvedCommand, len(commands))
-	for i, part := range commands {
-		resolved := ResolvedCommand{Part: part}
-		if i == 0 {
-			resolved.Command, resolved.Args = firstCommand, firstArgs
-		} else {
-			resolved.Command, resolved.Args = s.Match(part, allowedIndexes)
-		}
-		input.Commands[i] = resolved
-	}
-	return input
-}
-
-func (s *CommandSet) match(allowedIndexes []int, candidate func(*Command) *commandPart) (*Command, []string) {
-	if s == nil || candidate == nil {
-		return nil, nil
+func (s *CommandSet) match(text string, allowedIndexes []int) ResolvedCommand {
+	if s == nil {
+		return ResolvedCommand{}
 	}
 	for _, command := range s.commands {
-		if command == nil {
+		if command == nil || !slices.Contains(allowedIndexes, command.config.Index) {
 			continue
 		}
-		if !slices.Contains(allowedIndexes, command.config.Index) {
-			continue
+		result, ok := command.matcher.match(text)
+		if ok {
+			result.Command = command
+			return result
 		}
-		input := candidate(command)
-		if input == nil {
-			continue
-		}
-		args := command.match(input.args)
-		if len(args) == 0 {
-			continue
-		}
-		return command, args
 	}
-	return nil, nil
+	return ResolvedCommand{}
+}
+
+func parseCommands(cmdMsg string) ([]*commandPart, error) {
+	cmds, err := parse(cmdMsg)
+	// パースに完全に失敗した場合のフォールバック（クォーテーション忘れ等）
+	if len(cmds) == 0 {
+		fields := strings.Fields(cmdMsg)
+		if len(fields) > 0 {
+			cmds = append(cmds, newCommandPart("", fields))
+		}
+	}
+	return cmds, err
+}
+
+type commandPart struct {
+	skipIfSucceeded bool
+	skipIfFailed    bool
+	args            []string
+	text            string
+}
+
+func newCommandPart(op string, args []string) *commandPart {
+	skipIfSucceeded := false
+	skipIfFailed := false
+	switch op {
+	case "&&":
+		skipIfFailed = true
+	case "||":
+		skipIfSucceeded = true
+	}
+	return &commandPart{
+		skipIfSucceeded: skipIfSucceeded,
+		skipIfFailed:    skipIfFailed,
+		args:            args,
+		text:            strings.Join(args, " "),
+	}
+}
+
+func parse(line string) ([]*commandPart, error) {
+	parser := shellwords.NewParser()
+	prevOperator := "" // 「;」相当
+	cmds := make([]*commandPart, 0)
+
+	for {
+		args, err := parser.Parse(line)
+		if len(args) == 0 {
+			if prevOperator == "" {
+				runes := []rune(line)
+				prevOperator = string(runes[:min(2, len(runes))])
+			}
+			err = errors.New("Parse error near `" + prevOperator + "'")
+		}
+		if err != nil {
+			return cmds, err
+		}
+		part := newCommandPart(prevOperator, args)
+		part.text = strings.TrimSpace(line)
+		if parser.Position >= 0 {
+			part.text = strings.TrimSpace(string([]rune(line)[:parser.Position]))
+		}
+		cmds = append(cmds, part)
+		if parser.Position < 0 {
+			// 文字列末尾までparseした
+			return cmds, nil
+		}
+		i := len(string([]rune(line)[:parser.Position]))
+		token := line[i:]
+		operators := []string{";", "&&", "||"}
+		prevOperator = ""
+		for _, op := range operators {
+			if strings.HasPrefix(token, op) {
+				i += len(op)
+				prevOperator = op
+				break
+			}
+		}
+		// 次のイテレーションでオペレータの次の文字列からparse開始
+		// 未対応のオペレータだった場合は次のイテレーションでparse error
+		line = string(line[i:])
+	}
 }

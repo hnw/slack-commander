@@ -32,7 +32,7 @@ func TestRunMatchedCommandTimeoutMessage(t *testing.T) {
 				command := testRuntimeCommand(&testExecutionConfig{Timeout: 10 * time.Millisecond, TTY: tty}, runner)
 				wq := make(chan *observedOutput, 10)
 				observeCommandSet(NewCommandSet([]*Command{command}), wq)
-				if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != wantCode {
+				if code := runMatchedCommand(ctx, ResolvedCommand{Command: command, StdinText: ""}, &CommandInput{}, nil); code != wantCode {
 					t.Fatalf("code = %d, want %d", code, wantCode)
 				}
 				var text strings.Builder
@@ -53,7 +53,7 @@ func TestRunMatchedCommandTimeoutMessage(t *testing.T) {
 
 type completedContextRunner struct{ ctx context.Context }
 
-func (r *completedContextRunner) CommandContext(ctx context.Context, _ string, _ ...string) Cmd {
+func (r *completedContextRunner) CommandContext(ctx context.Context, _ []string, _ bool) Cmd {
 	r.ctx = ctx
 	return &fakeCmd{stdoutText: "done"}
 }
@@ -70,7 +70,7 @@ func TestRunMatchedCommandCancelsBeforeFlushingOutput(t *testing.T) {
 				done := make(chan int, 1)
 				go func() {
 					observeCommandSet(NewCommandSet([]*Command{command}), wq)
-					done <- runMatchedCommand(context.Background(), command, []string{"test"}, "", &CommandInput{}, nil)
+					done <- runMatchedCommand(context.Background(), ResolvedCommand{Command: command, StdinText: ""}, &CommandInput{}, nil)
 				}()
 				synctest.Wait()
 				if cause := context.Cause(runner.ctx); !errors.Is(cause, context.Canceled) {
@@ -101,7 +101,7 @@ func TestRunMatchedCommandParentDeadlineDoesNotReportCommandTimeout(t *testing.T
 					command := testRuntimeCommand(&testExecutionConfig{Timeout: timeout, TTY: tty}, &blockingRunner{})
 					wq := make(chan *observedOutput, 10)
 					observeCommandSet(NewCommandSet([]*Command{command}), wq)
-					if code := runMatchedCommand(ctx, command, []string{"test"}, "", &CommandInput{}, nil); code != 143 {
+					if code := runMatchedCommand(ctx, ResolvedCommand{Command: command, StdinText: ""}, &CommandInput{}, nil); code != 143 {
 						t.Fatalf("code = %d, want 143", code)
 					}
 					for _, output := range drainOutputs(wq) {

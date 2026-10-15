@@ -18,16 +18,11 @@ func NewHTTPRunner(config RunnerConfig) CommandRunner {
 	return &httpRunner{config: config}
 }
 
-func (r *httpRunner) CommandContext(ctx context.Context, _ string, arg ...string) Cmd {
+func (r *httpRunner) CommandContext(ctx context.Context, wildcards []string, hasWildcard bool) Cmd {
 	if ctx == nil {
 		panic("nil Context")
 	}
-	wildcard := ""
-	hasWildcard := false
-	if len(arg) > 0 {
-		hasWildcard = true
-		wildcard = strings.Join(arg, "")
-	}
+	wildcard := strings.Join(wildcards, " ")
 	return &httpCmd{
 		ctx:         ctx,
 		config:      r.config,
