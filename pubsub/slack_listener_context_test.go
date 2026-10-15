@@ -49,8 +49,8 @@ func TestSlackListenerCancelsThreadRootRequestOnShutdown(t *testing.T) {
 			defer server.Close()
 			smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 			output := NewSlackOutput(100)
-			reply := cmd.NewCommand(cmd.CommandConfig{Index: 1, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}}, nil, nil, output.NewCommandOutput(ReplyConfig{}, 0))
-			root := cmd.NewCommand(cmd.CommandConfig{MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}}, nil, cmd.NewCommandSet([]*cmd.Command{reply}), output.NewCommandOutput(ReplyConfig{}, 0))
+			reply := cmd.NewCommand(cmd.CommandConfig{Index: 1}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "retry"}}), cmd.NewExecRunner(cmd.RunnerConfig{}), nil, output.NewCommandOutput(ReplyConfig{}, 0))
+			root := cmd.NewCommand(cmd.CommandConfig{}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "run"}}), cmd.NewExecRunner(cmd.RunnerConfig{}), cmd.NewCommandSet([]*cmd.Command{reply}), output.NewCommandOutput(ReplyConfig{}, 0))
 			cfg := Config{ListenerConfigs: []ListenerConfig{{CommandIndex: 0}, {CommandIndex: 1, IsReply: true}}}
 			queued := false
 			router := cmd.NewConversationRouter(nil, cmd.NewCommandSet([]*cmd.Command{root}), SlackRootInputResolver(smc, cfg), newSlackTestDispatcher(func(*cmd.CommandInput) bool {

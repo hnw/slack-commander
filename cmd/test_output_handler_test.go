@@ -14,8 +14,14 @@ type observedOutput struct {
 
 type testOutputHandler struct{ events chan *observedOutput }
 
-func newTestCommand(config CommandConfig, runner CommandRunner, replies *CommandSet) *Command {
-	return NewCommand(config, runner, replies, &testOutputHandler{})
+func newTestCommand(config testExecutionConfig, runner CommandRunner, replies *CommandSet) *Command {
+	matcherConfig := MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: config.Keyword}, InputBodyMode: config.InputBodyMode}
+	runnerConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: config.Runner, Command: config.Command, Method: config.Method, URL: config.URL, Headers: config.Headers, Body: config.Body}}
+	executorConfig := ExecutorConfig{Timeout: config.Timeout, StdinIdleTimeout: config.StdinIdleTimeout, TTY: config.TTY, InteractiveStdin: config.InteractiveStdin}
+	if runner == nil {
+		runner = NewExecRunner(runnerConfig)
+	}
+	return NewCommand(CommandConfig{Index: config.Index, ParserConfig: ParserConfig{AllowInChain: config.AllowInChain}, ExecutorConfig: executorConfig, Dispatch: config.Dispatch}, NewMatcher(matcherConfig), runner, replies, &testOutputHandler{})
 }
 
 func observeCommandSet(set *CommandSet, events chan *observedOutput) {

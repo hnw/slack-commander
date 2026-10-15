@@ -44,7 +44,7 @@ func TestHTTPRunnerPostWithWildcard(t *testing.T) {
 	}
 
 	runner := NewHTTPRunner(cfg)
-	cmd := runner.CommandContext(context.Background(), "http", "hello world")
+	cmd := runner.CommandContext(context.Background(), []string{"hello world"}, true)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.SetStdout(&stdout)
@@ -78,7 +78,7 @@ func TestHTTPRunnerPostWithWildcard(t *testing.T) {
 	}
 }
 
-func TestHTTPRunnerJoinsWildcardArgs(t *testing.T) {
+func TestHTTPRunnerJoinsMultilineWildcard(t *testing.T) {
 	bodyCh := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -100,16 +100,15 @@ func TestHTTPRunnerJoinsWildcardArgs(t *testing.T) {
 	}
 
 	cmd := NewHTTPRunner(cfg).CommandContext(
-		context.Background(),
-		"http",
-		"hello world",
-		"\nsecond line",
-	)
+		context.Background(), []string{
+			"hello",
+			"world\nsecond line\n",
+		}, true)
 	if exitCode := cmd.Run(); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}
-	if body := <-bodyCh; body != "hello world\nsecond line" {
-		t.Fatalf("body = %q, want %q", body, "hello world\nsecond line")
+	if body := <-bodyCh; body != "hello world\nsecond line\n" {
+		t.Fatalf("body = %q, want %q", body, "hello world\nsecond line\n")
 	}
 }
 
@@ -144,16 +143,16 @@ func TestHTTPRunnerExpandsAllWildcards(t *testing.T) {
 		},
 	}
 
-	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http", "hello")
+	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), []string{"hello", "world"}, true)
 	if exitCode := cmd.Run(); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}
-	if got, want := <-resultCh, (requestResult{path: "/users/hello/messages/hello", header: "hello:hello", body: "hello:hello"}); got != want {
+	if got, want := <-resultCh, (requestResult{path: "/users/hello world/messages/hello world", header: "hello world:hello world", body: "hello world:hello world"}); got != want {
 		t.Fatalf("request = %#v, want %#v", got, want)
 	}
 }
 
-func TestHTTPRunnerLeavesWildcardsWithoutArgs(t *testing.T) {
+func TestHTTPRunnerLeavesWildcardsWithoutKeywordWildcard(t *testing.T) {
 	type requestResult struct {
 		path   string
 		header string
@@ -184,7 +183,7 @@ func TestHTTPRunnerLeavesWildcardsWithoutArgs(t *testing.T) {
 		},
 	}
 
-	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), "http")
+	cmd := NewHTTPRunner(cfg).CommandContext(context.Background(), nil, false)
 	if exitCode := cmd.Run(); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}

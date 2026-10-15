@@ -91,7 +91,7 @@ func TestResolveCommandConfigKeepsOnlyInteractionReplies(t *testing.T) {
 			if len(resolved.Replies) != tc.wantReplies {
 				t.Fatalf("resolved replies = %d, want %d", len(resolved.Replies), tc.wantReplies)
 			}
-			if tc.wantDirectReply && (resolved.Replies[0].Runner != cmd.RunnerStdinReply || resolved.Replies[0].Command != "stdin-reply" || resolved.Replies[0].Dispatch != cmd.DispatchRunner || resolved.Replies[0].Keyword != "*" || resolved.Replies[0].InputBodyMode != cmd.InputBodyRawStdin || resolved.InputBodyMode != cmd.InputBodyStdin) {
+			if tc.wantDirectReply && (resolved.Replies[0].Runner != cmd.RunnerStdinReply || resolved.Replies[0].Dispatch != cmd.DispatchRunner || resolved.Replies[0].Keyword != "*" || resolved.Replies[0].InputBodyMode != cmd.InputBodyRawStdin || resolved.InputBodyMode != cmd.InputBodyStdin) {
 				t.Fatalf("stdin reply = %+v, want stdin runner direct reply", resolved.Replies[0])
 			}
 			if !tc.wantDirectReply && tc.wantReplies == 1 && (resolved.Replies[0].Keyword != "retry" || resolved.Replies[0].Dispatch != cmd.DispatchQueue) {
@@ -228,7 +228,7 @@ func TestResolveConfigBuildsRawStdinReplyWithResolvedRootACL(t *testing.T) {
 	if rawReply.Index == resolved.Index {
 		t.Fatalf("stdin reply = %+v", rawReply)
 	}
-	if rawReply.ParserConfig != (cmd.ParserConfig{AllowInChain: true, InputBodyMode: cmd.InputBodyRawStdin}) || rawReply.ExecutorConfig != resolved.ExecutorConfig {
+	if rawReply.ParserConfig != (cmd.ParserConfig{AllowInChain: false}) || rawReply.ExecutorConfig != resolved.ExecutorConfig {
 		t.Fatalf("stdin reply parser/executor config = %+v/%+v, root executor = %+v", rawReply.ParserConfig, rawReply.ExecutorConfig, resolved.ExecutorConfig)
 	}
 	if len(cfg.ListenerConfigs) != 2 {
@@ -254,12 +254,9 @@ func TestStdinExplicitKeywordIsDeliveredWithoutQueue(t *testing.T) {
 	reader, writer := io.Pipe()
 	endpoint := cmd.NewInteractiveStdin(writer, "", func(error) {})
 	implicitReply := cmd.NewCommand(cmd.CommandConfig{
-		Index:         rawReply.Index,
-		MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}},
-		ParserConfig:  cmd.ParserConfig{InputBodyMode: cmd.InputBodyRawStdin},
-		RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply, Command: "stdin-reply"}},
-		Dispatch:      cmd.DispatchRunner,
-	}, cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutput(100).NewCommandOutput(pubsub.ReplyConfig{}, 0))
+		Index: rawReply.Index, ParserConfig: cmd.ParserConfig{},
+		Dispatch: cmd.DispatchRunner,
+	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}, InputBodyMode: cmd.InputBodyRawStdin}), cmd.NewStdinReplyRunner(), nil, pubsub.NewSlackOutput(100).NewCommandOutput(pubsub.ReplyConfig{}, 0))
 	stdinStore.Lifecycle(conversation).StdinReady(endpoint, implicitReply)
 	for _, indexes := range [][]int{{resolved.Index}, {}} {
 		result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "retry", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: indexes})
@@ -1233,7 +1230,7 @@ func TestValidateCommandConfigResolvesInteractionSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resolved.ParserConfig != (cmd.ParserConfig{AllowInChain: tt.allow, InputBodyMode: tt.bodyMode}) || resolved.InteractiveStdin != tt.liveStdin {
+			if resolved.ParserConfig != (cmd.ParserConfig{AllowInChain: tt.allow}) || resolved.InputBodyMode != tt.bodyMode || resolved.InteractiveStdin != tt.liveStdin {
 				t.Fatalf("resolved config = %+v", resolved)
 			}
 		})

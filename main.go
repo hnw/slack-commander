@@ -158,19 +158,17 @@ func run(args []string) int {
 }
 
 func newRunnerFactory() cmd.RunnerFactory {
-	execRunner := cmd.NewExecRunner()
-	composeRunner := cmd.NewComposeRunner("")
 	return func(config cmd.RunnerConfig) cmd.CommandRunner {
 		if config.Runner == cmd.RunnerStdinReply {
 			return cmd.NewStdinReplyRunner()
 		}
 		if config.Runner == cmd.RunnerCompose {
-			return composeRunner
+			return cmd.NewComposeRunner(config, "")
 		}
 		if config.Runner == cmd.RunnerHTTP {
 			return cmd.NewHTTPRunner(config)
 		}
-		return execRunner
+		return cmd.NewExecRunner(config)
 	}
 }
 

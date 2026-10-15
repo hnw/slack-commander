@@ -9,6 +9,8 @@ slack-commanderは、Slackからの入力受付、コマンドの照合、実行
 | --- | --- | --- |
 | `SlackListener` | Slackイベントの受信、入力の正規化、許可設定に基づく候補の絞り込み | botの識別情報は現在、`pubsub`のパッケージ変数に保持 |
 | `CommandSet` | 入力の解析と、候補の中からのコマンド照合 | 照合対象となる`Command`の一覧 |
+| `Matcher` | 入力本文の解釈とキーワード照合 | 本文モードとキーワード |
+| `CommandRunner` | wildcardの展開と実行形式への変換 | コマンドごとのRunnerConfig |
 | `Command` | 一つのコマンドに必要な設定と実行手段をまとめる | 設定、Matcher、Runner、出力先、返信用の`CommandSet` |
 | `ConversationRouter` | 起点メッセージとスレッド返信の処理先を決める | 明示的な返信用コマンドを選ぶためのキャッシュ |
 | `CommandDispatcher` | 解決済みの入力をキュー、非同期実行、標準入力への転送に振り分ける | 受付終了フラグと非同期処理の待ち合わせ |
@@ -29,7 +31,7 @@ Slackでは、チャンネルIDとスレッドの起点メッセージのタイ�
 ```mermaid
 flowchart TD
     listener["SlackListener：入力受付"] --> router["ConversationRouter：処理先の選択"]
-    router --> resolve["CommandSet.ResolveInput：解析と照合"]
+    router --> resolve["CommandSet.Resolve：解析と照合"]
     resolve --> dispatcher["CommandDispatcher"]
     dispatcher -->|構文エラー| parseOutput["エラー出力"]
     parseOutput --> commandOutput["cmd.CommandOutput"]
@@ -54,12 +56,15 @@ flowchart TD
 
 ## 起点メッセージの解析と実行先の選択
 
-`CommandSet.ResolveInput`は入力を解析し、コマンドチェーンの各要素を候補と照合します。
+`CommandSet.Resolve`は入力を解析し、コマンドチェーンの各要素を候補と照合します。
+解決結果は`[]ResolvedCommand`で表し、各要素にCommand、wildcard、確定済みのstdinとチェーン条件を保持します。
+単独コマンドではMatcherが入力全文を解釈し、チェーンでは各要素の部分文字列を照合します。
+チェーンと複数行入力の併用は構文エラーとして拒否し、チェーン全体を実行しません。
 先頭の要素に一致するコマンドがなければ、Dispatcherは出力せずに入力を無視します。
 先頭のコマンドが見つかり、構文エラーがある場合は、そのコマンドの`CommandOutput.SystemError`へエラーを渡します。
 
 構文エラーがなければ、Dispatcherはチェーン内の各コマンドの`AllowInChain`を確認します。
-その後、`ResolvedInput.DispatchTarget()`が各コマンドの設定から入力全体の実行先を決めます。
+その後、Dispatcher内の`dispatchTarget`が各コマンドの設定から入力全体の実行先を決めます。
 
 | 実行先 | 対象 | 実行方法 |
 | --- | --- | --- |
@@ -73,8 +78,11 @@ HTTPだけのチェーンは、チェーン全体を一度のExecutor呼び出�
 `DispatchRunner`は単独の入力だけに使用し、チェーンに含まれる場合は拒否します。
 
 Executorは、Dispatcherが受理した入力の実行を担当します。
+本文の解釈やwildcardの展開をせず、各要素の`StdinText`を使います。
+Runnerはコマンドごとの設定を保持し、実行時にwildcardを展開します。
+argv生成に失敗しても別の候補は選び直さず、実行失敗として`&&`、`||`、`;`の条件へ反映します。
 構文エラーの出力や`AllowInChain`の判定は行いません。
-チェーンの後続要素に一致するコマンドがない場合は、実行順序と条件に従い「コマンドが見つからない」というエラーを出力します。
+チェーンの後続要素が未マッチの場合は、解決時に確定したエラーを実行順序と条件に従って出力し、終了コード127として扱います。
 
 ## スレッド返信の処理先
 

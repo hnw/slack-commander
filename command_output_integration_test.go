@@ -90,7 +90,7 @@ func TestImplicitStdinReplyGetsOutputAtConstruction(t *testing.T) {
 	}
 	reply := buildCommand(resolved, factory, outputs.NewCommandOutput)
 	dispatcher := cmd.NewCommandDispatcher(context.Background(), nil, nil, nil, nil)
-	input := &cmd.CommandInput{ConversationID: cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: cmd.MessageID{Timestamp: "2"}, ResolvedInput: &cmd.ResolvedInput{Commands: []cmd.ResolvedCommand{{Command: reply}}, ParseErr: errors.New("parse failure")}}
+	input := &cmd.CommandInput{ConversationID: cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}, MessageID: cmd.MessageID{Timestamp: "2"}, Commands: []cmd.ResolvedCommand{{Command: reply}}, ParseErr: errors.New("parse failure")}
 	if dispatcher.Dispatch(input) != cmd.DispatchAccepted {
 		t.Fatal("parse error rejected")
 	}

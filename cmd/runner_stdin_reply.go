@@ -15,7 +15,7 @@ func NewStdinReplyRunner() CommandRunner {
 }
 
 // CommandContext は実行用のstdin reply Cmdを生成する。
-func (*StdinReplyRunner) CommandContext(_ context.Context, _ string, _ ...string) Cmd {
+func (*StdinReplyRunner) CommandContext(_ context.Context, _ []string, _ bool) Cmd {
 	return &stdinReplyCmd{}
 }
 

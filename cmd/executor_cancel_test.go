@@ -11,7 +11,7 @@ type blockingRunner struct {
 	started chan struct{}
 }
 
-func (r *blockingRunner) CommandContext(ctx context.Context, _ string, _ ...string) Cmd {
+func (r *blockingRunner) CommandContext(ctx context.Context, _ []string, _ bool) Cmd {
 	return &blockingCmd{ctx: ctx, started: r.started}
 }
 
@@ -52,7 +52,7 @@ func TestExecutorCancelStopsRunningCommand(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		input := &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}
-		input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+		input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 		executor.Execute(ctx, input, nil)
 		close(done)
 	}()
@@ -99,7 +99,7 @@ func TestExecutorTimeoutCancelsCommand(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		input := &CommandInput{Text: "date", AllowedCommandIndexes: []int{0}}
-		input.ResolvedInput = commandSet.ResolveInput(input.Text, input.AllowedCommandIndexes)
+		input.Commands, input.ParseErr = commandSet.Resolve(input.Text, input.AllowedCommandIndexes)
 		executor.Execute(context.Background(), input, nil)
 		close(done)
 	}()

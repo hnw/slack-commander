@@ -8,8 +8,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"github.com/mattn/go-shellwords"
 )
 
 // CommandInput はPubSubからの情報をExecutorに引き渡す構造体
@@ -17,7 +15,8 @@ type CommandInput struct {
 	ConversationID        ConversationID
 	MessageID             MessageID
 	Text                  string // 起動コマンド平文
-	ResolvedInput         *ResolvedInput
+	Commands              []ResolvedCommand
+	ParseErr              error
 	AllowedCommandIndexes []int
 	stdinTarget           *InteractiveStdin
 }
@@ -54,79 +53,27 @@ func (e *Executor) Execute(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	parsed := input.ResolvedInput
-	if parsed == nil {
+	if input.ParseErr != nil || len(input.Commands) == 0 || input.Commands[0].Command == nil {
 		return
 	}
-	if parsed.ParseErr != nil {
-		return
-	}
-	cmds, stdinText := parsed.Commands, parsed.StdinText
-
-	rawBody := ""
-	initialStdin := stdinText
-
-	if len(cmds) == 0 || cmds[0].Command == nil {
-		return
-	}
-	command := cmds[0].Command
-	if command != nil && command.config.InputBodyMode == InputBodyArgument {
-		if stdinText != "" {
-			rawBody = "\n" + stdinText
-		}
-		initialStdin = ""
-	}
-
-	_ = executeCommands(
-		ctx,
-		cmds,
-		initialStdin,
-		rawBody,
-		input,
-		lifecycle,
-	)
-}
-
-func splitCommandInput(text string) (string, string) {
-	msgArr := strings.SplitN(text, "\n", 2)
-	cmdMsg := msgArr[0]
-	stdinText := ""
-	if len(msgArr) >= 2 {
-		// メッセージが複数行だった場合、1行目をコマンド、2行目以降を標準入力として扱う
-		stdinText = msgArr[1]
-	}
-	return cmdMsg, stdinText
-}
-
-func parseCommands(cmdMsg string) ([]*commandPart, error) {
-	cmds, err := parse(cmdMsg)
-	// パースに完全に失敗した場合のフォールバック（クォーテーション忘れ等）
-	if len(cmds) == 0 {
-		fields := strings.Fields(cmdMsg)
-		if len(fields) > 0 {
-			cmds = append(cmds, newCommandPart("", fields))
-		}
-	}
-	return cmds, err
+	_ = executeCommands(ctx, input.Commands, input, lifecycle)
 }
 
 func executeCommands(
 	ctx context.Context,
 	cmds []ResolvedCommand,
-	stdinText string,
-	rawBody string,
 	input *CommandInput,
 	lifecycle StdinLifecycle,
 ) int {
 	ret := 0
 	for i, resolved := range cmds {
-		if shouldSkipCommand(resolved.Part, ret) {
+		if shouldSkipCommand(resolved, ret) {
 			continue
 		}
-		ret = -1
-		command, args := resolved.Command, resolved.Args
-		if command == nil {
-			ret = writeCommandNotFound(cmds[0].Command, input, resolved.Part)
+		command := resolved.Command
+		if resolved.Err != nil {
+			cmds[0].Command.output.SystemError(input.ConversationID, input.MessageID, resolved.Err.Error(), SystemErrorCommandNotFound)
+			ret = 127
 			continue
 		}
 		if i == 0 {
@@ -135,40 +82,31 @@ func executeCommands(
 				command.output.Finish(input.ConversationID, input.MessageID, ret)
 			}()
 		}
-		if rawBody != "" && command.hasTrailingWildcard() {
-			args = append(args, rawBody)
-		}
 		commandLifecycle := lifecycle
 		if !command.config.InteractiveStdin {
 			commandLifecycle = nil
 		}
-		ret = runMatchedCommand(ctx, command, args, stdinText, input, commandLifecycle)
+		ret = runMatchedCommand(ctx, resolved, input, commandLifecycle)
 	}
 	return ret
 }
 
-func shouldSkipCommand(cmd *commandPart, ret int) bool {
+func shouldSkipCommand(cmd ResolvedCommand, ret int) bool {
 	if ret == 0 && cmd.skipIfSucceeded {
 		return true
 	}
 	return ret != 0 && cmd.skipIfFailed
 }
 
-func writeCommandNotFound(owner *Command, input *CommandInput, cmd *commandPart) int {
-	owner.output.SystemError(input.ConversationID, input.MessageID, fmt.Sprintf("コマンドが見つかりませんでした: %v", strings.Join(cmd.args, " ")), SystemErrorCommandNotFound)
-	return 127
-}
-
 var errCommandTimeout = errors.New("command timeout")
 
 func runMatchedCommand(
 	ctx context.Context,
-	command *Command,
-	args []string,
-	stdinText string,
+	resolved ResolvedCommand,
 	input *CommandInput,
 	lifecycle StdinLifecycle,
 ) int {
+	command, stdinText := resolved.Command, resolved.StdinText
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if command.config.Timeout > 0 {
@@ -182,7 +120,7 @@ func runMatchedCommand(
 	}
 	defer cancel()
 
-	execCmd := command.runner.CommandContext(cmdCtx, args[0], args[1:]...)
+	execCmd := command.runner.CommandContext(cmdCtx, resolved.Wildcard, resolved.HasWildcard)
 	setSlackContextEnvironment(execCmd, input.ConversationID)
 	stdout := command.output.Stdout(input.ConversationID, input.MessageID)
 	stderr := command.output.Stderr(input.ConversationID, input.MessageID)
@@ -271,65 +209,4 @@ func implicitStdinReplyCommand(command *Command) *Command {
 		return nil
 	}
 	return command.replies.commands[0]
-}
-
-type commandPart struct {
-	skipIfSucceeded bool
-	skipIfFailed    bool
-	args            []string
-}
-
-func newCommandPart(op string, args []string) *commandPart {
-	skipIfSucceeded := false
-	skipIfFailed := false
-	switch op {
-	case "&&":
-		skipIfFailed = true
-	case "||":
-		skipIfSucceeded = true
-	}
-	return &commandPart{
-		skipIfSucceeded: skipIfSucceeded,
-		skipIfFailed:    skipIfFailed,
-		args:            args,
-	}
-}
-
-func parse(line string) ([]*commandPart, error) {
-	parser := shellwords.NewParser()
-	prevOperator := "" // 「;」相当
-	cmds := make([]*commandPart, 0)
-
-	for {
-		args, err := parser.Parse(line)
-		if len(args) == 0 {
-			if prevOperator == "" {
-				runes := []rune(line)
-				prevOperator = string(runes[:min(2, len(runes))])
-			}
-			err = errors.New("Parse error near `" + prevOperator + "'")
-		}
-		if err != nil {
-			return cmds, err
-		}
-		cmds = append(cmds, newCommandPart(prevOperator, args))
-		if parser.Position < 0 {
-			// 文字列末尾までparseした
-			return cmds, nil
-		}
-		i := len(string([]rune(line)[:parser.Position]))
-		token := line[i:]
-		operators := []string{";", "&&", "||"}
-		prevOperator = ""
-		for _, op := range operators {
-			if strings.HasPrefix(token, op) {
-				i += len(op)
-				prevOperator = op
-				break
-			}
-		}
-		// 次のイテレーションでオペレータの次の文字列からparse開始
-		// 未対応のオペレータだった場合は次のイテレーションでparse error
-		line = string(line[i:])
-	}
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,7 +76,7 @@ func TestConversationRouterNegativeCachesStdinReplyCommand(t *testing.T) {
 }
 
 func TestConversationRoutesCachesNegativeResult(t *testing.T) {
-	command := newTestCommand(CommandConfig{}, nil, nil)
+	command := newTestCommand(testExecutionConfig{}, nil, nil)
 	routes := newConversationRoutes(1)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	if got, found := routes.lookup(conversation); found || got != nil {
@@ -113,13 +112,11 @@ func TestConversationRouterCacheHitDoesNotReResolveRoot(t *testing.T) {
 
 func TestExplicitReplyCommandSelectsOnlySingleNonStdinCommand(t *testing.T) {
 	newCommand := func(index int, interactiveStdin bool, hasReplies bool) *Command {
-		command := newTestCommand(CommandConfig{
-			Index: index, ExecutorConfig: ExecutorConfig{InteractiveStdin: interactiveStdin},
-			MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-			RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+		command := newTestCommand(testExecutionConfig{
+			Index: index, InteractiveStdin: interactiveStdin, Keyword: "*", Command: "run",
 		}, nil, nil)
 		if hasReplies {
-			command.replies = NewCommandSet([]*Command{newTestCommand(CommandConfig{Index: index + 10}, nil, nil)})
+			command.replies = NewCommandSet([]*Command{newTestCommand(testExecutionConfig{Index: index + 10}, nil, nil)})
 		}
 		return command
 	}
@@ -147,7 +144,7 @@ func TestExplicitReplyCommandSelectsOnlySingleNonStdinCommand(t *testing.T) {
 			for i, command := range tt.commands {
 				resolved[i].Command = command
 			}
-			if got := explicitReplyCommand(&ResolvedInput{Commands: resolved}); got != tt.want {
+			if got := explicitReplyCommand(&CommandInput{Commands: resolved}); got != tt.want {
 				t.Fatalf("explicitReplyCommand() = %p, want %p", got, tt.want)
 			}
 		})
@@ -173,22 +170,15 @@ func TestConversationRouterAcceptsStdinChainsAndNegativeCachesExplicitReplies(t 
 			t.Run(name+"/"+strconv.Itoa(i)+"/"+rootText, func(t *testing.T) {
 				conversation := ConversationID{ChannelID: "C", RootTimestamp: strconv.Itoa(i + 1)}
 				store := &StdinStore{}
-				stdinReply := newTestCommand(CommandConfig{
-					Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-					ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
-					RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-					Dispatch:     DispatchRunner,
+				stdinReply := newTestCommand(testExecutionConfig{
+					Index: 2, Keyword: "*", InputBodyMode: InputBodyRawStdin, Runner: RunnerStdinReply, Command: "stdin-reply",
+					Dispatch: DispatchRunner,
 				}, NewStdinReplyRunner(), nil)
-				oneshot := newTestCommand(CommandConfig{
-					Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "oneshot"}},
-					ParserConfig: ParserConfig{AllowInChain: true},
-					RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "oneshot"}},
+				oneshot := newTestCommand(testExecutionConfig{
+					Index: 0, Keyword: "oneshot", AllowInChain: true, Command: "oneshot",
 				}, nil, nil)
-				stdin := newTestCommand(CommandConfig{
-					Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stdin"}},
-					ParserConfig:   ParserConfig{AllowInChain: true},
-					ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
-					RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin"}},
+				stdin := newTestCommand(testExecutionConfig{
+					Index: 1, Keyword: "stdin", AllowInChain: true, InteractiveStdin: true, Command: "stdin",
 				}, nil, NewCommandSet([]*Command{stdinReply}))
 				commands := NewCommandSet([]*Command{oneshot, stdin})
 				resolver := RootInputResolver(nil)
@@ -256,12 +246,9 @@ func assertStdinReplyDelivered(t *testing.T, reader io.Reader, want string) {
 
 func TestConversationRouterRejectsChainsContainingCommandInteraction(t *testing.T) {
 	newCommand := func(index int, keyword string, allowInChain, interactiveStdin bool) *Command {
-		return newTestCommand(CommandConfig{
-			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: keyword}},
-			ParserConfig:   ParserConfig{AllowInChain: allowInChain},
-			ExecutorConfig: ExecutorConfig{InteractiveStdin: interactiveStdin},
-			RunnerConfig:   RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: keyword}},
-		}, nil, NewCommandSet([]*Command{newTestCommand(CommandConfig{Index: index + 10}, nil, nil)}))
+		return newTestCommand(testExecutionConfig{
+			Index: index, Keyword: keyword, AllowInChain: allowInChain, InteractiveStdin: interactiveStdin, Command: keyword,
+		}, nil, NewCommandSet([]*Command{newTestCommand(testExecutionConfig{Index: index + 10}, nil, nil)}))
 	}
 	command := newCommand(0, "command", false, false)
 	stdin := newCommand(1, "stdin", true, true)
@@ -297,20 +284,15 @@ func TestConversationRouterRejectsChainsContainingCommandInteraction(t *testing.
 
 func TestConversationRouterUsesActiveStdinReplyIndexes(t *testing.T) {
 	newReply := func(index int, keyword string) *Command {
-		return newTestCommand(CommandConfig{
-			Index: index, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: keyword}},
-			RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: keyword}}, Dispatch: DispatchQueue,
+		return newTestCommand(testExecutionConfig{
+			Index: index, Keyword: keyword, Command: keyword, Dispatch: DispatchQueue,
 		}, nil, nil)
 	}
-	first := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stdin"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin"}},
+	first := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "stdin", AllowInChain: true, InteractiveStdin: true, Command: "stdin",
 	}, nil, NewCommandSet([]*Command{newReply(10, "first")}))
-	second := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stdin2"}},
-		ParserConfig: ParserConfig{AllowInChain: true}, ExecutorConfig: ExecutorConfig{InteractiveStdin: true},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stdin2"}},
+	second := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "stdin2", AllowInChain: true, InteractiveStdin: true, Command: "stdin2",
 	}, nil, NewCommandSet([]*Command{newReply(11, "second")}))
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	queued := false
@@ -331,8 +313,8 @@ func TestConversationRouterUsesActiveStdinReplyIndexes(t *testing.T) {
 	store.Lifecycle(conversation).StdinReady(endpoint, second.replies.commands[0])
 	input := &CommandInput{Text: "second", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{11}}
 	result, err := router.Accept(context.Background(), input)
-	if err != nil || result != AcceptRouted || !queued || input.ResolvedInput == nil || input.ResolvedInput.Commands[0].Command != second.replies.commands[0] {
-		t.Fatalf("active second stdin reply = %v, %v, queued=%v, resolved=%+v; want second reply %p", result, err, queued, input.ResolvedInput, second.replies.commands[0])
+	if err != nil || result != AcceptRouted || !queued || input.Commands[0].Command != second.replies.commands[0] {
+		t.Fatalf("active second stdin reply = %v, %v, queued=%v, resolved=%+v; want second reply %p", result, err, queued, input, second.replies.commands[0])
 	}
 }
 
@@ -348,9 +330,6 @@ func TestConversationRouterDoesNotCacheUnmatchedRoot(t *testing.T) {
 		ConversationID:        ConversationID{ChannelID: "C", RootTimestamp: "1"},
 		MessageID:             MessageID{Timestamp: "1"},
 		AllowedCommandIndexes: []int{0},
-	}
-	if router.commands.ResolveInput(input.Text, input.AllowedCommandIndexes).Commands[0].Command != nil {
-		t.Fatal("test root unexpectedly matched")
 	}
 	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptIgnored {
 		t.Fatalf("Accept() = %v, %v; want ignored for no matched command", result, err)
@@ -378,7 +357,7 @@ func TestConversationRouterDoesNotCacheRootWithParseError(t *testing.T) {
 	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queued {
 		t.Fatalf("Accept() = %v, %v, queued=%v; want parse error routed without queue", result, err, queued)
 	}
-	if input.ResolvedInput == nil || input.ResolvedInput.ParseErr == nil || len(input.ResolvedInput.Commands) == 0 || input.ResolvedInput.Commands[0].Command == nil {
+	if input.ParseErr == nil || len(input.Commands) == 0 || input.Commands[0].Command == nil {
 		t.Fatal("matched command or input parse error was not preserved")
 	}
 	if _, ok := router.routes.lookup(conversation); ok {
@@ -409,14 +388,11 @@ func TestConversationRouterRestoresRawRootWithTheSameParseMode(t *testing.T) {
 	if _, err := parseCommands("raw root && \"unfinished"); err == nil {
 		t.Fatal("test input must fail normal command parsing")
 	}
-	reply := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "reply"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "reply"}},
+	reply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "reply", Command: "reply",
 	}, nil, nil)
-	root := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "capture"}},
-		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin},
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "*", Command: "capture", InputBodyMode: InputBodyRawStdin,
 	}, nil, NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	var queued []*CommandInput
@@ -432,28 +408,28 @@ func TestConversationRouterRestoresRawRootWithTheSameParseMode(t *testing.T) {
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rootInput := &CommandInput{Text: text, ConversationID: conversation, MessageID: MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}
 	acceptRoutedInput(t, router, rootInput)
-	assertRawRootInput(t, rootInput.ResolvedInput, root, text)
+	assertRawRootInput(t, rootInput, root, text)
 	if len(queued) != 1 || queued[0] != rootInput {
 		t.Fatalf("queued root = %#v, want raw root parse", queued)
 	}
 	replyInput := &CommandInput{Text: "reply", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
 	acceptRoutedInput(t, router, replyInput)
-	if resolved != 1 || len(queued) != 2 || queued[1] != replyInput || replyInput.ResolvedInput.Commands[0].Command != root.replies.commands[0] {
-		t.Fatalf("resolved=%d queued=%#v reply parsed=%#v, want resolver-restored reply route", resolved, queued, replyInput.ResolvedInput)
+	if resolved != 1 || len(queued) != 2 || queued[1] != replyInput || replyInput.Commands[0].Command != root.replies.commands[0] {
+		t.Fatalf("resolved=%d queued=%#v reply parsed=%#v, want resolver-restored reply route", resolved, queued, replyInput)
 	}
 }
 
-func assertRawRootInput(t *testing.T, parsed *ResolvedInput, command *Command, text string) {
+func assertRawRootInput(t *testing.T, parsed *CommandInput, command *Command, text string) {
 	t.Helper()
-	if parsed.ParseErr != nil || parsed.SingleCommand() != command || parsed.StdinText != text || len(parsed.Commands) != 1 || len(parsed.Commands[0].Part.args) != 1 || parsed.Commands[0].Part.args[0] != text {
+	if parsed.ParseErr != nil || len(parsed.Commands) != 1 || parsed.Commands[0].Command != command || parsed.Commands[0].StdinText != text {
 		t.Fatalf("root parse = %#v, want normalized raw root input", parsed)
 	}
 }
 
 func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.T) {
-	replySet := NewCommandSet([]*Command{newTestCommand(CommandConfig{Index: 3, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "retry"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "retry"}}}, nil, nil)})
-	first := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}}, nil, nil)
-	second := newTestCommand(CommandConfig{Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}}, nil, replySet)
+	replySet := NewCommandSet([]*Command{newTestCommand(testExecutionConfig{Index: 3, Keyword: "retry", Command: "retry"}, nil, nil)})
+	first := newTestCommand(testExecutionConfig{Index: 1, Keyword: "run", Command: "first"}, nil, nil)
+	second := newTestCommand(testExecutionConfig{Index: 2, Keyword: "run", Command: "second"}, nil, replySet)
 	commands := NewCommandSet([]*Command{first, second})
 	var queued *CommandInput
 	router := NewConversationRouter(&StdinStore{}, commands, func(context.Context, ConversationID) (RootCommandInput, error) {
@@ -466,19 +442,17 @@ func TestConversationRouterResolvesEvictedRootWithOriginalCandidates(t *testing.
 	if _, err := router.Accept(context.Background(), &CommandInput{Text: "retry", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{3}}); err != nil {
 		t.Fatal(err)
 	}
-	if queued == nil || queued.ResolvedInput.Commands[0].Command != replySet.commands[0] {
+	if queued == nil || queued.Commands[0].Command != replySet.commands[0] {
 		t.Fatalf("thread reply route = %+v, want the ACL-selected root's reply set", queued)
 	}
 }
 
 func TestConversationRouterCachesReplyCommandRestoredFromHistory(t *testing.T) {
-	replySet := NewCommandSet([]*Command{newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+	replySet := NewCommandSet([]*Command{newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "stop", Command: "stop",
 	}, nil, nil)})
-	root := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "run", Command: "run",
 	}, nil, replySet)
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	router := NewConversationRouter(&StdinStore{}, NewCommandSet([]*Command{root}), func(context.Context, ConversationID) (RootCommandInput, error) {
@@ -560,7 +534,7 @@ func TestConversationRouterRejectsDisallowedChainFromHistory(t *testing.T) {
 				if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptIgnored {
 					t.Fatalf("history reply = %v, %v; want ignored", result, err)
 				}
-				if input.ResolvedInput != nil {
+				if len(input.Commands) != 0 {
 					t.Fatal("reply input was resolved despite the root chain policy")
 				}
 			}
@@ -580,17 +554,14 @@ func TestConversationRouterRejectsDisallowedChainFromHistory(t *testing.T) {
 func TestConversationRouterUsesActiveStdinReplyACLWithoutExplicitFallback(t *testing.T) {
 	store := &StdinStore{}
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	explicitReply := newTestCommand(CommandConfig{
-		Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "explicit"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "explicit"}}, Dispatch: DispatchQueue,
+	explicitReply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "explicit", Command: "explicit", Dispatch: DispatchQueue,
 	}, nil, nil)
-	root := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "run", Command: "run",
 	}, nil, NewCommandSet([]*Command{explicitReply}))
-	activeReply := newTestCommand(CommandConfig{
-		Index: 2, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "active"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "active"}}, Dispatch: DispatchQueue,
+	activeReply := newTestCommand(testExecutionConfig{
+		Index: 2, Keyword: "active", Command: "active", Dispatch: DispatchQueue,
 	}, nil, nil)
 	var queued []*CommandInput
 	resolverCalls := 0
@@ -606,8 +577,8 @@ func TestConversationRouterUsesActiveStdinReplyACLWithoutExplicitFallback(t *tes
 	t.Cleanup(func() { endpoint.Close(); _ = reader.Close() })
 	store.Lifecycle(conversation).StdinReady(endpoint, activeReply)
 	activeInput := &CommandInput{Text: "active", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{2}}
-	if result, err := router.Accept(context.Background(), activeInput); err != nil || result != AcceptRouted || activeInput.ResolvedInput == nil || activeInput.ResolvedInput.Commands[0].Command != activeReply {
-		t.Fatalf("active ACL reply = %v, %v; resolved=%+v, want command %p", result, err, activeInput.ResolvedInput, activeReply)
+	if result, err := router.Accept(context.Background(), activeInput); err != nil || result != AcceptRouted || activeInput == nil || activeInput.Commands[0].Command != activeReply {
+		t.Fatalf("active ACL reply = %v, %v; resolved=%+v, want command %p", result, err, activeInput, activeReply)
 	}
 	explicitInput := &CommandInput{Text: "explicit", ConversationID: conversation, MessageID: MessageID{Timestamp: "3"}, AllowedCommandIndexes: []int{1}}
 	if result, err := router.Accept(context.Background(), explicitInput); err != nil || result != AcceptIgnored || len(queued) != 2 {
@@ -628,8 +599,8 @@ func TestConversationRouterUsesActiveStdinReplyACLWithoutExplicitFallback(t *tes
 }
 
 func TestConversationRouterUsesSameReplyResultForCachedAndRestoredChain(t *testing.T) {
-	first := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "first"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "first"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
-	second := newTestCommand(CommandConfig{Index: 1, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "second"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "second"}}, ParserConfig: ParserConfig{AllowInChain: true}}, nil, nil)
+	first := newTestCommand(testExecutionConfig{Index: 0, Keyword: "first", Command: "first", AllowInChain: true}, nil, nil)
+	second := newTestCommand(testExecutionConfig{Index: 1, Keyword: "second", Command: "second", AllowInChain: true}, nil, nil)
 	commands := NewCommandSet([]*Command{first, second})
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	rootInput := RootCommandInput{Text: "first ; second", AllowedCommandIndexes: []int{0, 1}}
@@ -701,7 +672,7 @@ func TestConversationRouterRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
 	c := newTestConversationRouter([]*testCommandConfig{root}, func(context.Context, ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, func(input *CommandInput) bool { queued = input; return true }, 2)
-	result, err := c.Accept(context.Background(), &CommandInput{Text: "stop && stop\nbody", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{1}})
+	result, err := c.Accept(context.Background(), &CommandInput{Text: "stop\nbody", ConversationID: ConversationID{ChannelID: "C", RootTimestamp: "1"}, AllowedCommandIndexes: []int{1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,7 +682,7 @@ func TestConversationRouterRoutesCommandReplyAndReportsQueueFull(t *testing.T) {
 	if queued == nil {
 		t.Fatal("reply was not queued")
 	}
-	if queued.ResolvedInput.Commands[0].Command != c.commands.commands[0].replies.commands[0] || queued.Text != "stop && stop\nbody" {
+	if queued.Commands[0].Command != c.commands.commands[0].replies.commands[0] || queued.Text != "stop\nbody" {
 		t.Fatalf("queued=%+v", queued)
 	}
 	c.dispatcher = newTestDispatcher(func(*CommandInput) bool { return false })
@@ -784,7 +755,6 @@ func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
 	ctx := ConversationID{ChannelID: "C", RootTimestamp: "1"}
 	store := &StdinStore{}
 	commands := testCommandSet([]*testCommandConfig{root}, nil)
-	commands.commands[0].replies.commands[0].runner = NewStdinReplyRunner()
 	c := NewConversationRouter(store, commands, func(context.Context, ConversationID) (RootCommandInput, error) {
 		return RootCommandInput{Text: "run", AllowedCommandIndexes: []int{0}}, nil
 	}, newTestDispatcher(func(*CommandInput) bool { t.Fatal("stdin reply queued"); return false }), 2)
@@ -821,14 +791,11 @@ func TestConversationRouterRoutesRawStdinReply(t *testing.T) {
 func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
 	store := &StdinStore{}
 	conversation := ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	stdinReply := newTestCommand(CommandConfig{
-		Index:         1,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-		ParserConfig:  ParserConfig{InputBodyMode: InputBodyRawStdin},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerStdinReply, Command: "stdin-reply"}},
-		Dispatch:      DispatchRunner,
+	stdinReply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "*", InputBodyMode: InputBodyRawStdin, Runner: RunnerStdinReply, Command: "stdin-reply",
+		Dispatch: DispatchRunner,
 	}, NewStdinReplyRunner(), nil)
-	root := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{stdinReply}))
+	root := newTestCommand(testExecutionConfig{Index: 0, Keyword: "run", Command: "run"}, nil, NewCommandSet([]*Command{stdinReply}))
 	queued := 0
 	commands := NewCommandSet([]*Command{root})
 	router := NewConversationRouter(store, commands, nil, newTestDispatcher(func(*CommandInput) bool {
@@ -875,10 +842,8 @@ func TestRouterDirectDispatchUsesCommandRunnerAndKeepsWholeBody(t *testing.T) {
 func TestRouterDirectRootRunsWithWholeRawInput(t *testing.T) {
 	text := `first && second ; third || "unfinished` + "\n  raw body\t"
 	runner := &fakeRunner{}
-	command := newTestCommand(CommandConfig{
-		Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "*"}},
-		RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "capture original"}},
-		ParserConfig: ParserConfig{InputBodyMode: InputBodyRawStdin}, Dispatch: DispatchRunner,
+	command := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "*", Command: "capture original", InputBodyMode: InputBodyRawStdin, Dispatch: DispatchRunner,
 	}, runner, nil)
 	commands := NewCommandSet([]*Command{command})
 	queued := false
@@ -890,11 +855,11 @@ func TestRouterDirectRootRunsWithWholeRawInput(t *testing.T) {
 	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queued {
 		t.Fatalf("direct root = %v, %v; queued=%v", result, err, queued)
 	}
-	if calls := runner.Calls(); len(calls) != 1 || calls[0].name != "capture" {
+	if calls := runner.Calls(); len(calls) != 1 {
 		t.Fatalf("runner calls = %#v, want one direct raw call", calls)
 	}
-	if calls := runner.Calls(); !slices.Equal(calls[0].args, []string{"original"}) {
-		t.Fatalf("runner args = %#v, want configured args without conversation metadata", calls[0].args)
+	if calls := runner.Calls(); len(calls[0].wildcard) != 0 || calls[0].hasWildcard {
+		t.Fatalf("runner args = %#v, want no wildcard for raw stdin", calls[0].wildcard)
 	}
 	if inputs := runner.Inputs(); len(inputs) != 1 || inputs[0] != text {
 		t.Fatalf("stdin = %#v, want full raw text", inputs)
@@ -902,15 +867,11 @@ func TestRouterDirectRootRunsWithWholeRawInput(t *testing.T) {
 }
 
 func TestDispatcherUsesQueueFullForRootAndReplyWhenQueueUnavailable(t *testing.T) {
-	reply := newTestCommand(CommandConfig{
-		Index:         1,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+	reply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "stop", Command: "stop",
 	}, nil, nil)
-	root := newTestCommand(CommandConfig{
-		Index:         0,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "run", Command: "run",
 	}, nil, NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	dispatcher := newTestDispatcher(nil)
@@ -931,21 +892,17 @@ func TestDispatcherUsesQueueFullForRootAndReplyWhenQueueUnavailable(t *testing.T
 
 type dispatcherExitCodeRunner int
 
-func (r dispatcherExitCodeRunner) CommandContext(context.Context, string, ...string) Cmd {
+func (r dispatcherExitCodeRunner) CommandContext(context.Context, []string, bool) Cmd {
 	return &fakeCmd{exitCode: int(r)}
 }
 
 func TestDispatcherIgnoresFailedDirectReply(t *testing.T) {
-	reply := newTestCommand(CommandConfig{
-		Index:         1,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
-		Dispatch:      DispatchRunner,
+	reply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "stop", Command: "stop",
+		Dispatch: DispatchRunner,
 	}, dispatcherExitCodeRunner(1), nil)
-	root := newTestCommand(CommandConfig{
-		Index:         0,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}},
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "run", Command: "run",
 	}, nil, NewCommandSet([]*Command{reply}))
 	queued := false
 	commands := NewCommandSet([]*Command{root})
@@ -967,13 +924,11 @@ func TestHTTPReplyUsesExecutorOutputPipeline(t *testing.T) {
 	defer server.Close()
 	outputs := make(chan *observedOutput, 20)
 	queueCalls := 0
-	reply := newTestCommand(CommandConfig{
-		Index:         1,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup *"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*"}},
-		Dispatch:      DispatchExecutor,
+	reply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "lookup *", Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*",
+		Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL + "/?q=*"}}), nil)
-	root := newTestCommand(CommandConfig{Index: 0, MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "run"}}, RunnerConfig: RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "run"}}}, nil, NewCommandSet([]*Command{reply}))
+	root := newTestCommand(testExecutionConfig{Index: 0, Keyword: "run", Command: "run"}, nil, NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	observeCommandSet(commands, outputs)
 	dispatcher := NewCommandDispatcher(context.Background(), NewExecutor(), &StdinStore{}, &ConversationLocks{}, func(*CommandInput) bool {
@@ -987,7 +942,7 @@ func TestHTTPReplyUsesExecutorOutputPipeline(t *testing.T) {
 	}
 	queueCalls = 0
 	input := &CommandInput{Text: "lookup value", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
-	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queueCalls != 0 || input.ResolvedInput.Commands[0].Command != root.replies.commands[0] {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != AcceptRouted || queueCalls != 0 || input.Commands[0].Command != root.replies.commands[0] {
 		t.Fatalf("HTTP reply = %v, %v; queue calls=%d", result, err, queueCalls)
 	}
 	dispatcher.Close()
@@ -1022,16 +977,12 @@ func TestHTTPRootBypassesFullQueueAndCachesOwnership(t *testing.T) {
 	}))
 	defer server.Close()
 	outputs := make(chan *observedOutput, 20)
-	reply := newTestCommand(CommandConfig{
-		Index:         1,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "stop"}},
-		RunnerConfig:  RunnerConfig{RawRunnerConfig: RawRunnerConfig{Command: "stop"}},
+	reply := newTestCommand(testExecutionConfig{
+		Index: 1, Keyword: "stop", Command: "stop",
 	}, nil, nil)
 	httpConfig := RunnerConfig{RawRunnerConfig: RawRunnerConfig{Runner: RunnerHTTP, Method: "GET", URL: server.URL}}
-	root := newTestCommand(CommandConfig{
-		Index:         0,
-		MatcherConfig: MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "lookup"}},
-		RunnerConfig:  httpConfig, Dispatch: DispatchExecutor,
+	root := newTestCommand(testExecutionConfig{
+		Index: 0, Keyword: "lookup", Runner: httpConfig.Runner, Command: httpConfig.Command, Method: httpConfig.Method, URL: httpConfig.URL, Headers: httpConfig.Headers, Body: httpConfig.Body, Dispatch: DispatchExecutor,
 	}, NewHTTPRunner(httpConfig), NewCommandSet([]*Command{reply}))
 	commands := NewCommandSet([]*Command{root})
 	queueCalls := 0
@@ -1047,7 +998,7 @@ func TestHTTPRootBypassesFullQueueAndCachesOwnership(t *testing.T) {
 		t.Fatalf("HTTP root Accept() = %v, %v; want routed despite full queue", result, err)
 	}
 	replyInput := &CommandInput{Text: "stop", ConversationID: conversation, MessageID: MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}
-	if result, err := router.Accept(context.Background(), replyInput); err != nil || result != AcceptQueueFull || replyInput.ResolvedInput.Commands[0].Command != root.replies.commands[0] {
+	if result, err := router.Accept(context.Background(), replyInput); err != nil || result != AcceptQueueFull || replyInput.Commands[0].Command != root.replies.commands[0] {
 		t.Fatalf("cached root reply = %v, %v; want queue full and cached reply command", result, err)
 	}
 	if queueCalls != 1 {
@@ -1068,7 +1019,7 @@ func TestStdinReplyCommandSucceedsWhenEndpointRejectsInput(t *testing.T) {
 		t.Fatalf("second TrySend() error = %v, want full-buffer error", err)
 	}
 	run := func() int {
-		command := runner.CommandContext(context.Background(), "stdin-reply")
+		command := runner.CommandContext(context.Background(), nil, false)
 		command.(interface{ SetStdinTarget(*InteractiveStdin) }).SetStdinTarget(endpoint)
 		command.SetStdin(strings.NewReader("reply"))
 		return command.Run()

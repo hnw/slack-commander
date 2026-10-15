@@ -1,145 +1,37 @@
 package cmd
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 )
 
-func TestMatcher(t *testing.T) {
-	cfgs := []*testCommandConfig{
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `ping 8.8.8.8`,
-				Command: `ping -c4 8.8.8.8`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `ping *`,
-				Command: `ping * -c4`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `ping *`,
-				Command: `/bin/sh -c "ping *"`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `echo *`,
-				Command: `/bin/echo *`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `echo *`,
-				Command: `/bin/echo "*"`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `echo *`,
-				Command: `/bin/echo '*'`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `foo * bar`,
-				Command: `*`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `openurl *`,
-				Command: `pwopen --no-sandbox *`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `openurl *`,
-				Command: `pwopen --no-sandbox *`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `openurl`,
-				Command: `pwopen --no-sandbox`,
-			},
-		},
-		{
-			testExecutionConfig: &testExecutionConfig{
-				Keyword: `deploy * bar`,
-				Command: `deploy * bar`,
-			},
-		},
-	}
-	args := [][]string{
-		{`ping`, `8.8.8.8`},
-		{`ping`, `-i2`, `8.8.8.8`},
-		{`ping`, `-i2`, `8.8.8.8`},
-		{`echo`, `foo bar`, `baz`},
-		{`echo`, `foo bar`, `baz`},
-		{`echo`, `foo bar`, `baz`},
-		{`foo`, `baz`, `qux`, `quux`, `bar`},
-		{`openurl`},
-		{`openurl`, `http://example.com`},
-		{`openurl`, `http://example.com`},
-		{`deploy`},
-	}
-	expects := [][]string{
-		{`ping`, `-c4`, `8.8.8.8`},
-		{`ping`, `-i2`, `8.8.8.8`, `-c4`},
-		{`/bin/sh`, `-c`, `ping -i2 8.8.8.8`},
-		{`/bin/echo`, `foo bar`, `baz`},
-		{`/bin/echo`, `foo bar baz`},
-		{`/bin/echo`, `foo\ bar baz`},
-		{`baz`, `qux`, `quux`},
-		{`pwopen`, `--no-sandbox`},
-		{`pwopen`, `--no-sandbox`, `http://example.com`},
-		nil,
-		nil,
-	}
-
-	for i, cfg := range cfgs {
-		command := testRuntimeCommand(cfg.testExecutionConfig, nil)
-		result := command.match(args[i])
-
-		if !reflect.DeepEqual(result, expects[i]) {
-			t.Errorf(
-				"Unexpected result for test#%v: expected=%v, actual=%v",
-				i+1,
-				expects[i],
-				result,
-			)
+func TestMatcherDoesNotInterpretKeywordSyntax(t *testing.T) {
+	for _, tc := range []struct{ keyword, text string }{
+		{`foo "bar baz"`, `foo "bar baz"`},
+		{`foo\ bar`, `"foo bar"`},
+	} {
+		matcher := NewMatcher(MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: tc.keyword}})
+		if _, ok := matcher.match(tc.text); ok {
+			t.Fatalf("keyword=%q unexpectedly matched %q", tc.keyword, tc.text)
 		}
 	}
 }
 
-func TestMatcherExpandsAllWildcards(t *testing.T) {
-	command := testRuntimeCommand(&testExecutionConfig{Keyword: "echo *", Command: "echo * *"}, nil)
-	if got, want := command.match([]string{"echo", "foo bar"}), []string{"echo", "foo bar", "foo bar"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("match() = %#v, want %#v", got, want)
-	}
-}
-
-func TestMatcherLeavesCommandWildcardsWithoutKeywordWildcard(t *testing.T) {
-	command := testRuntimeCommand(&testExecutionConfig{Keyword: "echo", Command: "echo *"}, nil)
-	if got, want := command.match([]string{"echo"}), []string{"echo", "*"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("match() = %#v, want %#v", got, want)
-	}
-}
-
-func TestMatcherDoesNotParseKeywordQuotes(t *testing.T) {
-	command := testRuntimeCommand(&testExecutionConfig{Keyword: `foo "bar baz"`, Command: "echo"}, nil)
-	if got := command.match([]string{"foo", "bar baz"}); got != nil {
-		t.Fatalf("match() = %#v, want nil", got)
-	}
-}
-
-func TestMatcherDoesNotParseKeywordBackslashes(t *testing.T) {
-	command := testRuntimeCommand(&testExecutionConfig{Keyword: `foo\ bar`, Command: "echo"}, nil)
-	if got := command.match([]string{"foo bar"}); got != nil {
-		t.Fatalf("match() = %#v, want nil", got)
+func TestMatcherArgumentBodyContinuesLastWildcard(t *testing.T) {
+	matcher := NewMatcher(MatcherConfig{RawMatcherConfig: RawMatcherConfig{Keyword: "todo *"}, InputBodyMode: InputBodyArgument})
+	for _, tc := range []struct {
+		text string
+		want []string
+	}{
+		{"todo\n本文", []string{"\n本文"}},
+		{"todo foo\n本文", []string{"foo\n本文"}},
+		{"todo foo bar\n本文\n", []string{"foo", "bar\n本文\n"}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			got, ok := matcher.match(tc.text)
+			if !ok || !got.HasWildcard || !slices.Equal(got.Wildcard, tc.want) || got.StdinText != "" {
+				t.Fatalf("match(%q) = %#v, %v; want %q", tc.text, got, ok, tc.want)
+			}
+		})
 	}
 }

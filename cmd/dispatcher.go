@@ -54,7 +54,7 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 		d.mu.Unlock()
 		return DispatchIgnored
 	}
-	parsed := input.ResolvedInput
+	parsed := input
 	target, ok, parseErr := dispatchPlan(parsed)
 	if !ok {
 		d.mu.Unlock()
@@ -73,9 +73,9 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 	}
 	switch target {
 	case DispatchRunner:
-		command, args := parsed.Commands[0].Command, parsed.Commands[0].Args
+		resolved := parsed.Commands[0]
 		d.mu.Unlock()
-		return runDirectCommand(command, args, input)
+		return runDirectCommand(resolved, input)
 	case DispatchExecutor:
 		d.startExecutorLocked(input)
 		d.mu.Unlock()
@@ -93,7 +93,7 @@ func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
 	}
 }
 
-func dispatchPlan(parsed *ResolvedInput) (target DispatchMode, accepted bool, parseError bool) {
+func dispatchPlan(parsed *CommandInput) (target DispatchMode, accepted bool, parseError bool) {
 	if parsed == nil || len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
 		return 0, false, false
 	}
@@ -103,11 +103,11 @@ func dispatchPlan(parsed *ResolvedInput) (target DispatchMode, accepted bool, pa
 	if len(parsed.Commands) > 1 && !allCommandsAllowedInChain(parsed.Commands) {
 		return 0, false, false
 	}
-	target, ok := parsed.DispatchTarget()
+	target, ok := dispatchTarget(parsed.Commands)
 	return target, ok, false
 }
 
-func resolvedInputExecutable(parsed *ResolvedInput) bool {
+func resolvedInputExecutable(parsed *CommandInput) bool {
 	_, ok, parseErr := dispatchPlan(parsed)
 	return ok && !parseErr
 }
@@ -143,19 +143,45 @@ func (d *CommandDispatcher) startExecutorLocked(input *CommandInput) {
 	}()
 }
 
-func runDirectCommand(command *Command, args []string, input *CommandInput) DispatchResult {
-	runnerArgs := args[1:]
-	directCmd := command.runner.CommandContext(context.Background(), args[0], runnerArgs...)
-	if command.config.Runner == RunnerStdinReply {
-		setter, ok := directCmd.(interface{ SetStdinTarget(*InteractiveStdin) })
-		if !ok || input.stdinTarget == nil {
+func runDirectCommand(resolved ResolvedCommand, input *CommandInput) DispatchResult {
+	directCmd := resolved.Command.runner.CommandContext(context.Background(), resolved.Wildcard, resolved.HasWildcard)
+	if setter, ok := directCmd.(interface{ SetStdinTarget(*InteractiveStdin) }); ok {
+		if input.stdinTarget == nil {
 			return DispatchIgnored
 		}
 		setter.SetStdinTarget(input.stdinTarget)
+	} else if input.stdinTarget != nil {
+		return DispatchIgnored
 	}
-	directCmd.SetStdin(strings.NewReader(input.Text))
+	directCmd.SetStdin(strings.NewReader(resolved.StdinText))
 	if directCmd.Run() != 0 {
 		return DispatchIgnored
 	}
 	return DispatchAccepted
+}
+
+func dispatchTarget(commands []ResolvedCommand) (DispatchMode, bool) {
+	target, found := DispatchQueue, false
+	for _, resolved := range commands {
+		if resolved.Command == nil {
+			continue
+		}
+		switch current := resolved.Command.config.Dispatch; current {
+		case DispatchQueue:
+			target = DispatchQueue
+		case DispatchExecutor:
+			if !found || target != DispatchQueue {
+				target = DispatchExecutor
+			}
+		case DispatchRunner:
+			if len(commands) != 1 {
+				return 0, false
+			}
+			return DispatchRunner, true
+		default:
+			return 0, false
+		}
+		found = true
+	}
+	return target, found
 }
