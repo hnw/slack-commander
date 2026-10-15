@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -304,7 +305,7 @@ func resolveConfig(cfg *Config) error {
 	if err := validateOpenAccess(cfg); err != nil {
 		validationErrors = append(validationErrors, err)
 	}
-	if containsString(cfg.AllowedUserIDs, "USLACKBOT") {
+	if slices.Contains(cfg.AllowedUserIDs, "USLACKBOT") {
 		validationErrors = append(validationErrors, errors.New("USLACKBOT cannot be used in allowed_user_ids; use accept_reminder for Slack Reminder messages"))
 	}
 	if len(validationErrors) > 0 {
@@ -398,20 +399,11 @@ func resolveAllowedIDs(value []string, inherited []string, name string) ([]strin
 		return resolved, nil
 	}
 	for _, id := range resolved {
-		if !containsString(inherited, id) {
+		if !slices.Contains(inherited, id) {
 			return nil, fmt.Errorf("%s value %q is not allowed by its parent", name, id)
 		}
 	}
 	return resolved, nil
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func validateOpenAccess(cfg *Config) error {
