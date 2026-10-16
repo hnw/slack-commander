@@ -59,7 +59,7 @@ command = "date"
 ### 3. 起動する
 
 ```console
-go build
+go build ./cmd/slack-commander
 ./slack-commander --config-file=config.toml
 ```
 
