@@ -1,0 +1,233 @@
+package command
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/mattn/go-shellwords"
+
+	"github.com/creack/pty"
+)
+
+// Cmd is an executable command abstraction for different runners.
+type Cmd interface {
+	SetStdin(r io.Reader)
+	SetStdout(w io.Writer)
+	SetStderr(w io.Writer)
+	Run() int
+}
+
+// CommandRunner creates Cmd instances for a given command.
+type CommandRunner interface {
+	CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd
+}
+
+type execRunner struct{ config RunnerConfig }
+
+// NewExecRunner returns a runner backed by os/exec.
+func NewExecRunner(config RunnerConfig) CommandRunner {
+	return &execRunner{config: config}
+}
+
+func (r *execRunner) CommandContext(ctx context.Context, wildcard []string, hasWildcard bool) Cmd {
+	args, err := buildCommandArgs(r.config.Command, hasWildcard, wildcard)
+	if err != nil {
+		return &execCmd{cmd: exec.CommandContext(ctx, ""), buildErr: err}
+	}
+	return &execCmd{cmd: exec.CommandContext(ctx, args[0], args[1:]...)} //nolint:gosec // G204 -- executing configured commands is the purpose of this runner.
+}
+
+type execCmd struct {
+	buildErr error
+	cmd      *exec.Cmd
+	tty      bool
+	stdout   io.Writer
+	stderr   io.Writer
+}
+
+type ttyInputWriter struct {
+	io.Writer
+}
+
+func (*ttyInputWriter) Close() error {
+	return nil
+}
+
+func (c *execCmd) SetStdin(r io.Reader) {
+	c.cmd.Stdin = r
+}
+
+func (c *execCmd) SetStdout(w io.Writer) {
+	c.stdout = w
+	c.cmd.Stdout = w
+}
+
+func (c *execCmd) SetStderr(w io.Writer) {
+	c.stderr = w
+	c.cmd.Stderr = w
+}
+
+func (c *execCmd) SetEnv(environment []string) {
+	base := c.cmd.Env
+	if base == nil {
+		base = os.Environ()
+	}
+	c.cmd.Env = mergeEnvironment(base, environment)
+}
+
+func (c *execCmd) SetTTY() {
+	c.tty = true
+}
+
+// Run executes the command and returns its exit code.
+// Exit code meanings follow the previous behavior:
+// - 0-255: actual exit code
+// - 127: failed to start or unknown error
+// - 143: terminated by signal or timeout
+func (c *execCmd) Run() int {
+	return c.run(execStdin{})
+}
+
+// RunWithStdin は Start 後、Wait を妨げない入力処理の接続に writer を渡す。
+// started は入力の完了を待たずに戻り、呼び出し側が endpoint を後始末する。
+func (c *execCmd) RunWithStdin(started func(io.WriteCloser)) int {
+	return c.run(execStdin{onStarted: started})
+}
+
+func (c *execCmd) run(stdin execStdin) int {
+	if c.buildErr != nil {
+		if c.stderr != nil {
+			_, _ = fmt.Fprint(c.stderr, c.buildErr)
+		}
+		return 127
+	}
+	if c.tty {
+		return c.runTTY(stdin)
+	}
+	if err := stdin.prepare(c.cmd); err != nil {
+		if c.cmd.Stderr != nil {
+			_, _ = fmt.Fprint(c.cmd.Stderr, err)
+		}
+		return 127
+	}
+	defer stdin.closeUnclaimed()
+	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.cmd.Cancel = func() error {
+		// 参考: http://makiuchi-d.github.io/2020/05/10/go-kill-child-process.ja.html
+		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM) // setpgidしたPGIDはPIDと等しい
+		time.Sleep(2 * time.Second)
+		return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	if err := c.cmd.Start(); err != nil {
+		if c.cmd.Stderr != nil {
+			_, _ = fmt.Fprintf(c.cmd.Stderr, "%v", err)
+		}
+		return 127
+	}
+
+	stdin.started()
+	return c.exitCode(c.cmd.Wait(), c.cmd.Stderr)
+}
+
+func (c *execCmd) runTTY(stdin execStdin) int {
+	defer stdin.closeUnclaimed()
+	c.cmd.Stdin = nil
+	c.cmd.Stdout = nil
+	c.cmd.Stderr = nil
+	c.cmd.Cancel = func() error {
+		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM)
+		time.Sleep(2 * time.Second)
+		return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	terminal, err := pty.StartWithSize(c.cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		if c.stderr != nil {
+			_, _ = fmt.Fprint(c.stderr, err)
+		}
+		return 127
+	}
+	defer func() { _ = terminal.Close() }()
+
+	stdout := c.stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	outputDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stdout, terminal)
+		close(outputDone)
+	}()
+
+	if stdin.onStarted != nil {
+		stdin.unclaimed = &ttyInputWriter{Writer: terminal}
+		stdin.started()
+	}
+	err = c.cmd.Wait()
+	_ = terminal.Close()
+	<-outputDone
+	return c.exitCode(err, c.stderr)
+}
+
+func (c *execCmd) exitCode(err error, stderr io.Writer) int {
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == -1 {
+				return 143
+			}
+			return exitError.ExitCode()
+		}
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error: %v", err)
+		}
+		return 127
+	}
+	return c.cmd.ProcessState.ExitCode()
+}
+
+var wildcardReplacer = strings.NewReplacer(
+	"\n", "\\\n",
+	`\`, `\\`,
+	` `, `\ `,
+	"\t", "\\\t",
+	"`", "\\`",
+	`(`, `\(`,
+	`)`, `\)`,
+	`"`, `\"`,
+	`'`, `\'`,
+	`;`, `\;`,
+	`&`, `\&`,
+	`|`, `\|`,
+	`<`, `\<`,
+	`>`, `\>`,
+)
+
+func buildCommandArgs(line string, hasWildcard bool, wildcard []string) ([]string, error) {
+	if hasWildcard {
+		line = expandWildcard(line, wildcard)
+	}
+	parser := shellwords.NewParser()
+	args, err := parser.Parse(line)
+	if err != nil {
+		return nil, err
+	}
+	if parser.Position >= 0 || len(args) == 0 {
+		return nil, fmt.Errorf("invalid command: %q", line)
+	}
+	return args, nil
+}
+
+func expandWildcard(line string, wildcard []string) string {
+	replaced := make([]string, len(wildcard))
+	for i, v := range wildcard {
+		replaced[i] = wildcardReplacer.Replace(v)
+	}
+	return strings.ReplaceAll(line, "*", strings.Join(replaced, " "))
+}

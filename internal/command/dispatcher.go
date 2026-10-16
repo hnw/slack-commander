@@ -1,0 +1,187 @@
+package command
+
+import (
+	"context"
+	"strings"
+	"sync"
+)
+
+// DispatchResult はcommandのdispatch結果を表す。
+type DispatchResult int
+
+const (
+	// DispatchIgnored は入力を実行先へ渡さなかったことを表す。
+	DispatchIgnored DispatchResult = iota
+	// DispatchAccepted は入力が実行先へ渡されたことを表す。
+	DispatchAccepted
+	// DispatchQueueFull はqueueが満杯で入力を受け付けなかったことを表す。
+	DispatchQueueFull
+)
+
+// CommandDispatcher はmatch済みcommandの実行先を選ぶ。
+type CommandDispatcher struct {
+	mu                sync.Mutex
+	closed            bool
+	ctx               context.Context
+	executor          *Executor
+	stdinStore        *StdinStore
+	conversationLocks *ConversationLocks
+	enqueue           func(*CommandInput) bool
+	asyncWG           sync.WaitGroup
+}
+
+// NewCommandDispatcher はcommandのqueueと非同期実行を管理する。
+func NewCommandDispatcher(
+	ctx context.Context,
+	executor *Executor,
+	stdinStore *StdinStore,
+	conversationLocks *ConversationLocks,
+	enqueue func(*CommandInput) bool,
+) *CommandDispatcher {
+	return &CommandDispatcher{
+		ctx:               ctx,
+		executor:          executor,
+		stdinStore:        stdinStore,
+		conversationLocks: conversationLocks,
+		enqueue:           enqueue,
+	}
+}
+
+// Dispatch routes a resolved input according to its dispatch target.
+func (d *CommandDispatcher) Dispatch(input *CommandInput) DispatchResult {
+	d.mu.Lock()
+	if d.closed || input == nil {
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
+	parsed := input
+	target, ok, parseErr := dispatchPlan(parsed)
+	if !ok {
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
+	if parseErr {
+		handler := parsed.Commands[0].Command.output
+		conversation, message, text := input.ConversationID, input.MessageID, parsed.ParseErr.Error()
+		d.asyncWG.Add(1)
+		go func() {
+			defer d.asyncWG.Done()
+			handler.SystemError(conversation, message, text, SystemErrorParse)
+		}()
+		d.mu.Unlock()
+		return DispatchAccepted
+	}
+	switch target {
+	case DispatchRunner:
+		resolved := parsed.Commands[0]
+		d.mu.Unlock()
+		return runDirectCommand(resolved, input)
+	case DispatchExecutor:
+		d.startExecutorLocked(input)
+		d.mu.Unlock()
+		return DispatchAccepted
+	case DispatchQueue:
+		if d.enqueue == nil || !d.enqueue(input) {
+			d.mu.Unlock()
+			return DispatchQueueFull
+		}
+		d.mu.Unlock()
+		return DispatchAccepted
+	default:
+		d.mu.Unlock()
+		return DispatchIgnored
+	}
+}
+
+func dispatchPlan(parsed *CommandInput) (target DispatchMode, accepted bool, parseError bool) {
+	if parsed == nil || len(parsed.Commands) == 0 || parsed.Commands[0].Command == nil {
+		return 0, false, false
+	}
+	if parsed.ParseErr != nil {
+		return 0, true, true
+	}
+	if len(parsed.Commands) > 1 && !allCommandsAllowedInChain(parsed.Commands) {
+		return 0, false, false
+	}
+	target, ok := dispatchTarget(parsed.Commands)
+	return target, ok, false
+}
+
+func resolvedInputExecutable(parsed *CommandInput) bool {
+	_, ok, parseErr := dispatchPlan(parsed)
+	return ok && !parseErr
+}
+
+func allCommandsAllowedInChain(commands []ResolvedCommand) bool {
+	for _, resolved := range commands {
+		if resolved.Command != nil && !resolved.Command.config.AllowInChain {
+			return false
+		}
+	}
+	return true
+}
+
+// Close prevents subsequent dispatches from accepting new work.
+func (d *CommandDispatcher) Close() {
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
+}
+
+// Wait blocks until all asynchronous work accepted before Close has completed.
+func (d *CommandDispatcher) Wait() {
+	d.asyncWG.Wait()
+}
+
+func (d *CommandDispatcher) startExecutorLocked(input *CommandInput) {
+	d.asyncWG.Add(1)
+	go func() {
+		defer d.asyncWG.Done()
+		unlock := d.conversationLocks.Lock(input.ConversationID)
+		defer unlock()
+		d.executor.Execute(d.ctx, input, d.stdinStore.Lifecycle(input.ConversationID))
+	}()
+}
+
+func runDirectCommand(resolved ResolvedCommand, input *CommandInput) DispatchResult {
+	directCmd := resolved.Command.runner.CommandContext(context.Background(), resolved.Wildcard, resolved.HasWildcard)
+	if setter, ok := directCmd.(interface{ SetStdinTarget(*InteractiveStdin) }); ok {
+		if input.stdinTarget == nil {
+			return DispatchIgnored
+		}
+		setter.SetStdinTarget(input.stdinTarget)
+	} else if input.stdinTarget != nil {
+		return DispatchIgnored
+	}
+	directCmd.SetStdin(strings.NewReader(resolved.StdinText))
+	if directCmd.Run() != 0 {
+		return DispatchIgnored
+	}
+	return DispatchAccepted
+}
+
+func dispatchTarget(commands []ResolvedCommand) (DispatchMode, bool) {
+	target, found := DispatchQueue, false
+	for _, resolved := range commands {
+		if resolved.Command == nil {
+			continue
+		}
+		switch current := resolved.Command.config.Dispatch; current {
+		case DispatchQueue:
+			target = DispatchQueue
+		case DispatchExecutor:
+			if !found || target != DispatchQueue {
+				target = DispatchExecutor
+			}
+		case DispatchRunner:
+			if len(commands) != 1 {
+				return 0, false
+			}
+			return DispatchRunner, true
+		default:
+			return 0, false
+		}
+		found = true
+	}
+	return target, found
+}

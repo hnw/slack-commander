@@ -7,7 +7,7 @@ slack-commanderは、Slackからの入力受付、コマンドの照合、実行
 
 | 型または処理 | 責務 | 所有する主な状態 |
 | --- | --- | --- |
-| `SlackListener` | Slackイベントの受信、入力の正規化、許可設定に基づく候補の絞り込み | botの識別情報は現在、`pubsub`のパッケージ変数に保持 |
+| `SlackListener` | Slackイベントの受信、入力の正規化、許可設定に基づく候補の絞り込み | botの識別情報は現在、`messaging`のパッケージ変数に保持 |
 | `CommandSet` | 入力の解析と、候補の中からのコマンド照合 | 照合対象となる`Command`の一覧 |
 | `Matcher` | 入力本文の解釈とキーワード照合 | 本文モードとキーワード |
 | `CommandRunner` | wildcardの展開と実行形式への変換 | コマンドごとのRunnerConfig |
@@ -34,7 +34,7 @@ flowchart TD
     router --> resolve["CommandSet.Resolve：解析と照合"]
     resolve --> dispatcher["CommandDispatcher"]
     dispatcher -->|構文エラー| parseOutput["エラー出力"]
-    parseOutput --> commandOutput["cmd.CommandOutput"]
+    parseOutput --> commandOutput["command.CommandOutput"]
     dispatcher -->|実行対象外| ignored["入力を無視"]
     dispatcher -->|exec / composeを含む入力| queue["commandQueue"]
     queue --> workers["ワーカー"]
@@ -45,7 +45,7 @@ flowchart TD
     dispatcher -->|標準入力への返信| direct["選択済みの接続先へ同期的に転送"]
     executor --> commandOutput
     commandOutput --> slackCommandOutput["コマンド別の出力設定"]
-    subgraph pipeline["pubsub.SlackOutput"]
+    subgraph pipeline["messaging.SlackOutput"]
         slackCommandOutput --> output["非公開の出力キュー"]
         output --> writer["slackWriter：単一の送信処理"]
     end
@@ -120,11 +120,11 @@ Routerはチェーンの現在位置や実行条件を管理しません。
 
 `SlackOutput`は出力キューを所有します。
 複数のコマンドから届く出力を、単一の送信処理が順にSlackへ投稿します。
-出力イベントの型`slackOutputEvent`は`pubsub`内に閉じており、実行側は`cmd.CommandOutput`を通じて出力します。
+出力イベントの型`slackOutputEvent`は`messaging`内に閉じており、実行側は`command.CommandOutput`を通じて出力します。
 
 `slackOutputStream`はバッファリングと一定時間ごとの送信を担当します。
 `rawWriter`はテキストとsixel画像の分離を担当します。
-どちらも`pubsub`内の非公開の補助型です。
+どちらも`messaging`内の非公開の補助型です。
 
 構文エラーは、システム用の表示設定と`ExitCode=2`を持つ出力イベントとして送ります。
 実行前の入力エラーなので、実行開始と終了を表す`Spawned`や`Finished`は送りません。

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -30,21 +30,21 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			requests := make(chan *cmd.CommandInput, 10)
+			requests := make(chan *command.CommandInput, 10)
 
-			stdinStore := &cmd.StdinStore{}
-			stdinReply := cmd.NewCommand(cmd.CommandConfig{Index: 2, ParserConfig: cmd.ParserConfig{}, Dispatch: cmd.DispatchRunner}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}, InputBodyMode: cmd.InputBodyRawStdin}), cmd.NewStdinReplyRunner(), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-			oneshot := cmd.NewCommand(cmd.CommandConfig{Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "quick"}}), cmd.NewExecRunner(cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/true"}}), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+			stdinStore := &command.StdinStore{}
+			stdinReply := command.NewCommand(command.CommandConfig{Index: 2, ParserConfig: command.ParserConfig{}, Dispatch: command.DispatchRunner}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "*"}, InputBodyMode: command.InputBodyRawStdin}), command.NewStdinReplyRunner(), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+			oneshot := command.NewCommand(command.CommandConfig{Index: 0, ParserConfig: command.ParserConfig{AllowInChain: true}}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "quick"}}), command.NewExecRunner(command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "/bin/true"}}), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
 			commandLine := `/bin/sh -c 'IFS= read -r first; printf "ready\n"; IFS= read -r second; printf "%s|%s\n" "$first" "$second"'`
 			if !strings.Contains(rootText, "\n") {
 				commandLine = strings.Replace(commandLine, "IFS= read -r first", "first=old", 1)
 			}
-			root := cmd.NewCommand(cmd.CommandConfig{Index: 1, ParserConfig: cmd.ParserConfig{AllowInChain: true}, ExecutorConfig: cmd.ExecutorConfig{Timeout: 10 * time.Second, InteractiveStdin: true}}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "agent"}}), cmd.NewExecRunner(cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: commandLine}}), cmd.NewCommandSet([]*cmd.Command{stdinReply}), testOutputFactory(outputs)(pubsub.ReplyConfig{}, pubsub.DefaultOutputFlushInterval))
-			commands := cmd.NewCommandSet([]*cmd.Command{oneshot, root})
+			root := command.NewCommand(command.CommandConfig{Index: 1, ParserConfig: command.ParserConfig{AllowInChain: true}, ExecutorConfig: command.ExecutorConfig{Timeout: 10 * time.Second, InteractiveStdin: true}}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "agent"}}), command.NewExecRunner(command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: commandLine}}), command.NewCommandSet([]*command.Command{stdinReply}), testOutputFactory(outputs)(messaging.ReplyConfig{}, messaging.DefaultOutputFlushInterval))
+			commands := command.NewCommandSet([]*command.Command{oneshot, root})
 			var queuedCount atomic.Int64
 			queued := make(chan struct{}, 10)
-			conversationLocks := &cmd.ConversationLocks{}
-			router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+			conversationLocks := &command.ConversationLocks{}
+			router := command.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *command.CommandInput) bool {
 				queuedCount.Add(1)
 				select {
 				case requests <- input:
@@ -56,12 +56,12 @@ func TestSlackThreadStdinWithConcurrentExecWorkers(t *testing.T) {
 			}), 1)
 			var workers sync.WaitGroup
 
-			startWorkers(ctx, 2, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
+			startWorkers(ctx, 2, requests, stdinStore, conversationLocks, command.NewExecutor(), &workers)
 			listenerDone := make(chan struct{})
 			go func() {
-				if err := pubsub.SlackListener(ctx, smc, pubsub.Config{
+				if err := messaging.SlackListener(ctx, smc, messaging.Config{
 					AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"},
-					ListenerConfigs: []pubsub.ListenerConfig{{CommandIndex: 0, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 1, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 2, IsReply: true, RawListenerConfig: pubsub.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}},
+					ListenerConfigs: []messaging.ListenerConfig{{CommandIndex: 0, RawListenerConfig: messaging.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 1, RawListenerConfig: messaging.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}, {CommandIndex: 2, IsReply: true, RawListenerConfig: messaging.RawListenerConfig{AllowedUserIDs: []string{"U"}, AllowedChannelIDs: []string{"C"}}}},
 				}, router); err != nil {
 					t.Errorf("SlackListener() error = %v", err)
 				}

@@ -3,13 +3,13 @@ package main
 import (
 	"time"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 )
 
 type observedCommandOutput struct {
-	ConversationID cmd.ConversationID
-	MessageID      cmd.MessageID
+	ConversationID command.ConversationID
+	MessageID      command.MessageID
 	Text           string
 	IsErrOut       bool
 	Spawned        bool
@@ -19,8 +19,10 @@ type observedCommandOutput struct {
 
 type testCommandOutput struct{ events chan *observedCommandOutput }
 
-func testOutputFactory(events chan *observedCommandOutput) func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput {
-	return func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput { return &testCommandOutput{events: events} }
+func testOutputFactory(events chan *observedCommandOutput) func(messaging.ReplyConfig, time.Duration) command.CommandOutput {
+	return func(messaging.ReplyConfig, time.Duration) command.CommandOutput {
+		return &testCommandOutput{events: events}
+	}
 }
 
 type testCommandStream struct{ emit func(string) }
@@ -31,31 +33,31 @@ func (s *testCommandStream) Write(data []byte) (int, error) {
 }
 func (*testCommandStream) Flush() error { return nil }
 
-func (o *testCommandOutput) Stdout(c cmd.ConversationID, m cmd.MessageID) cmd.OutputStream {
+func (o *testCommandOutput) Stdout(c command.ConversationID, m command.MessageID) command.OutputStream {
 	return o.stream(c, m, false)
 }
 
-func (o *testCommandOutput) Stderr(c cmd.ConversationID, m cmd.MessageID) cmd.OutputStream {
+func (o *testCommandOutput) Stderr(c command.ConversationID, m command.MessageID) command.OutputStream {
 	return o.stream(c, m, true)
 }
 
-func (o *testCommandOutput) stream(c cmd.ConversationID, m cmd.MessageID, stderr bool) cmd.OutputStream {
+func (o *testCommandOutput) stream(c command.ConversationID, m command.MessageID, stderr bool) command.OutputStream {
 	return &testCommandStream{emit: func(text string) {
 		o.events <- &observedCommandOutput{ConversationID: c, MessageID: m, Text: text, IsErrOut: stderr}
 	}}
 }
 
-func (o *testCommandOutput) Start(c cmd.ConversationID, m cmd.MessageID) {
+func (o *testCommandOutput) Start(c command.ConversationID, m command.MessageID) {
 	o.events <- &observedCommandOutput{ConversationID: c, MessageID: m, Spawned: true}
 }
 
-func (o *testCommandOutput) Finish(c cmd.ConversationID, m cmd.MessageID, code int) {
+func (o *testCommandOutput) Finish(c command.ConversationID, m command.MessageID, code int) {
 	o.events <- &observedCommandOutput{ConversationID: c, MessageID: m, Finished: true, ExitCode: code}
 }
 
-func (o *testCommandOutput) SystemError(c cmd.ConversationID, m cmd.MessageID, text string, kind cmd.SystemErrorKind) {
+func (o *testCommandOutput) SystemError(c command.ConversationID, m command.MessageID, text string, kind command.SystemErrorKind) {
 	code := 0
-	if kind == cmd.SystemErrorParse {
+	if kind == command.SystemErrorParse {
 		code = 2
 	}
 	o.events <- &observedCommandOutput{ConversationID: c, MessageID: m, Text: text, IsErrOut: true, ExitCode: code}

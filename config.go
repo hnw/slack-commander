@@ -11,11 +11,11 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 )
 
-type PubSubConfig = pubsub.Config // TOMLデコード対象のためexportedにする
+type PubSubConfig = messaging.Config // TOMLデコード対象のためexportedにする
 
 // Duration decodes Go duration syntax from TOML strings.
 type Duration time.Duration
@@ -41,20 +41,20 @@ type Config struct {
 }
 
 type resolvedCommandConfig struct {
-	cmd.CommandConfig
-	cmd.MatcherConfig
-	cmd.RunnerConfig
-	ReplyConfig         pubsub.ReplyConfig
+	command.CommandConfig
+	command.MatcherConfig
+	command.RunnerConfig
+	ReplyConfig         messaging.ReplyConfig
 	OutputFlushInterval time.Duration
 	Replies             []*resolvedCommandConfig
 }
 
 type RawCommandConfig struct {
-	cmd.RawMatcherConfig
-	cmd.RawRunnerConfig
+	command.RawMatcherConfig
+	command.RawRunnerConfig
 	RawExecutorConfig
-	pubsub.ReplyConfig
-	pubsub.RawListenerConfig
+	messaging.ReplyConfig
+	messaging.RawListenerConfig
 	Interaction         string    `toml:"interaction"`
 	OutputFlushInterval *Duration `toml:"output_flush_interval"`
 	Replies             []*RawCommandConfig
@@ -110,8 +110,8 @@ func formatTOMLError(err error) error {
 	return err
 }
 
-func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawCommandConfig) *pubsub.ReplyConfig {
-	replyConfig := &pubsub.ReplyConfig{
+func resolveReplyConfig(parent messaging.ReplyConfig, reply *RawCommandConfig) *messaging.ReplyConfig {
+	replyConfig := &messaging.ReplyConfig{
 		Username:       parent.Username,
 		IconEmoji:      parent.IconEmoji,
 		IconURL:        parent.IconURL,
@@ -136,17 +136,17 @@ func resolveReplyConfig(parent pubsub.ReplyConfig, reply *RawCommandConfig) *pub
 	return replyConfig
 }
 
-func buildCommandSet(configs []*resolvedCommandConfig, factory cmd.RunnerFactory, newOutput func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput) *cmd.CommandSet {
-	commands := make([]*cmd.Command, 0, len(configs))
+func buildCommandSet(configs []*resolvedCommandConfig, factory command.RunnerFactory, newOutput func(messaging.ReplyConfig, time.Duration) command.CommandOutput) *command.CommandSet {
+	commands := make([]*command.Command, 0, len(configs))
 	for _, config := range configs {
 		commands = append(commands, buildCommand(config, factory, newOutput))
 	}
-	return cmd.NewCommandSet(commands)
+	return command.NewCommandSet(commands)
 }
 
-func buildCommand(config *resolvedCommandConfig, factory cmd.RunnerFactory, newOutput func(pubsub.ReplyConfig, time.Duration) cmd.CommandOutput) *cmd.Command {
+func buildCommand(config *resolvedCommandConfig, factory command.RunnerFactory, newOutput func(messaging.ReplyConfig, time.Duration) command.CommandOutput) *command.Command {
 	replies := buildCommandSet(config.Replies, factory, newOutput)
-	return cmd.NewCommand(config.CommandConfig, cmd.NewMatcher(config.MatcherConfig), factory(config.RunnerConfig), replies, newOutput(config.ReplyConfig, config.OutputFlushInterval))
+	return command.NewCommand(config.CommandConfig, command.NewMatcher(config.MatcherConfig), factory(config.RunnerConfig), replies, newOutput(config.ReplyConfig, config.OutputFlushInterval))
 }
 
 func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.Duration {
@@ -156,7 +156,7 @@ func resolveOutputFlushInterval(value *Duration, inherited time.Duration) time.D
 	return inherited
 }
 
-func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.ReplyConfig, inheritedExecutorConfig cmd.ExecutorConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
+func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig messaging.ReplyConfig, inheritedExecutorConfig command.ExecutorConfig, inheritedOutputFlushInterval time.Duration, commandNumber int) (*resolvedCommandConfig, error) {
 	target := fmt.Sprintf("command keyword '%s'", raw.Keyword)
 	if strings.TrimSpace(raw.Keyword) == "" {
 		target = fmt.Sprintf("command #%d", commandNumber)
@@ -168,8 +168,8 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	matcherConfig := cmd.MatcherConfig{RawMatcherConfig: raw.RawMatcherConfig}
-	runnerConfig := cmd.RunnerConfig{RawRunnerConfig: raw.RawRunnerConfig}
+	matcherConfig := command.MatcherConfig{RawMatcherConfig: raw.RawMatcherConfig}
+	runnerConfig := command.RunnerConfig{RawRunnerConfig: raw.RawRunnerConfig}
 	if _, err := normalizeRunner(&runnerConfig); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
@@ -179,10 +179,10 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	if runnerConfig.Runner == cmd.RunnerHTTP && interaction == cmd.InteractionStdin {
-		return nil, fmt.Errorf("%s: http runner does not support interaction %q; use %q or %q", target, cmd.InteractionStdin, cmd.InteractionOneshot, cmd.InteractionCommand)
+	if runnerConfig.Runner == command.RunnerHTTP && interaction == command.InteractionStdin {
+		return nil, fmt.Errorf("%s: http runner does not support interaction %q; use %q or %q", target, command.InteractionStdin, command.InteractionOneshot, command.InteractionCommand)
 	}
-	config := &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: cmd.CommandConfig{ParserConfig: parserConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolveReplyConfig(inheritedReplyConfig, raw)}
+	config := &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: command.CommandConfig{ParserConfig: parserConfig, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolveReplyConfig(inheritedReplyConfig, raw)}
 	configuredReplies := make([]*resolvedCommandConfig, 0, len(raw.Replies))
 	for i, reply := range raw.Replies {
 		resolved, err := resolveReplyCommandConfig(config, reply, i+1)
@@ -192,15 +192,15 @@ func resolveCommandConfig(raw *RawCommandConfig, inheritedReplyConfig pubsub.Rep
 		configuredReplies = append(configuredReplies, resolved)
 	}
 	switch interaction {
-	case cmd.InteractionCommand:
+	case command.InteractionCommand:
 		config.Replies = configuredReplies
-	case cmd.InteractionStdin:
+	case command.InteractionStdin:
 		config.Replies = []*resolvedCommandConfig{{
-			MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}, InputBodyMode: cmd.InputBodyRawStdin},
-			RunnerConfig:  cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerStdinReply}},
-			CommandConfig: cmd.CommandConfig{
+			MatcherConfig: command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "*"}, InputBodyMode: command.InputBodyRawStdin},
+			RunnerConfig:  command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Runner: command.RunnerStdinReply}},
+			CommandConfig: command.CommandConfig{
 				ExecutorConfig: executorConfig,
-				Dispatch:       cmd.DispatchRunner,
+				Dispatch:       command.DispatchRunner,
 			}, ReplyConfig: config.ReplyConfig, OutputFlushInterval: config.OutputFlushInterval,
 		}}
 	}
@@ -218,8 +218,8 @@ func resolveReplyCommandConfig(parent *resolvedCommandConfig, raw *RawCommandCon
 	if len(raw.Replies) > 0 {
 		return nil, fmt.Errorf("%s: nested replies are not supported", target)
 	}
-	matcherConfig := cmd.MatcherConfig{RawMatcherConfig: raw.RawMatcherConfig}
-	runnerConfig := cmd.RunnerConfig{RawRunnerConfig: raw.RawRunnerConfig}
+	matcherConfig := command.MatcherConfig{RawMatcherConfig: raw.RawMatcherConfig}
+	runnerConfig := command.RunnerConfig{RawRunnerConfig: raw.RawRunnerConfig}
 	if runnerConfig.Runner == "" {
 		runnerConfig.Runner = parent.Runner
 	}
@@ -236,17 +236,17 @@ func resolveReplyCommandConfig(parent *resolvedCommandConfig, raw *RawCommandCon
 	if err := validateCommandDefinition(matcherConfig, runnerConfig, executorConfig, outputFlushInterval); err != nil {
 		return nil, fmt.Errorf("%s: %w", target, err)
 	}
-	return &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: cmd.CommandConfig{ParserConfig: cmd.ParserConfig{AllowInChain: false}, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolvedReplyConfig}, nil
+	return &resolvedCommandConfig{MatcherConfig: matcherConfig, RunnerConfig: runnerConfig, CommandConfig: command.CommandConfig{ParserConfig: command.ParserConfig{AllowInChain: false}, ExecutorConfig: executorConfig, Dispatch: commandDispatch(runnerConfig.Runner)}, OutputFlushInterval: outputFlushInterval, ReplyConfig: *resolvedReplyConfig}, nil
 }
 
-func commandDispatch(runner string) cmd.DispatchMode {
-	if runner == cmd.RunnerHTTP {
-		return cmd.DispatchExecutor
+func commandDispatch(runner string) command.DispatchMode {
+	if runner == command.RunnerHTTP {
+		return command.DispatchExecutor
 	}
-	return cmd.DispatchQueue
+	return command.DispatchQueue
 }
 
-func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.ExecutorConfig {
+func resolveExecutorConfig(base command.ExecutorConfig, raw RawExecutorConfig) command.ExecutorConfig {
 	if raw.Timeout != nil {
 		base.Timeout = time.Duration(*raw.Timeout)
 	}
@@ -259,27 +259,27 @@ func resolveExecutorConfig(base cmd.ExecutorConfig, raw RawExecutorConfig) cmd.E
 	return base
 }
 
-func resolveInteraction(interaction string, executorConfig cmd.ExecutorConfig) (cmd.ParserConfig, cmd.InputBodyMode, cmd.ExecutorConfig) {
-	parserConfig := cmd.ParserConfig{}
+func resolveInteraction(interaction string, executorConfig command.ExecutorConfig) (command.ParserConfig, command.InputBodyMode, command.ExecutorConfig) {
+	parserConfig := command.ParserConfig{}
 	switch interaction {
-	case cmd.InteractionStdin:
+	case command.InteractionStdin:
 		parserConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = true
-		return parserConfig, cmd.InputBodyStdin, executorConfig
-	case cmd.InteractionCommand:
+		return parserConfig, command.InputBodyStdin, executorConfig
+	case command.InteractionCommand:
 		parserConfig.AllowInChain = false
 		executorConfig.InteractiveStdin = false
-		return parserConfig, cmd.InputBodyArgument, executorConfig
+		return parserConfig, command.InputBodyArgument, executorConfig
 	default:
 		parserConfig.AllowInChain = true
 		executorConfig.InteractiveStdin = false
-		return parserConfig, cmd.InputBodyStdin, executorConfig
+		return parserConfig, command.InputBodyStdin, executorConfig
 	}
 }
 
 func resolveConfig(cfg *Config) error {
 	var validationErrors []error
-	executorConfig := resolveExecutorConfig(cmd.ExecutorConfig{Timeout: defaultTimeout}, RawExecutorConfig{Timeout: cfg.Timeout})
+	executorConfig := resolveExecutorConfig(command.ExecutorConfig{Timeout: defaultTimeout}, RawExecutorConfig{Timeout: cfg.Timeout})
 	if err := validateExecutorDurations(executorConfig); err != nil {
 		validationErrors = append(validationErrors, err)
 	}
@@ -297,7 +297,7 @@ func resolveConfig(cfg *Config) error {
 	}
 	outputFlushInterval := resolveOutputFlushInterval(
 		cfg.OutputFlushInterval,
-		pubsub.DefaultOutputFlushInterval,
+		messaging.DefaultOutputFlushInterval,
 	)
 	if outputFlushInterval < 0 {
 		validationErrors = append(validationErrors, errors.New("output_flush_interval must be >= 0"))
@@ -313,8 +313,8 @@ func resolveConfig(cfg *Config) error {
 	}
 
 	cfg.commandConfigs = make([]*resolvedCommandConfig, 0, len(cfg.Commands))
-	cfg.ListenerConfigs = make([]pubsub.ListenerConfig, 0)
-	listenerDefaults := pubsub.RawListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
+	cfg.ListenerConfigs = make([]messaging.ListenerConfig, 0)
+	listenerDefaults := messaging.RawListenerConfig{AllowedUserIDs: cfg.AllowedUserIDs, AllowedChannelIDs: cfg.AllowedChannelIDs}
 	nextCommandIndex := 0
 	for i, c := range cfg.Commands {
 		resolved, err := resolveCommandConfig(c, cfg.ReplyConfig, executorConfig, outputFlushInterval, i+1)
@@ -322,7 +322,7 @@ func resolveConfig(cfg *Config) error {
 			validationErrors = append(validationErrors, err)
 			continue
 		}
-		var listeners []pubsub.ListenerConfig
+		var listeners []messaging.ListenerConfig
 		next, err := assignCommandIndexes(c, resolved, listenerDefaults, nextCommandIndex, &listeners)
 		if err != nil {
 			validationErrors = append(validationErrors, err)
@@ -345,16 +345,16 @@ func formatValidationErrors(validationErrors []error) error {
 	return fmt.Errorf("invalid configuration:\n%w", errors.Join(validationErrors...))
 }
 
-func assignCommandIndexes(raw *RawCommandConfig, resolved *resolvedCommandConfig, inherited pubsub.RawListenerConfig, next int, flat *[]pubsub.ListenerConfig) (int, error) {
+func assignCommandIndexes(raw *RawCommandConfig, resolved *resolvedCommandConfig, inherited messaging.RawListenerConfig, next int, flat *[]messaging.ListenerConfig) (int, error) {
 	resolved.Index = next
 	listenerConfig, err := resolveListenerConfig(raw.RawListenerConfig, inherited)
 	if err != nil {
 		return next, fmt.Errorf("command keyword '%s': %w", raw.Keyword, err)
 	}
-	*flat = append(*flat, pubsub.ListenerConfig{CommandIndex: next, RawListenerConfig: listenerConfig})
+	*flat = append(*flat, messaging.ListenerConfig{CommandIndex: next, RawListenerConfig: listenerConfig})
 	next++
 
-	resolvedReplyACLs := make([]pubsub.RawListenerConfig, len(raw.Replies))
+	resolvedReplyACLs := make([]messaging.RawListenerConfig, len(raw.Replies))
 	for i, rawReply := range raw.Replies {
 		resolvedReplyACLs[i], err = resolveListenerConfig(rawReply.RawListenerConfig, listenerConfig)
 		if err != nil {
@@ -370,22 +370,22 @@ func assignCommandIndexes(raw *RawCommandConfig, resolved *resolvedCommandConfig
 			replyACL = resolvedReplyACLs[i]
 		}
 		reply.Index = next
-		*flat = append(*flat, pubsub.ListenerConfig{CommandIndex: next, IsReply: true, RawListenerConfig: replyACL})
+		*flat = append(*flat, messaging.ListenerConfig{CommandIndex: next, IsReply: true, RawListenerConfig: replyACL})
 		next++
 	}
 	return next, nil
 }
 
-func resolveListenerConfig(raw, inherited pubsub.RawListenerConfig) (pubsub.RawListenerConfig, error) {
-	resolved := pubsub.RawListenerConfig{AcceptReminder: raw.AcceptReminder}
+func resolveListenerConfig(raw, inherited messaging.RawListenerConfig) (messaging.RawListenerConfig, error) {
+	resolved := messaging.RawListenerConfig{AcceptReminder: raw.AcceptReminder}
 	var err error
 	resolved.AllowedUserIDs, err = resolveAllowedIDs(raw.AllowedUserIDs, inherited.AllowedUserIDs, "allowed_user_ids")
 	if err != nil {
-		return pubsub.RawListenerConfig{}, err
+		return messaging.RawListenerConfig{}, err
 	}
 	resolved.AllowedChannelIDs, err = resolveAllowedIDs(raw.AllowedChannelIDs, inherited.AllowedChannelIDs, "allowed_channel_ids")
 	if err != nil {
-		return pubsub.RawListenerConfig{}, err
+		return messaging.RawListenerConfig{}, err
 	}
 	return resolved, nil
 }
@@ -420,16 +420,16 @@ func openAccessError() error {
 	)
 }
 
-func validateReplyConfig(cfg *pubsub.ReplyConfig) error {
+func validateReplyConfig(cfg *messaging.ReplyConfig) error {
 	switch cfg.OutputFormat {
-	case "", pubsub.OutputFormatPlain, pubsub.OutputFormatMonospaced, pubsub.OutputFormatMarkdown:
+	case "", messaging.OutputFormatPlain, messaging.OutputFormatMonospaced, messaging.OutputFormatMarkdown:
 		return nil
 	default:
-		return fmt.Errorf("unknown output_format %q; valid values are %q, %q, and %q", cfg.OutputFormat, pubsub.OutputFormatPlain, pubsub.OutputFormatMonospaced, pubsub.OutputFormatMarkdown)
+		return fmt.Errorf("unknown output_format %q; valid values are %q, %q, and %q", cfg.OutputFormat, messaging.OutputFormatPlain, messaging.OutputFormatMonospaced, messaging.OutputFormatMarkdown)
 	}
 }
 
-func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.RunnerConfig, executorConfig cmd.ExecutorConfig, outputFlushInterval time.Duration) error {
+func validateCommandDefinition(matcher command.MatcherConfig, runnerConfig command.RunnerConfig, executorConfig command.ExecutorConfig, outputFlushInterval time.Duration) error {
 	if strings.TrimSpace(matcher.Keyword) == "" {
 		return errors.New("keyword is required")
 	}
@@ -446,10 +446,10 @@ func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.Runne
 	if err := validateTTY(executorConfig); err != nil {
 		return err
 	}
-	if executorConfig.TTY && runner == cmd.RunnerHTTP {
+	if executorConfig.TTY && runner == command.RunnerHTTP {
 		return errors.New("tty is not supported for http runner")
 	}
-	if runner != cmd.RunnerHTTP {
+	if runner != command.RunnerHTTP {
 		if strings.TrimSpace(runnerConfig.Command) == "" {
 			return errors.New("command is required")
 		}
@@ -467,7 +467,7 @@ func validateCommandDefinition(matcher cmd.MatcherConfig, runnerConfig cmd.Runne
 	return nil
 }
 
-func validateExecutorDurations(config cmd.ExecutorConfig) error {
+func validateExecutorDurations(config command.ExecutorConfig) error {
 	if config.Timeout < 0 {
 		return errors.New("timeout must be >= 0")
 	}
@@ -496,25 +496,25 @@ func validateKeywordWildcards(keyword string) error {
 	return nil
 }
 
-func validateTTY(c cmd.ExecutorConfig) error {
+func validateTTY(c command.ExecutorConfig) error {
 	if c.TTY && c.StdinIdleTimeout > 0 {
 		return errors.New("tty cannot be used with stdin_idle_timeout")
 	}
 	return nil
 }
 
-func normalizeRunner(c *cmd.RunnerConfig) (string, error) {
+func normalizeRunner(c *command.RunnerConfig) (string, error) {
 	runner := strings.ToLower(strings.TrimSpace(c.Runner))
 	if runner == "" {
-		runner = cmd.RunnerExec
+		runner = command.RunnerExec
 	}
 	switch runner {
-	case cmd.RunnerExec, cmd.RunnerCompose, cmd.RunnerHTTP:
+	case command.RunnerExec, command.RunnerCompose, command.RunnerHTTP:
 		c.Runner = runner
 	default:
-		return "", fmt.Errorf("unknown runner %q; valid values are %q, %q, and %q", c.Runner, cmd.RunnerExec, cmd.RunnerCompose, cmd.RunnerHTTP)
+		return "", fmt.Errorf("unknown runner %q; valid values are %q, %q, and %q", c.Runner, command.RunnerExec, command.RunnerCompose, command.RunnerHTTP)
 	}
-	if runner == cmd.RunnerHTTP {
+	if runner == command.RunnerHTTP {
 		c.Method = strings.ToUpper(strings.TrimSpace(c.Method))
 		if c.Method == "" {
 			c.Method = "POST"
@@ -525,11 +525,11 @@ func normalizeRunner(c *cmd.RunnerConfig) (string, error) {
 
 func normalizeInteraction(value string) (string, error) {
 	switch value {
-	case "", cmd.InteractionOneshot:
-		return cmd.InteractionOneshot, nil
-	case cmd.InteractionStdin, cmd.InteractionCommand:
+	case "", command.InteractionOneshot:
+		return command.InteractionOneshot, nil
+	case command.InteractionStdin, command.InteractionCommand:
 		return value, nil
 	default:
-		return "", fmt.Errorf("unknown interaction %q; valid values are %q, %q, and %q", value, cmd.InteractionOneshot, cmd.InteractionStdin, cmd.InteractionCommand)
+		return "", fmt.Errorf("unknown interaction %q; valid values are %q, %q, and %q", value, command.InteractionOneshot, command.InteractionStdin, command.InteractionCommand)
 	}
 }

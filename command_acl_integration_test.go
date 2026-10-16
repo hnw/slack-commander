@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -47,19 +47,19 @@ timeout = "5s"
 	if err := resolveConfig(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	stdinStore := &cmd.StdinStore{}
+	stdinStore := &command.StdinStore{}
 	commands := buildCommandSet(cfg.commandConfigs, newRunnerFactory(), testOutputFactory(outputs))
-	requests := make(chan *cmd.CommandInput, 10)
+	requests := make(chan *command.CommandInput, 10)
 
-	conversationLocks := &cmd.ConversationLocks{}
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	conversationLocks := &command.ConversationLocks{}
+	router := command.NewConversationRouter(stdinStore, commands, nil, newMainTestDispatcher(context.Background(), stdinStore, conversationLocks, func(input *command.CommandInput) bool {
 		requests <- input
 		return true
 	}), 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
 
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, command.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -67,7 +67,7 @@ timeout = "5s"
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	done := make(chan struct{})
 	go func() {
-		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
+		if err := messaging.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(done)
@@ -124,25 +124,25 @@ allowed_user_ids = ["U-root", "U-b"]
 		"stdin-a": make(chan struct{}, 1),
 		"stdin-b": make(chan struct{}, 1),
 	}}
-	stdinStore := &cmd.StdinStore{}
-	commands := buildCommandSet(cfg.commandConfigs, func(config cmd.RunnerConfig) cmd.CommandRunner {
-		if config.Runner == cmd.RunnerStdinReply {
-			return cmd.NewStdinReplyRunner()
+	stdinStore := &command.StdinStore{}
+	commands := buildCommandSet(cfg.commandConfigs, func(config command.RunnerConfig) command.CommandRunner {
+		if config.Runner == command.RunnerStdinReply {
+			return command.NewStdinReplyRunner()
 		}
 		return runner.forCommand(config.Command)
 	}, testOutputFactory(outputs))
-	requests := make(chan *cmd.CommandInput, 10)
+	requests := make(chan *command.CommandInput, 10)
 
-	conversationLocks := &cmd.ConversationLocks{}
+	conversationLocks := &command.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	dispatcher := cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(), stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	dispatcher := command.NewCommandDispatcher(ctx, command.NewExecutor(), stdinStore, conversationLocks, func(input *command.CommandInput) bool {
 		requests <- input
 		return true
 	})
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 0)
+	router := command.NewConversationRouter(stdinStore, commands, nil, dispatcher, 0)
 	var workers sync.WaitGroup
-	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, cmd.NewExecutor(), &workers)
+	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, command.NewExecutor(), &workers)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
 	}))
@@ -150,7 +150,7 @@ allowed_user_ids = ["U-root", "U-b"]
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 	listenerDone := make(chan struct{})
 	go func() {
-		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
+		if err := messaging.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(listenerDone)
@@ -225,7 +225,7 @@ type aclSwitchRunner struct {
 	release   map[string]chan struct{}
 }
 
-func (r *aclSwitchRunner) forCommand(name string) cmd.CommandRunner {
+func (r *aclSwitchRunner) forCommand(name string) command.CommandRunner {
 	return aclSwitchCommandRunner{runner: r, name: name}
 }
 
@@ -234,7 +234,7 @@ type aclSwitchCommandRunner struct {
 	name   string
 }
 
-func (r aclSwitchCommandRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
+func (r aclSwitchCommandRunner) CommandContext(context.Context, []string, bool) command.Cmd {
 	return aclSwitchCommand(r)
 }
 
@@ -271,7 +271,7 @@ type aclIntegrationCommandRunner struct {
 	name   string
 }
 
-func (r aclIntegrationCommandRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
+func (r aclIntegrationCommandRunner) CommandContext(context.Context, []string, bool) command.Cmd {
 	r.runner.calls = append(r.runner.calls, r.name)
 	return &aclIntegrationCmd{}
 }
@@ -329,10 +329,10 @@ accept_reminder = true
 		t.Fatal(err)
 	}
 	runner := &aclIntegrationRunner{}
-	commands := buildCommandSet(cfg.commandConfigs, func(config cmd.RunnerConfig) cmd.CommandRunner {
+	commands := buildCommandSet(cfg.commandConfigs, func(config command.RunnerConfig) command.CommandRunner {
 		return aclIntegrationCommandRunner{runner: runner, name: strings.Fields(config.Command)[0]}
 	}, testOutputFactory(outputs))
-	queued := make(chan *cmd.CommandInput, 10)
+	queued := make(chan *command.CommandInput, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth.test" {
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"U-self","bot_id":"B-self"}`)
@@ -346,17 +346,17 @@ accept_reminder = true
 	defer server.Close()
 	smc := socketmode.New(slack.New("test", slack.OptionAPIURL(server.URL+"/")))
 
-	executor := cmd.NewExecutor()
-	stdinStore := &cmd.StdinStore{}
-	dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, stdinStore, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+	executor := command.NewExecutor()
+	stdinStore := &command.StdinStore{}
+	dispatcher := command.NewCommandDispatcher(context.Background(), executor, stdinStore, &command.ConversationLocks{}, func(input *command.CommandInput) bool {
 		queued <- input
 		return true
 	})
-	router := cmd.NewConversationRouter(stdinStore, commands, pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig), dispatcher, 0)
+	router := command.NewConversationRouter(stdinStore, commands, messaging.SlackRootInputResolver(smc, cfg.PubSubConfig), dispatcher, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		if err := pubsub.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
+		if err := messaging.SlackListener(ctx, smc, cfg.PubSubConfig, router); err != nil {
 			t.Errorf("SlackListener() error = %v", err)
 		}
 		close(done)
@@ -423,30 +423,30 @@ func TestCommandACLCandidatesInChains(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &aclIntegrationRunner{}
-			configs := []*resolvedCommandConfig{{CommandConfig: cmd.CommandConfig{Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "status"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "status"}}}, {CommandConfig: cmd.CommandConfig{Index: 1, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "deploy"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "deploy"}}}, {CommandConfig: cmd.CommandConfig{Index: 2, ParserConfig: cmd.ParserConfig{AllowInChain: true}}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "*"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "generic *"}}}, {CommandConfig: cmd.CommandConfig{Index: 3}, MatcherConfig: cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "interact"}}, RunnerConfig: cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "interact"}}}}
-			commands := make([]*cmd.Command, 0, len(configs))
+			configs := []*resolvedCommandConfig{{CommandConfig: command.CommandConfig{Index: 0, ParserConfig: command.ParserConfig{AllowInChain: true}}, MatcherConfig: command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "status"}}, RunnerConfig: command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "status"}}}, {CommandConfig: command.CommandConfig{Index: 1, ParserConfig: command.ParserConfig{AllowInChain: true}}, MatcherConfig: command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "deploy"}}, RunnerConfig: command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "deploy"}}}, {CommandConfig: command.CommandConfig{Index: 2, ParserConfig: command.ParserConfig{AllowInChain: true}}, MatcherConfig: command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "*"}}, RunnerConfig: command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "generic *"}}}, {CommandConfig: command.CommandConfig{Index: 3}, MatcherConfig: command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "interact"}}, RunnerConfig: command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "interact"}}}}
+			commands := make([]*command.Command, 0, len(configs))
 			for _, config := range configs {
-				commands = append(commands, buildCommand(config, func(config cmd.RunnerConfig) cmd.CommandRunner {
+				commands = append(commands, buildCommand(config, func(config command.RunnerConfig) command.CommandRunner {
 					return aclIntegrationCommandRunner{runner: runner, name: strings.Fields(config.Command)[0]}
 				}, testOutputFactory(make(chan *observedCommandOutput, 100))))
 			}
-			commandSet := cmd.NewCommandSet(commands)
+			commandSet := command.NewCommandSet(commands)
 
-			executor := cmd.NewExecutor()
-			var queued *cmd.CommandInput
-			dispatcher := cmd.NewCommandDispatcher(context.Background(), executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, func(input *cmd.CommandInput) bool {
+			executor := command.NewExecutor()
+			var queued *command.CommandInput
+			dispatcher := command.NewCommandDispatcher(context.Background(), executor, &command.StdinStore{}, &command.ConversationLocks{}, func(input *command.CommandInput) bool {
 				queued = input
 				return true
 			})
 			defer func() { dispatcher.Close(); dispatcher.Wait() }()
-			input := &cmd.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed}
+			input := &command.CommandInput{Text: tt.text, AllowedCommandIndexes: tt.allowed}
 			input.Commands, input.ParseErr = commandSet.Resolve(tt.text, tt.allowed)
 			result := dispatcher.Dispatch(input)
 			if len(tt.want) == 0 {
-				if result != cmd.DispatchIgnored || queued != nil {
+				if result != command.DispatchIgnored || queued != nil {
 					t.Fatalf("Dispatch() = %v, queued=%p; want ignored", result, queued)
 				}
-			} else if result != cmd.DispatchAccepted || queued != input {
+			} else if result != command.DispatchAccepted || queued != input {
 				t.Fatalf("Dispatch() = %v, queued=%p; want accepted input", result, queued)
 			}
 			if queued != nil {

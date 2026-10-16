@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 )
@@ -27,7 +27,7 @@ type listenerFailureTransport struct {
 }
 
 func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
-	outputs := pubsub.NewSlackOutput(10)
+	outputs := messaging.NewSlackOutput(10)
 
 	type slackRequest struct {
 		path string
@@ -52,16 +52,16 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
-	command := cmd.NewCommand(cmd.CommandConfig{
+	httpConfig := command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Runner: command.RunnerHTTP, Method: "GET", URL: server.URL}}
+	runtimeCommand := command.NewCommand(command.CommandConfig{
 		Index:    0,
-		Dispatch: cmd.DispatchExecutor,
-	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "lookup"}}), cmd.NewHTTPRunner(httpConfig), nil, outputs.NewCommandOutput(pubsub.ReplyConfig{}, 0))
-	commands := cmd.NewCommandSet([]*cmd.Command{command})
+		Dispatch: command.DispatchExecutor,
+	}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "lookup"}}), command.NewHTTPRunner(httpConfig), nil, outputs.NewCommandOutput(messaging.ReplyConfig{}, 0))
+	commands := command.NewCommandSet([]*command.Command{runtimeCommand})
 
-	executor := cmd.NewExecutor()
+	executor := command.NewExecutor()
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
-	dispatcher := cmd.NewCommandDispatcher(dispatchCtx, executor, &cmd.StdinStore{}, &cmd.ConversationLocks{}, nil)
+	dispatcher := command.NewCommandDispatcher(dispatchCtx, executor, &command.StdinStore{}, &command.ConversationLocks{}, nil)
 	smc := socketmode.New(slack.New("token", slack.OptionAPIURL(server.URL+"/")))
 	writerDone := make(chan struct{})
 	writerCtx, cancelWriter := context.WithCancel(context.Background())
@@ -80,14 +80,14 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 		<-writerDone
 	})
 
-	input := &cmd.CommandInput{
+	input := &command.CommandInput{
 		Text:                  "lookup",
-		ConversationID:        cmd.ConversationID{ChannelID: "C123", RootTimestamp: "1700000000.000100"},
-		MessageID:             cmd.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
+		ConversationID:        command.ConversationID{ChannelID: "C123", RootTimestamp: "1700000000.000100"},
+		MessageID:             command.MessageID{ChannelID: "C123", Timestamp: "1700000000.000200"},
 		AllowedCommandIndexes: []int{0},
 	}
 	input.Commands, input.ParseErr = commands.Resolve(input.Text, input.AllowedCommandIndexes)
-	if result := dispatcher.Dispatch(input); result != cmd.DispatchAccepted {
+	if result := dispatcher.Dispatch(input); result != command.DispatchAccepted {
 		t.Fatalf("Dispatch() = %v, want accepted", result)
 	}
 	select {
@@ -131,16 +131,16 @@ func TestShutdownDrainsAsyncHTTPOutputThroughSlackWriter(t *testing.T) {
 func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		dispatch  cmd.DispatchMode
+		dispatch  command.DispatchMode
 		rootTS    string
 		msgTS     string
 		broadcast bool
 	}{
-		{name: "root", dispatch: cmd.DispatchQueue, rootTS: "1700000000.000100", msgTS: "1700000000.000100"},
-		{name: "reply", dispatch: cmd.DispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
+		{name: "root", dispatch: command.DispatchQueue, rootTS: "1700000000.000100", msgTS: "1700000000.000100"},
+		{name: "reply", dispatch: command.DispatchExecutor, rootTS: "1700000000.000100", msgTS: "1700000000.000200", broadcast: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			outputs := pubsub.NewSlackOutput(1)
+			outputs := messaging.NewSlackOutput(1)
 
 			type slackRequest struct {
 				path string
@@ -157,21 +157,21 @@ func TestParseErrorUsesSlackOutputPipelineWithoutLifecycleReactions(t *testing.T
 			t.Cleanup(server.Close)
 
 			broadcast := tc.broadcast
-			command := cmd.NewCommand(cmd.CommandConfig{
+			runtimeCommand := command.NewCommand(command.CommandConfig{
 				Dispatch: tc.dispatch,
-			}, cmd.NewMatcher(cmd.MatcherConfig{}), cmd.NewExecRunner(cmd.RunnerConfig{}), nil, outputs.NewCommandOutput(*pubsub.NewSystemReplyConfig(&broadcast), 0))
+			}, command.NewMatcher(command.MatcherConfig{}), command.NewExecRunner(command.RunnerConfig{}), nil, outputs.NewCommandOutput(*messaging.NewSystemReplyConfig(&broadcast), 0))
 
-			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*cmd.CommandInput) bool {
+			dispatcher := newMainTestDispatcher(context.Background(), nil, nil, func(*command.CommandInput) bool {
 				t.Fatal("parse error entered the command queue")
 				return false
 			})
-			input := &cmd.CommandInput{
-				ConversationID: cmd.ConversationID{ChannelID: "C123", RootTimestamp: tc.rootTS},
-				MessageID:      cmd.MessageID{ChannelID: "C123", Timestamp: tc.msgTS},
-				Commands:       []cmd.ResolvedCommand{{Command: command}},
+			input := &command.CommandInput{
+				ConversationID: command.ConversationID{ChannelID: "C123", RootTimestamp: tc.rootTS},
+				MessageID:      command.MessageID{ChannelID: "C123", Timestamp: tc.msgTS},
+				Commands:       []command.ResolvedCommand{{Command: runtimeCommand}},
 				ParseErr:       errors.New("Parse error: malformed input"),
 			}
-			if got := dispatcher.Dispatch(input); got != cmd.DispatchAccepted {
+			if got := dispatcher.Dispatch(input); got != command.DispatchAccepted {
 				t.Fatalf("Dispatch() = %v, want accepted", got)
 			}
 			dispatcher.Close()
@@ -299,17 +299,17 @@ func TestRunCheckConfig(t *testing.T) {
 
 func newMainTestDispatcher(
 	ctx context.Context,
-	stdinStore *cmd.StdinStore,
-	conversationLocks *cmd.ConversationLocks,
-	enqueue func(*cmd.CommandInput) bool,
-) *cmd.CommandDispatcher {
+	stdinStore *command.StdinStore,
+	conversationLocks *command.ConversationLocks,
+	enqueue func(*command.CommandInput) bool,
+) *command.CommandDispatcher {
 	if stdinStore == nil {
-		stdinStore = &cmd.StdinStore{}
+		stdinStore = &command.StdinStore{}
 	}
 	if conversationLocks == nil {
-		conversationLocks = &cmd.ConversationLocks{}
+		conversationLocks = &command.ConversationLocks{}
 	}
-	return cmd.NewCommandDispatcher(ctx, cmd.NewExecutor(), stdinStore, conversationLocks, enqueue)
+	return command.NewCommandDispatcher(ctx, command.NewExecutor(), stdinStore, conversationLocks, enqueue)
 }
 
 func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
@@ -317,9 +317,9 @@ func TestStartWorkersExitWhenQueueClosesOrContextCancels(t *testing.T) {
 		t.Run(map[bool]string{true: "queue closes", false: "context cancels"}[closeQueue], func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			inputs := make(chan *cmd.CommandInput)
+			inputs := make(chan *command.CommandInput)
 			var workers sync.WaitGroup
-			startWorkers(ctx, 2, inputs, nil, nil, cmd.NewExecutor(), &workers)
+			startWorkers(ctx, 2, inputs, nil, nil, command.NewExecutor(), &workers)
 			if closeQueue {
 				close(inputs)
 			} else {

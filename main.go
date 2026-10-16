@@ -15,8 +15,8 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 )
 
 var version = "dev"
@@ -73,7 +73,7 @@ func run(args []string) int {
 	logger := slog.New(handler)
 	stdLogger := slog.NewLogLogger(handler, slog.LevelDebug)
 
-	stdinStore := &cmd.StdinStore{}
+	stdinStore := &command.StdinStore{}
 	runnerFactory := newRunnerFactory()
 
 	api := slack.New(
@@ -93,12 +93,12 @@ func run(args []string) int {
 
 	// チャンネルの容量を大きめに取る。本来cfg.NumWorkersで問題ないはずだが、
 	// ack返せない問題への暫定対処。
-	commandQueue := make(chan *cmd.CommandInput, 50)
-	output := pubsub.NewSlackOutput(cfg.NumWorkers)
+	commandQueue := make(chan *command.CommandInput, 50)
+	output := messaging.NewSlackOutput(cfg.NumWorkers)
 	commands := buildCommandSet(cfg.commandConfigs, runnerFactory, output.NewCommandOutput)
-	conversationLocks := &cmd.ConversationLocks{}
-	executor := cmd.NewExecutor()
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	conversationLocks := &command.ConversationLocks{}
+	executor := command.NewExecutor()
+	dispatcher := command.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *command.CommandInput) bool {
 		select {
 		case commandQueue <- input:
 			return true
@@ -106,10 +106,10 @@ func run(args []string) int {
 			return false
 		}
 	})
-	router := cmd.NewConversationRouter(
+	router := command.NewConversationRouter(
 		stdinStore,
 		commands,
-		pubsub.SlackRootInputResolver(smc, cfg.PubSubConfig),
+		messaging.SlackRootInputResolver(smc, cfg.PubSubConfig),
 		dispatcher,
 		4096,
 	)
@@ -126,7 +126,7 @@ func run(args []string) int {
 	listenerWG.Add(1)
 	go func() {
 		defer listenerWG.Done()
-		listenerErr = pubsub.SlackListener(
+		listenerErr = messaging.SlackListener(
 			ctx,
 			smc,
 			cfg.PubSubConfig,
@@ -157,28 +157,28 @@ func run(args []string) int {
 	return exitCode
 }
 
-func newRunnerFactory() cmd.RunnerFactory {
-	return func(config cmd.RunnerConfig) cmd.CommandRunner {
-		if config.Runner == cmd.RunnerStdinReply {
-			return cmd.NewStdinReplyRunner()
+func newRunnerFactory() command.RunnerFactory {
+	return func(config command.RunnerConfig) command.CommandRunner {
+		if config.Runner == command.RunnerStdinReply {
+			return command.NewStdinReplyRunner()
 		}
-		if config.Runner == cmd.RunnerCompose {
-			return cmd.NewComposeRunner(config, "")
+		if config.Runner == command.RunnerCompose {
+			return command.NewComposeRunner(config, "")
 		}
-		if config.Runner == cmd.RunnerHTTP {
-			return cmd.NewHTTPRunner(config)
+		if config.Runner == command.RunnerHTTP {
+			return command.NewHTTPRunner(config)
 		}
-		return cmd.NewExecRunner(config)
+		return command.NewExecRunner(config)
 	}
 }
 
 func startWorkers(
 	ctx context.Context,
 	workers int,
-	inputs <-chan *cmd.CommandInput,
-	stdinStore *cmd.StdinStore,
-	conversationLocks *cmd.ConversationLocks,
-	executor *cmd.Executor,
+	inputs <-chan *command.CommandInput,
+	stdinStore *command.StdinStore,
+	conversationLocks *command.ConversationLocks,
+	executor *command.Executor,
 	wg *sync.WaitGroup,
 ) {
 	for range workers {

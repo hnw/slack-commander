@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hnw/slack-commander/cmd"
-	"github.com/hnw/slack-commander/pubsub"
+	"github.com/hnw/slack-commander/internal/command"
+	"github.com/hnw/slack-commander/internal/messaging"
 )
 
 func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) {
@@ -27,23 +27,23 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true},
-		Dispatch: cmd.DispatchExecutor,
-	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	echoCommand := cmd.NewCommand(cmd.CommandConfig{
+	httpConfig := command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Runner: command.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
+	httpCommand := command.NewCommand(command.CommandConfig{
+		Index: 0, ParserConfig: command.ParserConfig{AllowInChain: true},
+		Dispatch: command.DispatchExecutor,
+	}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "http *"}}), command.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+	echoCommand := command.NewCommand(command.CommandConfig{
 		Index: 1,
-	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "echo *"}}), cmd.NewExecRunner(cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Command: "/bin/echo *"}}), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, echoCommand})
-	requests := make(chan *cmd.CommandInput, 10)
+	}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "echo *"}}), command.NewExecRunner(command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Command: "/bin/echo *"}}), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+	commands := command.NewCommandSet([]*command.Command{httpCommand, echoCommand})
+	requests := make(chan *command.CommandInput, 10)
 
-	stdinStore := &cmd.StdinStore{}
-	conversationLocks := &cmd.ConversationLocks{}
+	stdinStore := &command.StdinStore{}
+	conversationLocks := &command.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	executor := cmd.NewExecutor()
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *cmd.CommandInput) bool {
+	executor := command.NewExecutor()
+	dispatcher := command.NewCommandDispatcher(ctx, executor, stdinStore, conversationLocks, func(input *command.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true
@@ -51,7 +51,7 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 			return false
 		}
 	})
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
+	router := command.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, conversationLocks, executor, &workers)
 	var queueClose sync.Once
@@ -66,21 +66,21 @@ func TestHTTPOnlyChainsDoNotOccupyWorkerAndRunAcrossConversations(t *testing.T) 
 
 	for _, path := range []string{"/slow-a", "/slow-b"} {
 		rootTimestamp := strings.TrimPrefix(path, "/")
-		input := &cmd.CommandInput{
+		input := &command.CommandInput{
 			Text:                  "http " + rootTimestamp + " ; http " + rootTimestamp,
-			ConversationID:        cmd.ConversationID{ChannelID: "C", RootTimestamp: rootTimestamp},
-			MessageID:             cmd.MessageID{Timestamp: rootTimestamp},
+			ConversationID:        command.ConversationID{ChannelID: "C", RootTimestamp: rootTimestamp},
+			MessageID:             command.MessageID{Timestamp: rootTimestamp},
 			AllowedCommandIndexes: []int{0},
 		}
 		acceptIntegrationInput(t, router, input)
 	}
 	waitForStartedIntegrationRequests(t, started, 2)
 
-	queuedConversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "queued"}
-	acceptIntegrationInput(t, router, &cmd.CommandInput{
+	queuedConversation := command.ConversationID{ChannelID: "C", RootTimestamp: "queued"}
+	acceptIntegrationInput(t, router, &command.CommandInput{
 		Text:                  "echo queued",
 		ConversationID:        queuedConversation,
-		MessageID:             cmd.MessageID{Timestamp: queuedConversation.RootTimestamp},
+		MessageID:             command.MessageID{Timestamp: queuedConversation.RootTimestamp},
 		AllowedCommandIndexes: []int{1},
 	})
 	collected := collectUntilQueuedCommandFinished(t, outputs, queuedConversation)
@@ -112,22 +112,22 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(server.Close)
-	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{
-		Index: 0, ParserConfig: cmd.ParserConfig{AllowInChain: true}, Dispatch: cmd.DispatchExecutor,
-	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http *"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
+	httpConfig := command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Runner: command.RunnerHTTP, Method: "GET", URL: server.URL + "/*"}}
+	httpCommand := command.NewCommand(command.CommandConfig{
+		Index: 0, ParserConfig: command.ParserConfig{AllowInChain: true}, Dispatch: command.DispatchExecutor,
+	}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "http *"}}), command.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
 	queuedStarted, queuedRelease := make(chan struct{}, 1), make(chan struct{})
-	queuedCommand := cmd.NewCommand(cmd.CommandConfig{
+	queuedCommand := command.NewCommand(command.CommandConfig{
 		Index: 1,
-	}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	commands := cmd.NewCommandSet([]*cmd.Command{httpCommand, queuedCommand})
-	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	requests := make(chan *cmd.CommandInput, 2)
-	stdinStore, locks := &cmd.StdinStore{}, &cmd.ConversationLocks{}
+	}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: queuedStarted, release: queuedRelease}, nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+	commands := command.NewCommandSet([]*command.Command{httpCommand, queuedCommand})
+	conversation := command.ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	requests := make(chan *command.CommandInput, 2)
+	stdinStore, locks := &command.StdinStore{}, &command.ConversationLocks{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	executor := cmd.NewExecutor()
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *cmd.CommandInput) bool {
+	executor := command.NewExecutor()
+	dispatcher := command.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *command.CommandInput) bool {
 		requests <- input
 		return true
 	})
@@ -145,21 +145,21 @@ func TestHTTPOnlyChainAndQueuedCommandShareConversationLock(t *testing.T) {
 		dispatcher.Wait()
 	}()
 	chainText := "http one ; http two"
-	chainInput := &cmd.CommandInput{Text: chainText, ConversationID: conversation}
+	chainInput := &command.CommandInput{Text: chainText, ConversationID: conversation}
 	chainInput.Commands, chainInput.ParseErr = commands.Resolve(chainText, []int{0})
 	if chainInput.ParseErr != nil {
 		t.Fatal(chainInput.ParseErr)
 	}
-	if got := dispatcher.Dispatch(chainInput); got != cmd.DispatchAccepted {
+	if got := dispatcher.Dispatch(chainInput); got != command.DispatchAccepted {
 		t.Fatalf("HTTP chain Dispatch() = %v", got)
 	}
 	waitForIntegrationPath(t, started, "/one")
-	queuedInput := &cmd.CommandInput{Text: "hold", ConversationID: conversation}
+	queuedInput := &command.CommandInput{Text: "hold", ConversationID: conversation}
 	queuedInput.Commands, queuedInput.ParseErr = commands.Resolve("hold", []int{1})
 	if queuedInput.ParseErr != nil {
 		t.Fatal(queuedInput.ParseErr)
 	}
-	if got := dispatcher.Dispatch(queuedInput); got != cmd.DispatchAccepted {
+	if got := dispatcher.Dispatch(queuedInput); got != command.DispatchAccepted {
 		t.Fatalf("queued command Dispatch() = %v", got)
 	}
 	assertIntegrationSignalBlocked(t, queuedStarted, "queued command passed the conversation lock during the HTTP chain")
@@ -205,9 +205,9 @@ func assertIntegrationSignalBlocked(t *testing.T, started <-chan struct{}, messa
 	}
 }
 
-func acceptIntegrationInput(t *testing.T, router *cmd.ConversationRouter, input *cmd.CommandInput) {
+func acceptIntegrationInput(t *testing.T, router *command.ConversationRouter, input *command.CommandInput) {
 	t.Helper()
-	if result, err := router.Accept(context.Background(), input); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), input); err != nil || result != command.AcceptRouted {
 		t.Fatalf("Accept(%q) = %v, %v; want routed", input.Text, result, err)
 	}
 }
@@ -223,7 +223,7 @@ func waitForStartedIntegrationRequests(t *testing.T, started <-chan string, coun
 	}
 }
 
-func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *observedCommandOutput, conversation cmd.ConversationID) []*observedCommandOutput {
+func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *observedCommandOutput, conversation command.ConversationID) []*observedCommandOutput {
 	t.Helper()
 	collected := make([]*observedCommandOutput, 0, 10)
 	for {
@@ -239,7 +239,7 @@ func collectUntilQueuedCommandFinished(t *testing.T, outputs <-chan *observedCom
 	}
 }
 
-func assertIntegrationOutputs(t *testing.T, outputs []*observedCommandOutput, queuedConversation cmd.ConversationID) {
+func assertIntegrationOutputs(t *testing.T, outputs []*observedCommandOutput, queuedConversation command.ConversationID) {
 	t.Helper()
 	seenHTTP := map[string]bool{}
 	var queuedText string
@@ -277,17 +277,17 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stdinStore := &cmd.StdinStore{}
-	locks := &cmd.ConversationLocks{}
+	stdinStore := &command.StdinStore{}
+	locks := &command.ConversationLocks{}
 
-	httpConfig := cmd.RunnerConfig{RawRunnerConfig: cmd.RawRunnerConfig{Runner: cmd.RunnerHTTP, Method: "GET", URL: server.URL}}
-	httpCommand := cmd.NewCommand(cmd.CommandConfig{Index: 1, Dispatch: cmd.DispatchExecutor}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "http"}}), cmd.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	queuedCommand := cmd.NewCommand(cmd.CommandConfig{Index: 0}, cmd.NewMatcher(cmd.MatcherConfig{RawMatcherConfig: cmd.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, cmd.NewCommandSet([]*cmd.Command{httpCommand}), testOutputFactory(outputs)(pubsub.ReplyConfig{}, 0))
-	commands := cmd.NewCommandSet([]*cmd.Command{queuedCommand})
-	requests := make(chan *cmd.CommandInput, 10)
+	httpConfig := command.RunnerConfig{RawRunnerConfig: command.RawRunnerConfig{Runner: command.RunnerHTTP, Method: "GET", URL: server.URL}}
+	httpCommand := command.NewCommand(command.CommandConfig{Index: 1, Dispatch: command.DispatchExecutor}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "http"}}), command.NewHTTPRunner(httpConfig), nil, testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+	queuedCommand := command.NewCommand(command.CommandConfig{Index: 0}, command.NewMatcher(command.MatcherConfig{RawMatcherConfig: command.RawMatcherConfig{Keyword: "hold"}}), blockedIntegrationRunner{started: startedQueued, release: releaseQueued}, command.NewCommandSet([]*command.Command{httpCommand}), testOutputFactory(outputs)(messaging.ReplyConfig{}, 0))
+	commands := command.NewCommandSet([]*command.Command{queuedCommand})
+	requests := make(chan *command.CommandInput, 10)
 
-	executor := cmd.NewExecutor()
-	dispatcher := cmd.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *cmd.CommandInput) bool {
+	executor := command.NewExecutor()
+	dispatcher := command.NewCommandDispatcher(ctx, executor, stdinStore, locks, func(input *command.CommandInput) bool {
 		select {
 		case requests <- input:
 			return true
@@ -295,7 +295,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 			return false
 		}
 	})
-	router := cmd.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
+	router := command.NewConversationRouter(stdinStore, commands, nil, dispatcher, 10)
 	var workers sync.WaitGroup
 	startWorkers(ctx, 1, requests, stdinStore, locks, executor, &workers)
 	var queueClose sync.Once
@@ -308,8 +308,8 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 		workers.Wait()
 		dispatcher.Wait()
 	})
-	conversation := cmd.ConversationID{ChannelID: "C", RootTimestamp: "1"}
-	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "hold", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != cmd.AcceptRouted {
+	conversation := command.ConversationID{ChannelID: "C", RootTimestamp: "1"}
+	if result, err := router.Accept(context.Background(), &command.CommandInput{Text: "hold", ConversationID: conversation, MessageID: command.MessageID{Timestamp: "1"}, AllowedCommandIndexes: []int{0}}); err != nil || result != command.AcceptRouted {
 		t.Fatalf("queued Accept() = %v, %v", result, err)
 	}
 	select {
@@ -317,7 +317,7 @@ func TestSameConversationQueuedAndHTTPCommandsSerialize(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("queued command did not start")
 	}
-	if result, err := router.Accept(context.Background(), &cmd.CommandInput{Text: "http", ConversationID: conversation, MessageID: cmd.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != cmd.AcceptRouted {
+	if result, err := router.Accept(context.Background(), &command.CommandInput{Text: "http", ConversationID: conversation, MessageID: command.MessageID{Timestamp: "2"}, AllowedCommandIndexes: []int{1}}); err != nil || result != command.AcceptRouted {
 		t.Fatalf("HTTP Accept() = %v, %v", result, err)
 	}
 	select {
@@ -342,7 +342,7 @@ type blockedIntegrationRunner struct {
 	release <-chan struct{}
 }
 
-func (r blockedIntegrationRunner) CommandContext(context.Context, []string, bool) cmd.Cmd {
+func (r blockedIntegrationRunner) CommandContext(context.Context, []string, bool) command.Cmd {
 	return &blockedIntegrationCommand{started: r.started, release: r.release}
 }
 

@@ -9,13 +9,8 @@ formatters:
     - goimports
 
 linters:
-  default: none
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
     - revive
     - gocyclo
     - gosec
@@ -24,6 +19,7 @@ linters:
     govet:
       enable:
         - shadow
+
     gocyclo:
       min-complexity: 15
     revive:
@@ -32,9 +28,3 @@ linters:
         - name: exported
           disabled: true
         - name: unused-parameter
-
-  exclusions:
-    paths:
-      - vendor
-      - ".*\\.pb\\.go$"
-      - ".*\\.gen\\.go$"
