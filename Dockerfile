@@ -14,7 +14,7 @@ COPY . .
 RUN if [ "$TARGETARCH" = "arm" ]; then \
         export GOARM=${TARGETVARIANT#v}; \
     fi; \
-    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o slack-commander
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o slack-commander ./cmd/slack-commander
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates
