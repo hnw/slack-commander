@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hnw/slack-commander/internal/command"
 )
@@ -122,6 +123,7 @@ type rawWriter struct {
 	MessageID      command.MessageID
 	IsErrOut       bool
 	buf            []byte
+	pendingText    []byte
 }
 
 func newRawWriter(
@@ -140,7 +142,22 @@ func newRawWriter(
 	}
 }
 
-func (w *rawWriter) emitText(text []byte) {
+func (w *rawWriter) emitText(text []byte, final bool) {
+	if len(w.pendingText) > 0 {
+		text = append(w.pendingText, text...)
+	}
+	end := len(text)
+	if !final && end > 0 {
+		start := end - 1
+		for start > 0 && !utf8.RuneStart(text[start]) {
+			start--
+		}
+		if !utf8.FullRune(text[start:]) {
+			end = start
+		}
+	}
+	w.pendingText = bytes.Clone(text[end:])
+	text = text[:end]
 	if len(text) == 0 {
 		return
 	}
@@ -182,22 +199,22 @@ func (w *rawWriter) processBuffer(final bool) {
 		start := bytes.Index(w.buf, dcsStart)
 		if start == -1 {
 			if final {
-				w.emitText(w.buf)
+				w.emitText(w.buf, final)
 				w.buf = w.buf[:0]
 				return
 			}
 			if w.buf[len(w.buf)-1] == 0x1b {
-				w.emitText(w.buf[:len(w.buf)-1])
+				w.emitText(w.buf[:len(w.buf)-1], final)
 				w.buf = w.buf[len(w.buf)-1:]
 				return
 			}
-			w.emitText(w.buf)
+			w.emitText(w.buf, final)
 			w.buf = w.buf[:0]
 			return
 		}
 
 		if start > 0 {
-			w.emitText(w.buf[:start])
+			w.emitText(w.buf[:start], final)
 			w.buf = w.buf[start:]
 			continue
 		}
@@ -219,5 +236,6 @@ func (w *rawWriter) processBuffer(final bool) {
 // Incomplete sixel sequences must not carry over into subsequent output.
 func (w *rawWriter) Flush() error {
 	w.processBuffer(true)
+	w.emitText(nil, true)
 	return nil
 }
