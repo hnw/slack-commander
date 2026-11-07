@@ -235,13 +235,17 @@ func getReplyBroadcast(output *slackOutputEvent) bool {
 }
 
 const (
-	stdoutColor = "#2EB67D"
-	stderrColor = "#E01E5A"
+	stdoutColor       = "#2EB67D"
+	stderrColor       = "#E01E5A"
+	stderrNormalColor = "#808080"
 )
 
 func getColor(output *slackOutputEvent) string {
 	if output.IsErrOut {
 		return stderrColor
+	}
+	if output.IsStderr {
+		return stderrNormalColor
 	}
 	return stdoutColor
 }

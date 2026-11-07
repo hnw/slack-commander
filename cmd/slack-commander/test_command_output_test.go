@@ -31,7 +31,8 @@ func (s *testCommandStream) Write(data []byte) (int, error) {
 	s.emit(string(data))
 	return len(data), nil
 }
-func (*testCommandStream) Flush() error { return nil }
+func (*testCommandStream) Flush() error  { return nil }
+func (*testCommandStream) SetError(bool) {}
 
 func (o *testCommandOutput) Stdout(c command.ConversationID, m command.MessageID) command.OutputStream {
 	return o.stream(c, m, false)

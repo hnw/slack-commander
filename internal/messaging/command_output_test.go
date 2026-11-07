@@ -33,7 +33,7 @@ func TestSlackCommandOutputStreamsAndLifecycle(t *testing.T) {
 	want := []*slackOutputEvent{
 		{ConversationID: c, MessageID: m, Spawned: true},
 		{ConversationID: c, MessageID: m, ReplyConfig: &reply, Text: "out"},
-		{ConversationID: c, MessageID: m, ReplyConfig: &reply, Text: "err", IsErrOut: true},
+		{ConversationID: c, MessageID: m, ReplyConfig: &reply, Text: "err", IsStderr: true},
 		{ConversationID: c, MessageID: m, Finished: true, ExitCode: 7},
 	}
 	for _, expected := range want {
@@ -62,7 +62,7 @@ func TestSlackCommandOutputSystemErrors(t *testing.T) {
 			handler := pipeline.NewCommandOutput(reply, time.Hour)
 			handler.SystemError(c, m, "error", tc.kind)
 			got := <-queue
-			want := &slackOutputEvent{ConversationID: c, MessageID: m, Text: "error", IsErrOut: true, ReplyConfig: tc.config, ExitCode: tc.code}
+			want := &slackOutputEvent{ConversationID: c, MessageID: m, Text: "error", IsErrOut: true, IsStderr: tc.kind == command.SystemErrorCommandNotFound, ReplyConfig: tc.config, ExitCode: tc.code}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("error output = %#v, want %#v", got, want)
 			}

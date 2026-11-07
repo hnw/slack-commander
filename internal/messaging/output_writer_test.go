@@ -145,6 +145,39 @@ func TestSlackOutputStreamFlushesAtBatchInterval(t *testing.T) {
 	}
 }
 
+func TestStderrColorsAreFixedWhenEventsAreEmitted(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%v", failed), func(t *testing.T) {
+			ch := make(chan *slackOutputEvent, 10)
+			writer := newErrWriter(ch, nil, command.ConversationID{}, command.MessageID{}, time.Hour)
+			_, _ = writer.Write([]byte(strings.Repeat("x", 2049)))
+			_, _ = writer.Write([]byte("final"))
+			writer.SetError(failed)
+			if err := writer.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			first, last := <-ch, <-ch
+			if !first.IsStderr || first.IsErrOut || getColor(first) != stderrNormalColor {
+				t.Fatalf("running output = %+v", first)
+			}
+			if last.Text != "final" || !last.IsStderr || last.IsErrOut != failed {
+				t.Fatalf("final output = %+v", last)
+			}
+		})
+	}
+}
+
+func TestStderrTimerFlushIsNeutral(t *testing.T) {
+	ch := make(chan *slackOutputEvent, 1)
+	writer := newErrWriter(ch, nil, command.ConversationID{}, command.MessageID{}, 20*time.Millisecond)
+	_, _ = writer.Write([]byte("progress"))
+	output := receiveOutput(t, ch, time.Second)
+	writer.SetError(true)
+	if output.Text != "progress" || getColor(output) != stderrNormalColor {
+		t.Fatalf("timer output = %+v", output)
+	}
+}
+
 func TestSlackOutputStreamDoesNotResetTimerOnSubsequentWrite(t *testing.T) {
 	writer, _ := newTestSlackOutputStream(time.Second)
 	if _, err := writer.Write([]byte("a")); err != nil {

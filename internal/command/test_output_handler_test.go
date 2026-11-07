@@ -45,29 +45,31 @@ func (h *testOutputHandler) emit(event *observedOutput) {
 
 type testOutputStream struct {
 	bytes.Buffer
-	onFlush func(string)
+	onFlush func(string, bool)
+	isError bool
 }
 
+func (s *testOutputStream) SetError(value bool) { s.isError = value }
 func (s *testOutputStream) Flush() error {
 	if s.Len() > 0 {
-		s.onFlush(s.String())
+		s.onFlush(s.String(), s.isError)
 		s.Reset()
 	}
 	return nil
 }
 
-func (h *testOutputHandler) stream(c ConversationID, m MessageID, stderr bool) OutputStream {
-	return &testOutputStream{onFlush: func(text string) {
-		h.emit(&observedOutput{ConversationID: c, MessageID: m, Text: text, IsErrOut: stderr})
+func (h *testOutputHandler) stream(c ConversationID, m MessageID) OutputStream {
+	return &testOutputStream{onFlush: func(text string, isError bool) {
+		h.emit(&observedOutput{ConversationID: c, MessageID: m, Text: text, IsErrOut: isError})
 	}}
 }
 
 func (h *testOutputHandler) Stdout(c ConversationID, m MessageID) OutputStream {
-	return h.stream(c, m, false)
+	return h.stream(c, m)
 }
 
 func (h *testOutputHandler) Stderr(c ConversationID, m MessageID) OutputStream {
-	return h.stream(c, m, true)
+	return h.stream(c, m)
 }
 
 func (h *testOutputHandler) Start(c ConversationID, m MessageID) {

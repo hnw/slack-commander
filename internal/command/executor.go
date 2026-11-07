@@ -141,21 +141,26 @@ func runMatchedCommand(
 			"\r",
 		)
 		cancel()
-		if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
-			_, _ = fmt.Fprintf(terminal, "Timeout exceeded (%s)", command.config.Timeout)
-		}
 		_ = terminal.Flush()
+		if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
+			stderr.SetError(true)
+			_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%s)", command.config.Timeout)
+			_ = stderr.Flush()
+		}
 		return ret
 	}
 	execCmd.SetStdout(stdout)
 	execCmd.SetStderr(stderr)
 	ret := runWithLifecycleInput(execCmd, command.config.StdinIdleTimeout, stdinText, input.ConversationID, lifecycle, implicitStdinReplyCommand(command))
 	cancel()
-	if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
-		_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%s)", command.config.Timeout)
-	}
 	_ = stdout.Flush()
+	stderr.SetError(ret != 0)
 	_ = stderr.Flush()
+	if errors.Is(context.Cause(cmdCtx), errCommandTimeout) {
+		stderr.SetError(true)
+		_, _ = fmt.Fprintf(stderr, "Timeout exceeded (%s)", command.config.Timeout)
+		_ = stderr.Flush()
+	}
 
 	return ret
 }

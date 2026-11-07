@@ -21,9 +21,11 @@ type recordedOutputCall struct {
 type recordingOutputStream struct {
 	bytes.Buffer
 	flushed bool
+	isError bool
 }
 
-func (s *recordingOutputStream) Flush() error { s.flushed = true; return nil }
+func (s *recordingOutputStream) SetError(value bool) { s.isError = value }
+func (s *recordingOutputStream) Flush() error        { s.flushed = true; return nil }
 
 type recordingOutputHandler struct {
 	calls          []recordedOutputCall
@@ -92,6 +94,19 @@ func TestExecutorOutputStreamsAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestExecutorStderrUsesEachExitCode(t *testing.T) {
+	for _, code := range []int{0, 7} {
+		handler := &recordingOutputHandler{}
+		cmd := testRuntimeCommand(&testExecutionConfig{Keyword: "run", Command: "run"}, singleCmdRunner{command: &fakeCmd{stderrText: "message", exitCode: code}})
+		cmd.output = handler
+		input := outputHandlerInput(NewCommandSet([]*Command{cmd}), "run")
+		NewExecutor().Execute(context.Background(), input, nil)
+		if handler.stderr.String() != "message" || !handler.stderr.flushed || handler.stderr.isError != (code != 0) {
+			t.Fatalf("exit %d: stderr=%q flushed=%v error=%v", code, handler.stderr.String(), handler.stderr.flushed, handler.stderr.isError)
+		}
+	}
+}
+
 func TestExecutorOutputTimeout(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "plain", true: "tty"}[tty], func(t *testing.T) {
@@ -102,10 +117,7 @@ func TestExecutorOutputTimeout(t *testing.T) {
 			NewExecutor().Execute(context.Background(), input, nil)
 			assertOutputCalls(t, handler, input, []recordedOutputCall{{method: "start"}, {method: "stdout"}, {method: "stderr"}, {method: "finish", code: 143}})
 			stream := &handler.stderr
-			if tty {
-				stream = &handler.stdout
-			}
-			if stream.String() != "Timeout exceeded (10ms)" || !stream.flushed {
+			if stream.String() != "Timeout exceeded (10ms)" || !stream.flushed || !stream.isError {
 				t.Fatalf("timeout stream = %q, flushed=%v", stream.String(), stream.flushed)
 			}
 		})
@@ -121,7 +133,7 @@ func TestExecutorChainOutputOwnership(t *testing.T) {
 	NewExecutor().Execute(context.Background(), input, nil)
 	assertOutputCalls(t, owner, input, []recordedOutputCall{{method: "start"}, {method: "stdout"}, {method: "stderr"}, {method: "system", text: "コマンドが見つかりませんでした: unknown", kind: SystemErrorCommandNotFound}, {method: "finish", code: 3}})
 	assertOutputCalls(t, second, input, []recordedOutputCall{{method: "stdout"}, {method: "stderr"}})
-	if owner.stdout.String() != "first" || second.stderr.String() != "second" {
+	if owner.stdout.String() != "first" || second.stderr.String() != "second" || owner.stderr.isError || !second.stderr.isError {
 		t.Fatal("chain streams used the wrong handler")
 	}
 }

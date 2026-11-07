@@ -47,17 +47,24 @@ func newErrWriter(
 func newSlackOutputStream(
 	ch chan<- *slackOutputEvent,
 	cfg *ReplyConfig,
-	isErrOut bool,
+	isStderr bool,
 	conversationID command.ConversationID,
 	messageID command.MessageID,
 	flushInterval time.Duration,
 ) *slackOutputStream {
-	raw := newRawWriter(ch, cfg, isErrOut, conversationID, messageID)
+	raw := newRawWriter(ch, cfg, false, conversationID, messageID)
+	raw.IsStderr = isStderr
 	return &slackOutputStream{
 		bufw:          bufio.NewWriterSize(raw, 2048),
 		raw:           raw,
 		flushInterval: flushInterval,
 	}
+}
+
+func (w *slackOutputStream) SetError(isError bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.raw.IsErrOut = isError
 }
 
 func (w *slackOutputStream) Write(data []byte) (n int, err error) {
@@ -122,6 +129,7 @@ type rawWriter struct {
 	ConversationID command.ConversationID
 	MessageID      command.MessageID
 	IsErrOut       bool
+	IsStderr       bool
 	buf            []byte
 	pendingText    []byte
 }
@@ -167,6 +175,7 @@ func (w *rawWriter) emitText(text []byte, final bool) {
 		MessageID:      w.MessageID,
 		Text:           string(text),
 		IsErrOut:       w.IsErrOut,
+		IsStderr:       w.IsStderr,
 	}
 }
 
@@ -182,6 +191,7 @@ func (w *rawWriter) emitImage(sixelData []byte) {
 		MessageID:      w.MessageID,
 		ImageData:      pngBytes,
 		IsErrOut:       w.IsErrOut,
+		IsStderr:       w.IsStderr,
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 // OutputStream はcommand出力の書き込みと最終flushを提供する。
 type OutputStream interface {
 	io.Writer
+	SetError(bool)
 	Flush() error
 }
 

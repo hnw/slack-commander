@@ -14,6 +14,7 @@ type slackOutputEvent struct {
 	Text           string // コマンドからのテキスト出力（ImageData と排他）
 	ImageData      []byte // sixel を変換した PNG バイト列（Text と排他）
 	IsErrOut       bool
+	IsStderr       bool
 	Spawned        bool
 	Finished       bool
 	ExitCode       int
@@ -50,6 +51,7 @@ func (h *slackCommandOutput) SystemError(c command.ConversationID, m command.Mes
 		h.queue <- &slackOutputEvent{ConversationID: c, MessageID: m, ReplyConfig: h.systemReplyConfig, Text: text, IsErrOut: true, ExitCode: 2}
 	case command.SystemErrorCommandNotFound:
 		stream := newErrWriter(h.queue, nil, c, m, DefaultOutputFlushInterval)
+		stream.SetError(true)
 		_, _ = io.WriteString(stream, text)
 		_ = stream.Flush()
 	}

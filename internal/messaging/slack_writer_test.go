@@ -134,6 +134,7 @@ func TestPostMessageFormatsAttachments(t *testing.T) {
 		name             string
 		outputFormat     string
 		isErrOut         bool
+		isStderr         bool
 		wantText         string
 		wantMarkdownText string
 		wantColor        string
@@ -160,6 +161,12 @@ func TestPostMessageFormatsAttachments(t *testing.T) {
 			outputFormat:     "markdown",
 			wantMarkdownText: "*output*",
 			wantColor:        stdoutColor,
+		},
+		{
+			name:      "stderr uses neutral color",
+			isStderr:  true,
+			wantText:  "*output*",
+			wantColor: stderrNormalColor,
 		},
 		{
 			name:      "stderr uses error color",
@@ -196,6 +203,7 @@ func TestPostMessageFormatsAttachments(t *testing.T) {
 				ReplyConfig: &ReplyConfig{OutputFormat: tt.outputFormat},
 				Text:        "*output*",
 				IsErrOut:    tt.isErrOut,
+				IsStderr:    tt.isStderr,
 			}
 
 			if err := postMessage(smc, output); err != nil {
